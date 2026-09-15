@@ -105,24 +105,27 @@ trait PackageCacheSupport extends AnyFreeSpec with Matchers {
        |${if deps.isEmpty then "" else s"dependencies { $deps }"}
        |""".stripMargin
 
-  protected def resolve(root: String, cache: String, sums: Sums = Sums.empty): Resolve.Graph = {
-    val config = PackageConfig.read(readFile(s"$root/${PackageConfig.FileName}")) match
-      case Right(c) => c
-      case Left(e)  => fail(e)
-
-    Resolve.graph(root, config, sums, cache) match
+  protected def resolve(root: String, cache: String, sums: Sums = Sums.empty): Resolve.Graph =
+    resolved(root, cache, sums) match
       case Right(g) => g
       case Left(e)  => fail(s"expected a graph, got: $e")
-  }
 
-  protected def resolveRefused(root: String, cache: String, sums: Sums = Sums.empty): String = {
+  protected def resolveRefused(root: String, cache: String, sums: Sums = Sums.empty): String =
+    resolved(root, cache, sums) match
+      case Left(e)  => e
+      case Right(g) => fail(s"expected a refusal, got: ${g.packages.map(_.canonical)}")
+
+  /** The same resolution with the root's feature request stated, which is what a caller asking for
+   * anything but the defaults gets. Answered as an `Either` so a suite can pin either side of it.
+   */
+  protected def resolved(root: String, cache: String, sums: Sums = Sums.empty,
+                         request: FeatureRequest = FeatureRequest(),
+                         testing: Boolean = false): Either[String, Resolve.Graph] = {
     val config = PackageConfig.read(readFile(s"$root/${PackageConfig.FileName}")) match
       case Right(c) => c
       case Left(e)  => fail(e)
 
-    Resolve.graph(root, config, sums, cache) match
-      case Left(e)  => e
-      case Right(g) => fail(s"expected a refusal, got: ${g.packages.map(_.canonical)}")
+    Resolve.graph(root, config, sums, cache, Nil, request, testing)
   }
 
   /** What a resolved graph selected, as coordinate-to-version, which is the answer MVS is asked

@@ -110,6 +110,21 @@ case class Config(
     verbose: Boolean = false,
     target: Option[String] = None,
     libs: List[String] = Nil,
+    /** `--features` — which of the root project's features to turn on, beside `default`.
+      *
+      * The root's request and nothing else: a dependency's features are whatever the manifest that
+      * depends on it asked for, since a package's author is the one who knows which of its features
+      * their own code needs. So there is no spelling here that reaches past the project being built.
+      */
+    features: List[String] = Nil,
+    /** `--no-default-features` — leave the root's `default` feature off.
+      *
+      * Separate from an empty `features` list because asking for nothing and asking for none of them
+      * are different questions, and `default` is the whole of the difference.
+      */
+    noDefaultFeatures: Boolean = false,
+    /** `--all-features` — turn on every feature the root's manifest declares. */
+    allFeatures: Boolean = false,
     std: Boolean = false,
     stdLib: Option[String] = None,
     noStdLib: Boolean = false,

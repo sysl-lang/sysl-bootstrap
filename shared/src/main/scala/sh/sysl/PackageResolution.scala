@@ -89,11 +89,22 @@ private def resolvedGraph(cfg: Config, project: PackageConfig, roots: List[Strin
   for
     cache <- Fetch.cacheRoot(root)
     sums  <- readSums(root)
-    graph <- Resolve.graph(root, project, sums, cache, roots)
+    graph <- Resolve.graph(root, project, sums, cache, roots, featureRequest(cfg),
+               testing = cfg.command == "test")
   yield
     if graph.sumsChanged then writeSums(root, graph.sums)
     graph
 }
+
+/** The root's feature request, as the command line stated it.
+ *
+ * It is a straight reading of three flags, and the one thing worth saying is what is *not* here:
+ * whether `sysl test` widens the request to every feature is decided in `FeatureResolution` off the
+ * `testing` flag beside this, because that rule is about `default` and `allFeatures` interacting and
+ * belongs with the code that knows what those mean.
+ */
+private def featureRequest(cfg: Config): FeatureRequest =
+  FeatureRequest(cfg.features, cfg.noDefaultFeatures, cfg.allFeatures)
 
 /** Say so when the build is against a **higher** version than this project asked for
  * (`reference/packages.md § Which version you get`).

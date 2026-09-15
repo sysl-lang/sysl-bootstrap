@@ -56,10 +56,15 @@ object Resolve {
   case class Claim(asker: String, version: Version)
 
   /** Everything the build needs from the package system: the packages in a stable order, the claims
-   * that decided their versions, and the `sysl.sum` that should be on disk afterwards.
+   * that decided their versions, the `sysl.sum` that should be on disk afterwards, and which
+   * features each package has enabled.
+   *
+   * `features` is keyed exactly as `ResolvedPackage.canonical` is, so the root's entry is under the
+   * empty name. It is the whole answer of `FeatureResolution` and is what a later pass conditions
+   * source on — every package in `packages` has an entry, including ones with nothing enabled.
    */
   case class Graph(packages: List[ResolvedPackage], claims: Map[String, List[Claim]], sums: Sums,
-                   sumsChanged: Boolean)
+                   sumsChanged: Boolean, features: Map[String, Set[String]] = Map.empty)
 
   /** What the selecting pass carries: the version floors, who asked for them, the manifests read so
    * far, the packages that are directories rather than coordinates, and the sums as they stand.
@@ -71,7 +76,24 @@ object Resolve {
       locals: Map[String, (String, PackageConfig)] = Map.empty,
       sums: Sums = Sums.empty,
       changed: Boolean = false,
+      /** What each package has enabled, as the round before this one worked it out.
+       *
+       * Carried in the state rather than passed alongside it because every place that reads a
+       * manifest has to prune that manifest's optional dependencies against it, and those places
+       * are exactly the ones already threading a `State`. An empty entry is the honest answer for a
+       * package no round has reached yet: nothing turned on, so nothing optional comes with it.
+       */
+      enabled: Map[String, Set[String]] = Map.empty,
   ) {
+
+    /** A manifest as this round reads it: its optional dependencies nothing has turned on removed.
+     *
+     * Pruning at the read rather than at each use is what keeps the rest of the resolution ignorant
+     * of features — selection, the import tables and the collision rule all go on asking a config
+     * what it depends on, and get an answer that already accounts for what is switched off.
+     */
+    def pruned(canonical: String, config: PackageConfig): PackageConfig =
+      config.copy(dependencies = FeatureResolution.active(config, enabled.getOrElse(canonical, Set.empty)))
 
     /** Every requirement raises a floor and nothing ever lowers one, which is the whole of MVS —
      * and every one of them is written down on the way past, whether or not it won.
@@ -126,17 +148,55 @@ object Resolve {
    * silent winner `§ 9` exists to refuse.
    */
   def graph(root: String, config: PackageConfig, sums: Sums, cache: String,
-            sharing: List[String] = Nil): Either[String, Graph] =
+            sharing: List[String] = Nil, request: FeatureRequest = FeatureRequest(),
+            testing: Boolean = false): Either[String, Graph] =
     for
-      withLocals <- readLocals(config.dependencies, State(sums = sums), cache)
-      settled    <- select(withLocals.demanding(rootName(config), config.dependencies), cache)
-      rootTable  <- tableOf(PackageConfig.FileName, root :: sharing, config.dependencies, settled)
+      rootSet <- FeatureResolution.rootEnabled(config, request, testing)
+      settled <- climb(root, config, sums, cache, sharing, Map("" -> rootSet), FeatureResolution.Rounds)
+    yield settled
+
+  /** Resolve, work out what that answer enables, and resolve again until a round changes nothing.
+   *
+   * The comparison is over the whole enabled map rather than over the packages, because the case
+   * this exists for is a feature being turned on in a package that was already in the graph — where
+   * the set of packages is identical between the two rounds and the source they compile is not.
+   *
+   * Running out of rounds is a refusal rather than a warning: the answer in hand is one the climb
+   * itself does not believe is finished, and building against it would be building against
+   * whichever round the bound happened to stop at.
+   */
+  private def climb(root: String, config: PackageConfig, sums: Sums, cache: String,
+                    sharing: List[String], enabled: Map[String, Set[String]], rounds: Int)
+      : Either[String, Graph] =
+    for
+      built <- once(root, config, sums, cache, sharing, enabled)
+      asked <- FeatureResolution.enabledFrom(built.packages)
+      next   = asked + ("" -> enabled.getOrElse("", Set.empty))
+      out   <- if next == enabled then Right(built.copy(features = enabled))
+               else if rounds <= 0 then
+                 Left("resolving which features are enabled did not settle after " +
+                   s"${FeatureResolution.Rounds} rounds — a feature turning on a dependency whose " +
+                   "own features turn on another is expected, and this many of them in a row is not")
+               else climb(root, config, sums, cache, sharing, next, rounds - 1)
+    yield out
+
+  /** One round: the whole resolution, against one round's idea of what is enabled. */
+  private def once(root: String, config: PackageConfig, sums: Sums, cache: String,
+                   sharing: List[String], enabled: Map[String, Set[String]]): Either[String, Graph] = {
+    val start = State(sums = sums, enabled = enabled)
+    val top   = start.pruned("", config)
+
+    for
+      withLocals <- readLocals(top.dependencies, start, cache)
+      settled    <- select(withLocals.demanding(rootName(top), top.dependencies), cache)
+      rootTable  <- tableOf(PackageConfig.FileName, root :: sharing, top.dependencies, settled)
       packages   <- materialize(settled)
       tables     <- collect(packages)(p => tableOf(owner(p), List(p.root), p.config.dependencies, settled)
                       .map(t => p.copy(imports = t)))
       _          <- checkFloors(tables)
-    yield Graph(ResolvedPackage("", root, config, rootTable) :: tables, settled.claims, settled.sums,
+    yield Graph(ResolvedPackage("", root, top, rootTable) :: tables, settled.claims, settled.sums,
                 settled.changed)
+  }
 
   /** What the root calls itself when it is the one asking, since it has no coordinate to be named by.
    *
@@ -197,7 +257,8 @@ object Resolve {
           for
             before <- acc
             got    <- Fetch.ensure(dep, before.sums, cache)
-            theirs <- configOf(got.root)
+            raw    <- configOf(got.root)
+            theirs  = before.pruned(dep.canonical, raw)
             _      <- Either.cond(theirs.dependencies.forall(isGit), (),
                         s"'${dep.label}' is a path dependency that itself has a path dependency — a " +
                           "relative path only means something in the project it was written in")
@@ -222,7 +283,8 @@ object Resolve {
 
         for
           got    <- Fetch.ensure(dep, state.sums, cache)
-          theirs <- configOf(got.root)
+          raw    <- configOf(got.root)
+          theirs  = state.pruned(dep.canonical, raw)
           _      <- Either.cond(theirs.dependencies.forall(isGit), (),
                       s"$coordinate ${version.tag} has a path dependency, which only means something " +
                         "in the project it was written in")
