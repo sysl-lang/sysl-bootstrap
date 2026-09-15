@@ -7,6 +7,98 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.114 — 2026-09-15
+
+### Package features
+
+A manifest may now declare `features`, and a dependency may be `optional`:
+
+```
+[features]
+default = ["cli"]
+cli = ["clap"]
+desktop = ["webview"]
+
+[dependencies]
+clap = { git = "...", optional = true }
+webview = { git = "...", optional = true }
+```
+
+A feature is a name for a set of optional dependencies (and other features) it turns on.
+`default` is an ordinary entry in the block rather than a field of its own — it is simply the
+feature a consumer gets when it asks for none. An `optional = true` dependency is not fetched or
+built unless a feature names it: nothing walks its manifest, nothing asks the machine for the
+libraries it requires, and it contributes nothing to the link line, until something turns it on.
+
+**Consumers ask through the dependency entry**, not through a separate command:
+
+```
+[dependencies]
+widget = { git = "...", features = ["desktop"], default_features = false }
+```
+
+`features = [...]` names which of the depended-on package's features this entry wants beyond
+`default`; `default_features = false` says this consumer does not need `default`. What a package
+ends up building with is the **union**, over every consumer, of the features they named, plus
+`default` unless every consumer turned it off — one consumer asking for less is not taking
+something away from a sibling that depended on the package the ordinary way.
+
+**Resolution runs to a fixpoint.** What is enabled decides what is fetched, and what is fetched is
+a consumer whose own requests decide what else is enabled — so resolve, work out what that answer
+enables, resolve again, until a round changes nothing. It climbs a finite lattice and can only add,
+so it terminates.
+
+**A feature is visible in source as `#if feature_<name>`.** `Conditional.defined` adds
+`feature_` + each enabled name to the package's own conditional-compilation symbols. The family is
+open: `feature_x` in a package that declares no `x` is simply false rather than refused, and a
+root's features do not leak into a dependency's sources — a package only ever sees its own.
+
+**Three CLI flags**, on every command that resolves a package graph (`run`, `build`, `build-c`,
+`test`, `deps`, `vendor`):
+
+- `--features <a,b,c>` — comma-separated, and repeats accumulate.
+- `--no-default-features` — leave the root's `default` feature off.
+- `--all-features` — turn on every feature the root manifest declares; refused together with
+  `--features` or `--no-default-features`, since the two say different things about the same set.
+
+`sysl test .` at the package root enables every feature the manifest declares unless the caller
+asked for something explicitly — gated code the ordinary gate never compiles is gated code nobody
+is testing.
+
+**Four refusals, all decidable from the manifest alone:**
+
+- a feature names a dependency that is not `optional`, so it "turns on" something that is taken
+  whatever is asked for — write `optional = true` on that entry, or drop it from the feature;
+- an optional dependency that no feature names, which nothing could ever reach — name it in a
+  `features` entry, or drop its `optional = true`;
+- a feature names something that is neither a dependency nor a feature of the same manifest, which
+  would silently select nothing;
+- features that turn each other on in a cycle, so following the implications never ends.
+
+**A package using `features` states a floor of `sysl = "0.0.114"`** in `package.hocon`.
+
+### Behaviour change: a `path` dependency now resolves against its manifest's directory, not `cwd`
+
+A `path` dependency in `package.hocon` was kept exactly as written and handed to `Fetch.ensure`
+unresolved, so it was tested against the *process's* working directory rather than the directory of
+the manifest that declared it. Building a project from anywhere other than inside it
+(`sysl run /abs/path/app`) failed with a spurious "is not a directory" refusal, while the same
+build worked from inside the project purely by coincidence of `cwd` matching the intended base.
+
+`Dependency.resolvedAgainst` and `PackageConfig.resolvingLocalPaths` now join a relative
+`Origin.Local` path to the directory of the manifest that named it, at every manifest read that
+knows its own directory — the project root, each `--lib` root (resolved against its own directory
+rather than the main project's), and a fetched or path-dependency's own manifest in turn. This
+widens what resolves; nobody was relying on the old cwd-relative behaviour on purpose, since it
+only worked by accident when the caller's cwd happened to match.
+
+### sysl.sh
+
+The reference page for `features` — the manifest block, `optional`, `#if feature_<name>`, the
+consumer-side `features`/`default_features` keys, the union-and-fixpoint resolution, the three CLI
+flags, `sysl test .`'s root default, and the four refusals with their exact messages — ships with
+this release.
+
 ## 0.0.113 — 2026-09-09
 
 This is the release that restarts the 0.1.0 burn-in clock, since it changes what compiles.
