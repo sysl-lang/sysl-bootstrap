@@ -164,6 +164,20 @@ case class PackageConfig(
         s"hand is $compiler")
     case _ => Right(())
 
+  /** Every `path` dependency, read against the directory that holds **this** manifest.
+   *
+   * `readOrigin` keeps a `path` exactly as the manifest wrote it, because reading is a pure function
+   * of text with no filesystem in the way (`PackageConfig.read`'s own docstring). So a relative path
+   * means nothing on its own — it has to be joined to wherever this particular `package.hocon` was
+   * found, which only the reader of the file knows. Calling this once, right after the read, is what
+   * makes the directory in `Origin.Local` unambiguous from then on: a package read again as somebody
+   * else's dependency, with a different `dir`, resolves its own paths against its own directory,
+   * never against the directory of whichever manifest happened to read it first.
+   */
+  def resolvingLocalPaths(dir: String): PackageConfig =
+    copy(dependencies = dependencies.map(_.resolvedAgainst(dir)),
+         devDependencies = devDependencies.map(_.resolvedAgainst(dir)))
+
   /** The macros one carried C file is compiled with, as clang spells them, or nothing.
    *
    * `path` is relative to the package root and written with `/`, which is how the manifest names it.

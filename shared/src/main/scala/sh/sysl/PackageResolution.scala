@@ -37,9 +37,9 @@ import io.github.edadma.cross_platform.*
  * modules.
  *
  * A `path` dependency of a root is resolved exactly as the project's own is, by the same
- * `Fetch.ensure`. Reading it against the root it was written in would be a *second* meaning for one
- * field, and whether a relative path should be read against a project root rather than the working
- * directory is the same question on both roads.
+ * `Fetch.ensure`, and both are read the same way at the source: `readPackageConfig` joins a relative
+ * path to the directory of the manifest that named it before `Fetch.ensure` ever sees it, so a build
+ * run from anywhere still finds the same directory a build run from inside the project would.
  *
  * `sysl.sum` is written back where a package was fetched that no line covered, so the first build
  * after adding a dependency records what it got and every build after that is checked against it.
@@ -343,7 +343,8 @@ private[sysl] def owningPackage(file: String): Option[String] = {
  * a search that walked upward would make a build depend on directories above the one named.
  */
 private def readPackageConfig(file: String): Either[String, PackageConfig] = {
-  val path = s"${projectRoot(file)}/${PackageConfig.FileName}"
+  val root = projectRoot(file)
+  val path = s"$root/${PackageConfig.FileName}"
 
   if !isFile(path) then Right(PackageConfig.empty)
   else
@@ -356,7 +357,11 @@ private def readPackageConfig(file: String): Either[String, PackageConfig] = {
         _ <- Version.ofCompiler(BuildInfo.version)
                .map(config.checkFloor("this project", _))
                .getOrElse(Right(()))
-      yield config
+      // A `path` dependency is joined to `root` here rather than left as the manifest wrote it, so
+      // that a relative one means the same directory whether the build runs from inside the project
+      // or from anywhere else. This is also what a `--lib` root's own manifest goes through, since
+      // both roads read a dependency the same way (`libDependencies` calls this too).
+      yield config.resolvingLocalPaths(root)
     catch case e: Exception => Left(s"cannot read $path: ${e.getMessage}")
 }
 

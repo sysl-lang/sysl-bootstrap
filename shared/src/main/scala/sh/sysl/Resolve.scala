@@ -146,14 +146,22 @@ object Resolve {
    * thing the collision rule below can be asked about them. Left out, a root's module and a
    * dependency's module could both claim one name and the local one would quietly win, which is the
    * silent winner `§ 9` exists to refuse.
+   *
+   * `config`'s own `path` dependencies are resolved against `root` here, once, before anything reads
+   * them — so a caller that read `config` off disk with `PackageConfig.read` alone (a test, or a
+   * `--lib` root whose own resolution ran earlier) still gets a directory rather than whatever the
+   * manifest happened to write, and an already-resolved one is left untouched.
    */
   def graph(root: String, config: PackageConfig, sums: Sums, cache: String,
             sharing: List[String] = Nil, request: FeatureRequest = FeatureRequest(),
-            testing: Boolean = false): Either[String, Graph] =
+            testing: Boolean = false): Either[String, Graph] = {
+    val rooted = config.resolvingLocalPaths(root)
+
     for
-      rootSet <- FeatureResolution.rootEnabled(config, request, testing)
-      settled <- climb(root, config, sums, cache, sharing, Map("" -> rootSet), FeatureResolution.Rounds)
+      rootSet <- FeatureResolution.rootEnabled(rooted, request, testing)
+      settled <- climb(root, rooted, sums, cache, sharing, Map("" -> rootSet), FeatureResolution.Rounds)
     yield settled
+  }
 
   /** Resolve, work out what that answer enables, and resolve again until a round changes nothing.
    *
@@ -586,7 +594,11 @@ object Resolve {
           // than the one in hand, being built by the older one. The root says whose manifest it is,
           // since the reader did not write this file.
           config.warnings.foreach(w => Console.err.println(s"$root: $w"))
-          config
+          // A `path` dependency this manifest names is joined to `root` — its OWN directory — never
+          // to the root of whichever project asked to read it. `readLocals` calls this for a local
+          // dependency's own manifest as well as `select` for a fetched one, so a package nested two
+          // levels deep still resolves its `path` entries against the directory it was written in.
+          config.resolvingLocalPaths(root)
         }
       catch case e: Exception => Left(s"cannot read $path: ${e.getMessage}")
   }

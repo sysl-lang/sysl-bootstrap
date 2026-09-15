@@ -1,5 +1,7 @@
 package sh.sysl
 
+import io.github.edadma.cross_platform.*
+
 /** Minimal Version Selection and the naming rules over it (`reference/packages.md § Which version
  * you get`, `§ 9`).
  *
@@ -483,6 +485,36 @@ class ResolveTests extends PackageCacheSupport {
 
       graph.packages.head.imports shouldBe Map("helper" -> "h.helper")
       graph.packages.find(_.canonical == "h").map(_.root) shouldBe Some(other)
+    }
+
+    // Every other case in this file writes `path` as an interpolated, already-absolute temp
+    // directory, which never exercises what a person actually types. A manifest that says
+    // `path = "../helper"` means nothing until it is joined to the directory holding the manifest
+    // that wrote it -- and `root` here is a directory this suite made, not wherever the JVM's own
+    // working directory happens to be, so a resolution that fell back to the process's cwd (the bug
+    // this pins) would find no such directory and refuse the build.
+    "a relative one is read against the directory of the manifest that wrote it" in {
+      val cache  = emptyCache()
+      val parent = createTempDirectory("sysl-pkg-relative-")
+      val helper = s"$parent/helper"
+
+      createDirectories(helper)
+      writeFile(s"$helper/${PackageConfig.FileName}", manifest("helper", "0.1.0"))
+      createDirectories(s"$helper/helper")
+      writeFile(s"$helper/helper/helper.sysl", "module helper\n")
+
+      val root = s"$parent/app"
+
+      createDirectories(root)
+      writeFile(s"$root/${PackageConfig.FileName}",
+        """package { name = "app", version = "0.1.0" }
+          |dependencies { h { path = "../helper" } }
+          |""".stripMargin)
+
+      val graph = resolve(root, cache)
+
+      graph.packages.head.imports shouldBe Map("helper" -> "h.helper")
+      graph.packages.find(_.canonical == "h").map(_.root) shouldBe Some(helper)
     }
 
     // A relative path in a fetched package is relative to a checkout that exists on one machine.

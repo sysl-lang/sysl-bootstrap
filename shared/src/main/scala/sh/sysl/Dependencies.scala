@@ -118,6 +118,18 @@ case class Dependency(
   def canonical: String = origin match
     case Origin.Git(coordinate, _) => coordinate.replace('/', '.')
     case Origin.Local(_)           => label
+
+  /** A `path` origin read exactly as written, resolved against the directory of the manifest that
+   * declared it rather than against whatever directory happens to be current when the build runs.
+   *
+   * A `git` origin carries no directory of its own and is returned unchanged. `Project.absolute`
+   * does the join — always answering a path rooted at `/`, `..` and all, which is what makes this
+   * safe to call more than once on the same dependency: a `dir` that is already absolute (because an
+   * earlier call already resolved it) resolves to itself rather than being joined a second time.
+   */
+  def resolvedAgainst(declaringDir: String): Dependency = origin match
+    case Origin.Local(dir) => copy(origin = Origin.Local(Project.absolute(dir, declaringDir)))
+    case _                 => this
 }
 
 object Dependency {

@@ -404,12 +404,24 @@ object Project {
    * this is for is making a path independent of *when* it is read, and resolving symlinks would
    * additionally make it independent of what the filesystem does later — a different promise, and
    * one a build has no business making on somebody's behalf.
+   *
+   * `base` is where a relative `path` is read from — the process's working directory by default,
+   * which is right for anything typed on a command line, but wrong for a path a *manifest* wrote,
+   * which means wherever that manifest sits rather than wherever the build happens to be invoked from
+   * (`PackageConfig.resolvingLocalPaths`). `base` may itself be relative — a project root is not
+   * always given as an absolute path — so it is grounded in the working directory first, the same
+   * way a bare `path` would be. Because the answer always starts with `/`, resolving an
+   * already-absolute result again — against a different `base` — is a no-op rather than a second
+   * join, which is what makes it safe to call more than once on the same dependency.
    */
-  def absolute(path: String): String = s"/${segmentsOf(path).mkString("/")}"
+  def absolute(path: String, base: String = getCurrentDirectory): String =
+    s"/${segmentsOf(path, base).mkString("/")}"
 
-  private def segmentsOf(path: String): List[String] = {
-    val rooted = if path.startsWith("/") || path.startsWith("\\") then path
-                 else s"${getCurrentDirectory}/$path"
+  private def segmentsOf(path: String, base: String = getCurrentDirectory): List[String] = {
+    val rootedBase = if base.startsWith("/") || base.startsWith("\\") then base
+                     else s"$getCurrentDirectory/$base"
+    val rooted      = if path.startsWith("/") || path.startsWith("\\") then path
+                       else s"$rootedBase/$path"
 
     rooted.split("[/\\\\]").foldLeft(List.empty[String]) {
       case (segments, "" | ".") => segments

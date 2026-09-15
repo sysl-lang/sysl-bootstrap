@@ -616,6 +616,32 @@ class PackageBuildTests extends PackageCacheSupport {
       run(program("print(mid.quadruple(10))"), List(root)) shouldBe "40\n"
     }
 
+    // A `--lib` root's manifest is written in that root's own directory, so a relative `path` in it
+    // means a directory beside the root -- never beside the project that happens to name the root
+    // with `--lib`, and never wherever the process was launched from. `geom-lib` sits beside `mid`
+    // here and nowhere near `program`'s own directory, which is what makes this the case the root
+    // project's own relative-path resolution could not have gotten right by accident.
+    "and a relative one is read against ITS OWN directory, never the project's" in {
+      val parent = createTempDirectory("sysl-lib-deps-rel-")
+      val geom    = s"$parent/geom-lib"
+
+      createDirectories(geom)
+      writeFile(s"$geom/${PackageConfig.FileName}", manifest("geom-lib", "1.0.0"))
+      createDirectories(s"$geom/geom")
+      writeFile(s"$geom/geom/geom.sysl", "module geom\n\ndouble(n: int) -> int = n * 2\n")
+
+      val root = s"$parent/mid"
+
+      createDirectories(root)
+      writeFile(s"$root/${PackageConfig.FileName}",
+        manifest("mid", "1.0.0", """g { path = "../geom-lib" }"""))
+      createDirectories(s"$root/mid")
+      writeFile(s"$root/mid/mid.sysl",
+        "module mid\n\nquadruple(n: int) -> int = geom.double(geom.double(n))\n")
+
+      run(program("print(mid.quadruple(10))"), List(root)) shouldBe "40\n"
+    }
+
     "and a coordinate is fetched, not only a directory already on this machine" in {
       val cache = emptyCache()
 
