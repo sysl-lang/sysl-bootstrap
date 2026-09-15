@@ -1110,4 +1110,156 @@ class PackageConfigTests extends AnyFreeSpec with Matchers {
       c.devDependencies.map(_.label) shouldBe List("b")
     }
   }
+
+  /** The `features` block and the three fields it adds to a dependency entry (`PackageFeatures`).
+   *
+   * What is checked here is the *manifest* alone: what the block parses to, and the four things a
+   * file can say wrongly about one. Resolving a consumer's `features = [desktop]` against the
+   * dependency's own manifest is a separate question, because nothing at this point has fetched the
+   * package it would have to ask.
+   */
+  "features" - {
+
+    val whole =
+      """
+        features {
+          default = [server]
+          server  = [llhttp, nghttp2]
+          desktop = [webview]
+        }
+        dependencies {
+          llhttp  { git = "github.com/sysl-lang/llhttp",  version = "0.2.0", optional = true }
+          nghttp2 { git = "github.com/sysl-lang/nghttp2", version = "0.3.0", optional = true }
+          webview { git = "github.com/sysl-lang/webview", version = "0.1.0", optional = true }
+        }
+      """
+
+    "a feature names optional dependencies and other features, in the order the file writes them" in {
+      val c = read(whole)
+
+      c.features.keys.toList shouldBe List("default", "server", "desktop")
+      c.features("default") shouldBe List("server")
+      c.features("server") shouldBe List("llhttp", "nghttp2")
+      c.features("desktop") shouldBe List("webview")
+    }
+
+    "the dependencies a feature turns on are read as optional" in {
+      val c = read(whole)
+
+      c.dependencies.map(_.label) shouldBe List("llhttp", "nghttp2", "webview")
+      c.dependencies.forall(_.optional) shouldBe true
+    }
+
+    // A manifest that says nothing about features is a manifest this compiler reads exactly as the
+    // one before it did -- the direction that cannot be allowed to change, since every package in
+    // the org is written this way.
+    "an old-style manifest has no features and its dependencies are unchanged" in {
+      val c = read("""
+        package { name = "thing", version = "1.0.0" }
+        dependencies { json { git = "github.com/edadma/sysl-json", version = "1.4.0" } }
+      """)
+
+      c.features shouldBe empty
+      c.dependencies shouldBe
+        List(Dependency("json", Origin.Git("github.com/edadma/sysl-json", Version(1, 4, 0))))
+      c.warnings shouldBe empty
+    }
+
+    "'optional' is false and 'default_features' is true where the entry says neither" in {
+      val d = read("""dependencies { json { path = "../json" } }""").dependencies.head
+
+      d.optional shouldBe false
+      d.features shouldBe empty
+      d.defaultFeatures shouldBe true
+    }
+
+    // The consumer side: which of the dependency's own features this entry asks for. Accepted as
+    // written here and resolved against that package's manifest elsewhere.
+    "a consumer entry may ask for features and refuse the defaults" in {
+      val d = read("""
+        dependencies { ui { path = "../ui", features = [desktop, tray], default_features = false } }
+      """).dependencies.head
+
+      d.features shouldBe List("desktop", "tray")
+      d.defaultFeatures shouldBe false
+    }
+
+    "a feature that names a dependency which is not optional is refused" in {
+      val e = refused("""
+        features     { server = [llhttp] }
+        dependencies { llhttp { path = "../llhttp" } }
+      """)
+
+      e should include("'features.server'")
+      e should include("'llhttp'")
+      e should include("not optional")
+      e should include("optional = true")
+    }
+
+    "an optional dependency that no feature names is refused" in {
+      val e = refused("""
+        features     { server = [llhttp] }
+        dependencies {
+          llhttp  { path = "../llhttp",  optional = true }
+          webview { path = "../webview", optional = true }
+        }
+      """)
+
+      e should include("'webview'")
+      e should include("no feature names")
+    }
+
+    "a feature that names something declared nowhere is refused" in {
+      val e = refused("""
+        features     { server = [llhttp, nghttp3] }
+        dependencies { llhttp { path = "../llhttp", optional = true } }
+      """)
+
+      e should include("'features.server'")
+      e should include("'nghttp3'")
+      e should include("neither a dependency")
+    }
+
+    // A feature may imply a feature, so the implications form a graph and the graph has to be
+    // acyclic -- otherwise selecting one never finishes.
+    "features that turn each other on are refused" in {
+      val e = refused("""features { a = [b], b = [a] }""")
+
+      e should include("'a' turns on 'b'")
+      e should include("turns on 'a'")
+      e should include("reach an end")
+    }
+
+    "a feature may imply a feature as long as the chain ends" in {
+      val c = read("""
+        features {
+          default = [server]
+          server  = [tls]
+          tls     = [openssl]
+        }
+        dependencies { openssl { path = "../openssl", optional = true } }
+      """)
+
+      c.features("default") shouldBe List("server")
+      c.features("tls") shouldBe List("openssl")
+    }
+
+    "'features' is a key this compiler knows, so it draws no unknown-key warning" in {
+      read("""features { }""").warnings shouldBe empty
+    }
+
+    "a feature whose value is not a list is refused" in {
+      val e = refused("""features { server = "llhttp" }""")
+
+      e should include("'features.server'")
+      e should include("is not a list")
+    }
+
+    "'optional' that is not a yes-or-no answer is refused" in {
+      val e = refused("""dependencies { llhttp { path = "../llhttp", optional = "yes" } }""")
+
+      e should include("'dependencies.llhttp.optional'")
+      e should include("'true' or 'false'")
+    }
+  }
 }

@@ -116,6 +116,14 @@ case class PackageConfig(
       * adds is that the package is not fetched either.
       */
     devDependencies: List[Dependency] = Nil,
+    /** The `features` block: each feature, and the optional dependencies and other features it turns
+      * on (`PackageFeatures`).
+      *
+      * In the order the file declares them, which is the order anything listing them should use.
+      * `default` is an ordinary entry here rather than a field of its own — it is the feature a
+      * consumer gets when it asks for none, and nothing about reading the block treats it specially.
+      */
+    features: Map[String, List[String]] = Map.empty,
     allocator: Option[Allocator] = None,
     defines: Map[String, List[String]] = Map.empty,
     sysl: Option[Version] = None,
@@ -292,6 +300,8 @@ object PackageConfig {
         deps    <- readDependencies(root)
         dev     <- readDependencies(root, "dev_dependencies")
         _       <- notInBoth(deps, dev)
+        feats   <- PackageFeatures.read(root)
+        _       <- PackageFeatures.check(feats, deps)
         alloc   <- readAllocator(root)
         defs    <- readDefines(root)
       yield PackageConfig(
@@ -306,6 +316,7 @@ object PackageConfig {
         pkgConfig = pkgs,
         dependencies = deps,
         devDependencies = dev,
+        features = feats,
         allocator = alloc,
         defines = defs,
         warnings = unknownKeys(root, TopLevelKeys, "") :::
@@ -858,10 +869,18 @@ object PackageConfig {
                   s"dependency says — the keys are ${DependencyKeys.toList.sorted.map(n => s"'$n'").mkString(", ")}")
       mount  <- readMount(sub, where)
       origin <- readOrigin(sub, where)
-    yield Dependency(label, origin, mount)
+      opt    <- PackageFeatures.flag(sub, "optional", where, orElse = false)
+      want   <- PackageFeatures.names(sub, "features", where)
+      byDflt <- PackageFeatures.flag(sub, "default_features", where, orElse = true)
+    yield Dependency(label, origin, mount, opt, want, byDflt)
   }
 
-  private val DependencyKeys = Set("git", "version", "path", "mount")
+  /** `features` and `default_features` here are about the package being *depended on* — which of
+   * its features this entry asks for — and they are accepted as written without being resolved,
+   * because resolving one means reading that package's own manifest and nothing has fetched it yet.
+   */
+  private val DependencyKeys =
+    Set("git", "version", "path", "mount", "optional", "features", "default_features")
 
   /** The blocks this compiler knows at the top level of a manifest, and the fields it knows inside
    * `package`.
@@ -872,7 +891,7 @@ object PackageConfig {
    */
   private val TopLevelKeys =
     Set("package", "targets", "capabilities", "requires", "dependencies", "dev_dependencies",
-        "allocator", "defines")
+        "features", "allocator", "defines")
 
   private val PackageKeys = Set("name", "version", "sysl")
 
@@ -990,9 +1009,10 @@ object PackageConfig {
     def repeated[A](of: Dependency => Option[A]): Option[(A, List[Dependency])] =
       entries.groupBy(of).collectFirst { case (Some(key), group) if group.length > 1 => (key, group) }
 
-    repeated {
-      case Dependency(_, Origin.Git(coordinate, _), _) => Some(coordinate)
-      case _                                           => None
+    repeated { d =>
+      d.origin match
+        case Origin.Git(coordinate, _) => Some(coordinate)
+        case _                         => None
     } match
       case Some((coordinate, group)) =>
         return Left(s"$FileName: '$coordinate' is named by ${group.map(d => s"'${d.label}'").mkString(" and ")} " +

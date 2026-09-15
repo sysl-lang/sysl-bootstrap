@@ -85,8 +85,27 @@ enum Origin {
  * library's own documentation, and `mount` is what a consumer writes when two dependencies want one
  * name. The label is what diagnostics and `sysl deps` call this entry, and it has to be unique for
  * that reason alone.
+ *
+ * ==The three fields a feature decides==
+ *
+ * `optional` says this entry is not fetched or built unless a feature of **this** package names it,
+ * so it is a claim about the package being described. `features` and `defaultFeatures` are claims
+ * about the package being *depended on* — which of its features this consumer wants — and they are
+ * read here and resolved against that package's own manifest elsewhere, since nothing at this point
+ * has fetched it.
+ *
+ * `defaultFeatures` is true where the entry says nothing, because a dependency written the ordinary
+ * way gets the package its author meant to ship; `optional` is false for the mirror-image reason,
+ * since a dependency written the ordinary way is one the build takes.
  */
-case class Dependency(label: String, origin: Origin, mount: Option[String] = None) {
+case class Dependency(
+    label: String,
+    origin: Origin,
+    mount: Option[String] = None,
+    optional: Boolean = false,
+    features: List[String] = Nil,
+    defaultFeatures: Boolean = true,
+) {
 
   /** The identity `§ 9` mangles, caches and resolves by — the coordinate, with the separators a
    * module name is allowed to hold.

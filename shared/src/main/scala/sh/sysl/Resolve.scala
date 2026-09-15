@@ -85,15 +85,16 @@ object Resolve {
      * Keyed on the **slashed** coordinate, as `selected` is, so the two are joined by one key.
      */
     def demanding(asker: String, deps: List[Dependency]): State =
-      deps.foldLeft(this) {
-        case (s, Dependency(_, Origin.Git(coordinate, version), _)) =>
-          val noted = s.copy(claims = s.claims.updatedWith(coordinate)(was =>
-            Some(was.getOrElse(Nil) :+ Claim(asker, version))))
+      deps.foldLeft(this) { (s, dep) =>
+        dep.origin match
+          case Origin.Git(coordinate, version) =>
+            val noted = s.copy(claims = s.claims.updatedWith(coordinate)(was =>
+              Some(was.getOrElse(Nil) :+ Claim(asker, version))))
 
-          if noted.selected.get(coordinate).forall(_ < version) then
-            noted.copy(selected = noted.selected + (coordinate -> version))
-          else noted
-        case (s, _) => s
+            if noted.selected.get(coordinate).forall(_ < version) then
+              noted.copy(selected = noted.selected + (coordinate -> version))
+            else noted
+          case _ => s
       }
 
     /** A package's hash written into the sums where no line covered it yet.
