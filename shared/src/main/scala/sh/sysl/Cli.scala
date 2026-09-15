@@ -214,13 +214,37 @@ private[sysl] val parser = {
         .action((_, c) => c.copy(command = "run"))
         .text("compile and run a sysl module, given its directory or a single file; " +
           "arguments after '--' go to the program")
-        .children(arg[String]("<path>").required().action((f, c) => c.copy(file = f))),
+        .children(
+          arg[String]("<path>").required().action((f, c) => c.copy(file = f)),
+          opt[String]("features")
+            .unbounded()
+            .action((f, c) => c.copy(features = c.features ::: f.split(",").toList.map(_.trim).filter(_.nonEmpty)))
+            .text("a feature of the root project to turn on, beside 'default'; comma-separated, " +
+              "and may be given more than once"),
+          opt[Unit]("no-default-features")
+            .action((_, c) => c.copy(noDefaultFeatures = true))
+            .text("leave the root's 'default' feature off"),
+          opt[Unit]("all-features")
+            .action((_, c) => c.copy(allFeatures = true))
+            .text("turn on every feature the root's manifest declares"),
+        ),
       cmd("build")
         .action((_, c) => c.copy(command = "build"))
         .text("compile a sysl module to a native executable")
         .children(
           arg[String]("<path>").required().action((f, c) => c.copy(file = f)),
           opt[String]('o', "output").action((o, c) => c.copy(output = Some(o))).text("output executable path"),
+          opt[String]("features")
+            .unbounded()
+            .action((f, c) => c.copy(features = c.features ::: f.split(",").toList.map(_.trim).filter(_.nonEmpty)))
+            .text("a feature of the root project to turn on, beside 'default'; comma-separated, " +
+              "and may be given more than once"),
+          opt[Unit]("no-default-features")
+            .action((_, c) => c.copy(noDefaultFeatures = true))
+            .text("leave the root's 'default' feature off"),
+          opt[Unit]("all-features")
+            .action((_, c) => c.copy(allFeatures = true))
+            .text("turn on every feature the root's manifest declares"),
         ),
       cmd("build-lib")
         .action((_, c) => c.copy(command = "build-lib"))
@@ -242,6 +266,17 @@ private[sysl] val parser = {
           opt[String]("header")
             .action((h, c) => c.copy(header = Some(h)))
             .text("where to write the C header; defaults to the archive's path with a '.h' suffix"),
+          opt[String]("features")
+            .unbounded()
+            .action((f, c) => c.copy(features = c.features ::: f.split(",").toList.map(_.trim).filter(_.nonEmpty)))
+            .text("a feature of the root project to turn on, beside 'default'; comma-separated, " +
+              "and may be given more than once"),
+          opt[Unit]("no-default-features")
+            .action((_, c) => c.copy(noDefaultFeatures = true))
+            .text("leave the root's 'default' feature off"),
+          opt[Unit]("all-features")
+            .action((_, c) => c.copy(allFeatures = true))
+            .text("turn on every feature the root's manifest declares"),
         ),
       cmd("emit-header")
         .action((_, c) => c.copy(command = "emit-header"))
@@ -279,6 +314,17 @@ private[sysl] val parser = {
           opt[Unit]("std")
             .action((_, c) => c.copy(std = true))
             .text("this tree is sysl's own standard module, which the compiler otherwise supplies"),
+          opt[String]("features")
+            .unbounded()
+            .action((f, c) => c.copy(features = c.features ::: f.split(",").toList.map(_.trim).filter(_.nonEmpty)))
+            .text("a feature of the root project to turn on, beside 'default'; comma-separated, " +
+              "and may be given more than once"),
+          opt[Unit]("no-default-features")
+            .action((_, c) => c.copy(noDefaultFeatures = true))
+            .text("leave the root's 'default' feature off"),
+          opt[Unit]("all-features")
+            .action((_, c) => c.copy(allFeatures = true))
+            .text("turn on every feature the root's manifest declares"),
         ),
       cmd("emit-llvm")
         .action((_, c) => c.copy(command = "emit-llvm"))
@@ -323,7 +369,20 @@ private[sysl] val parser = {
       cmd("deps")
         .action((_, c) => c.copy(command = "deps"))
         .text("print the dependency graph this project resolves to, and who asked for each version")
-        .children(arg[String]("<path>").required().action((f, c) => c.copy(file = f))),
+        .children(
+          arg[String]("<path>").required().action((f, c) => c.copy(file = f)),
+          opt[String]("features")
+            .unbounded()
+            .action((f, c) => c.copy(features = c.features ::: f.split(",").toList.map(_.trim).filter(_.nonEmpty)))
+            .text("a feature of the root project to turn on, beside 'default'; comma-separated, " +
+              "and may be given more than once"),
+          opt[Unit]("no-default-features")
+            .action((_, c) => c.copy(noDefaultFeatures = true))
+            .text("leave the root's 'default' feature off"),
+          opt[Unit]("all-features")
+            .action((_, c) => c.copy(allFeatures = true))
+            .text("turn on every feature the root's manifest declares"),
+        ),
       cmd("add")
         .action((_, c) => c.copy(command = "add"))
         .text("add a dependency to this project's package.hocon, at its newest version or a pinned one")
@@ -336,7 +395,20 @@ private[sysl] val parser = {
       cmd("vendor")
         .action((_, c) => c.copy(command = "vendor"))
         .text("put every package this project depends on into vendor/, so that a build fetches nothing")
-        .children(arg[String]("<path>").required().action((f, c) => c.copy(file = f))),
+        .children(
+          arg[String]("<path>").required().action((f, c) => c.copy(file = f)),
+          opt[String]("features")
+            .unbounded()
+            .action((f, c) => c.copy(features = c.features ::: f.split(",").toList.map(_.trim).filter(_.nonEmpty)))
+            .text("a feature of the root project to turn on, beside 'default'; comma-separated, " +
+              "and may be given more than once"),
+          opt[Unit]("no-default-features")
+            .action((_, c) => c.copy(noDefaultFeatures = true))
+            .text("leave the root's 'default' feature off"),
+          opt[Unit]("all-features")
+            .action((_, c) => c.copy(allFeatures = true))
+            .text("turn on every feature the root's manifest declares"),
+        ),
       cmd("targets")
         .action((_, c) => c.copy(command = "targets"))
         .text("list the machines sysl can build for"),

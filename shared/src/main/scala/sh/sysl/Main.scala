@@ -145,6 +145,14 @@ private[sysl] def execute(asked: Config): Int = {
       case Left(diagnostic) => report(diagnostic)
       case Right(program)   => stdout(AstPrinter.print(program, spans = !cfg.noSpans)); 0
 
+  // `--all-features` says every feature the manifest declares is wanted, and `--features`/
+  // `--no-default-features` each say something narrower about the same set — so together they
+  // are two different answers to one question, and neither reading can silently win.
+  if cfg.allFeatures && (cfg.features.nonEmpty || cfg.noDefaultFeatures) then
+    return fail("--all-features says every feature the manifest declares is wanted, and " +
+      "--features/--no-default-features each say something narrower about the same set — a " +
+      "compilation cannot ask for both")
+
   val project = readPackageConfig(cfg.file) match
     case Left(err) => return fail(err)
     case Right(p)  => p
