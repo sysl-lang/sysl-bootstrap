@@ -56,8 +56,28 @@ object Conditional {
    * and a machine that is hosted for one and bare for the other is a bug nobody would find by
    * reading either file alone.
    */
-  def defined(target: Target): Set[String] =
-    osDefined(target.os) + cpuSymbol(target.cpu)
+  def defined(target: Target, features: Set[String] = Set.empty): Set[String] =
+    osDefined(target.os) + cpuSymbol(target.cpu) ++ features.map(featureSymbol)
+
+  /** The symbol a package's feature is named by in a condition: `server` is `feature_server`.
+   *
+   * The prefix is what keeps the two vocabularies apart. A target's symbols are the compiler's and
+   * are closed; a feature's are the manifest's, so a package could otherwise declare a feature
+   * called `linux` and gate on a word meaning something else entirely.
+   */
+  def featureSymbol(name: String): String = FeaturePrefix + name
+
+  /** Whether a condition's word names a feature rather than a fact about the machine.
+   *
+   * **This family is open where [[symbols]] is closed**, which is the one place the closed-set
+   * argument above does not reach: a feature exists because a manifest says so, and the manifest
+   * that says so is the one belonging to the file being gated. So `feature_x` in a package that
+   * declares no `x` is **false** rather than refused — the same answer a declared feature nobody
+   * turned on gives, and the answer a consumer choosing features expects.
+   */
+  def isFeatureSymbol(s: String): Boolean = s.startsWith(FeaturePrefix)
+
+  private val FeaturePrefix = "feature_"
 
   /** The symbols an **operating system alone** settles, true for it and false for every other.
    *
@@ -103,7 +123,7 @@ object Conditional {
   def gated(source: Source, target: Target): Either[Diagnostic, Source] = {
     val lines   = source.lines
     val out     = lines.toArray
-    val on      = defined(target)
+    val on      = defined(target, source.features)
     var stack   = List.empty[Frame]
     var touched = false
     var failed  = Option.empty[Diagnostic]
@@ -191,7 +211,8 @@ object Conditional {
     failed match
       case Some(err)        => Left(err)
       case None if !touched => Right(source)
-      case None             => Right(new Source(source.name, out.mkString("\n"), source.dir, source.columnOffset))
+      case None             => Right(new Source(source.name, out.mkString("\n"), source.dir, source.columnOffset,
+                                       source.features))
   }
 
   /** One open `#if` group.
@@ -389,10 +410,11 @@ object Conditional {
     def atom: Either[Diagnostic, Boolean] = peek match
       case Some(("name", s, col)) =>
         p += 1
-        if symbols(s) then Right(on(s))
+        if symbols(s) || isFeatureSymbol(s) then Right(on(s))
         else
           err(col, s"'$s' is not something a target says about itself — sysl knows " +
-            symbols.toList.sorted.mkString(", "))
+            symbols.toList.sorted.mkString(", ") +
+            s". A feature this package's manifest declares is named '${featureSymbol(s)}'")
       case Some(("(", _, _)) =>
         p += 1
         or.flatMap(v =>

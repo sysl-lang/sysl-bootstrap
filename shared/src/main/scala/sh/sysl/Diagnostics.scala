@@ -22,9 +22,24 @@ package sh.sysl
  * is zero for a file the compiler was handed as it was written and four for the program inside a
  * literate one (`Literate`). It is added back wherever a position is *reported*, so that a location
  * names the column of the file the reader has open rather than of the text the lexer saw.
+ *
+ * `features` is what the package this file belongs to has enabled, which `Conditional` turns into
+ * `feature_<name>` symbols the file may be gated on. Empty for a file handed over with no package
+ * graph around it, which is every compilation that resolves nothing.
  */
 final class Source(val name: String, val text: String, val dir: Option[List[String]] = None,
-                   val columnOffset: Int = 0) {
+                   val columnOffset: Int = 0, val features: Set[String] = Set.empty) {
+
+  /** The same file, belonging to a package with these features enabled.
+   *
+   * The set travels on the file rather than on the compilation because a compilation holds the files
+   * of several packages at once — a program's own, a dependency's, a `--lib` root's — and each of
+   * them is gated against **its own** manifest (`Conditional.defined`). A parameter one level up
+   * could not tell them apart, and one package's features leaking into another's source would gate
+   * code in or out on the strength of a name its author never declared.
+   */
+  def enabling(names: Set[String]): Source =
+    if names.isEmpty then this else new Source(name, text, dir, columnOffset, names)
 
   /** The text split into lines, kept for the one line a diagnostic quotes. Splitting with a
    * negative limit keeps a trailing empty line, so line numbers stay 1:1 with the file.

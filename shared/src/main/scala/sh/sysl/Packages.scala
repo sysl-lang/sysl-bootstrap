@@ -132,7 +132,16 @@ case class PackageSources(sources: List[Source], packages: Packages, roots: List
                             * Empty on every build but `sysl test`, because that is the only one
                             * that resolves a dev dependency at all.
                             */
-                          devModules: Set[String] = Set.empty)
+                          devModules: Set[String] = Set.empty,
+                          /** The features the **root project** has enabled, which its own files may
+                            * be gated on as `feature_<name>` symbols (`Conditional`).
+                            *
+                            * It rides here because a fetched package's files are stamped where they
+                            * are read and the root's are read before anything is resolved — so this
+                            * is the resolver's answer travelling back to the one caller that has to
+                            * apply it itself. Empty for a build that resolves nothing.
+                            */
+                          rootFeatures: Set[String] = Set.empty)
 
 object PackageSources {
 

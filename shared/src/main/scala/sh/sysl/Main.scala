@@ -182,18 +182,18 @@ private[sysl] def execute(asked: Config): Int = {
   // A malformed one is reported as itself rather than as a tree that would not read. The two are
   // different mistakes: one is a name somebody typed wrong, which the message can name and explain,
   // and the other is a permission or a missing path.
-  val sources =
+  val ownSources =
     try Project.collect(cfg.file, Some(target.os))
     catch
       case e: SelectionError => return fail(e.getMessage)
       case e: Exception      => return fail(s"cannot read ${cfg.file}: ${e.getMessage}")
 
-  if sources.isEmpty then return fail(s"${cfg.file} holds no sysl source files")
+  if ownSources.isEmpty then return fail(s"${cfg.file} holds no sysl source files")
 
   // The files, in the order the walk found them, which is the order the compiler reads them in.
   if cfg.verbose then
-    trace(s"${sources.length} source file(s) under ${cfg.file}")
-    sources.foreach(src => trace(s"  read ${src.name}"))
+    trace(s"${ownSources.length} source file(s) under ${cfg.file}")
+    ownSources.foreach(src => trace(s"  read ${src.name}"))
 
   val provides = project.provides(target.name)
 
@@ -260,6 +260,11 @@ private[sysl] def execute(asked: Config): Int = {
       dependencies(cfg, project, roots, target.os) match
         case Left(err) => return fail(err)
         case Right(d)  => d
+
+  // The project's own files, gated against the features **this** project has enabled — the answer
+  // the resolver worked out, which is why it cannot be applied where the files were read. A
+  // dependency's are stamped as they are collected, so each package sees its own and nobody else's.
+  val sources = ownSources.map(_.enabling(fetched.rootFeatures))
 
   // The pair of C functions this whole program allocates through (`reference/packages.md § One
   // heap, and the package that names it`). A package that brings its own heap says so, and saying
@@ -632,6 +637,12 @@ private[sysl] def execute(asked: Config): Int = {
       // Every file the program is made of, and the C beside it. `fingerprint` is over each file's
       // place in its tree and its text, sorted, so the order these arrive in cannot matter.
       LibraryArtifact.fingerprint(sources ::: librarySources),
+      // **What each package has enabled**, because that decides which lines of those files survive
+      // the gate (`Conditional`) — and the fingerprint above is over the text as it was written. Two
+      // runs of one unchanged tree under different features are two different programs, and without
+      // this the second is handed the first one's binary.
+      (sources ::: librarySources)
+        .flatMap(s => s.features.toList.sorted.map(f => s"${s.name}:$f")).sorted.mkString(" "),
       LibraryArtifact.fingerprint(NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree,
                                                    target.os).flatten),
       // An artifact named with `--lib` has no source to hash, so it is hashed as bytes.

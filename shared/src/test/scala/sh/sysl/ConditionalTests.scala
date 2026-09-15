@@ -275,7 +275,7 @@ class ConditionalTests extends AnyFreeSpec with Matchers with CodegenSupport wit
     "every symbol is true of at least one target in the registry" in {
       // A symbol nothing can ever satisfy is a symbol that gates code out on every machine, which is
       // the same defect as a misspelling and would not otherwise be caught.
-      val reachable = Target.all.flatMap(Conditional.defined).toSet
+      val reachable = Target.all.flatMap(Conditional.defined(_)).toSet
 
       Conditional.symbols -- reachable shouldBe empty
     }
@@ -784,6 +784,42 @@ class ConditionalTests extends AnyFreeSpec with Matchers with CodegenSupport wit
                       |""".stripMargin.replace("\\\"", "\""))
 
       out should include("'#endif' has no '#if' above it to close")
+    }
+  }
+
+  "a package's enabled features are symbols of its own files" - {
+
+    "each one is the feature's name under a prefix, beside everything the target says" in {
+      val on = Conditional.defined(macos, Set("server", "tls"))
+
+      on should contain("feature_server")
+      on should contain("feature_tls")
+      on should contain allElementsOf Conditional.defined(macos)
+    }
+
+    "and a compilation with no features has no symbol of that shape at all" in {
+      for t <- Target.all do
+        withClue(t.name)(Conditional.defined(t).filter(Conditional.isFeatureSymbol) shouldBe empty)
+    }
+
+    // The set travels on the file, which is what makes the answer per package: two files of one
+    // compilation, gated on the same word, get different answers.
+    "the file carries the set, so the same condition reads differently in two packages" in {
+      val text = "#if feature_server\nprint(1)\n#else\nprint(2)\n#endif\n"
+
+      Conditional.gate(Source("<input>", text).enabling(Set("server")), macos).map(_.text) shouldBe
+        Right("\nprint(1)\n\n\n\n")
+      Conditional.gate(Source("<input>", text), macos).map(_.text) shouldBe
+        Right("\n\n\nprint(2)\n\n")
+    }
+
+    // The one place the closed-symbol rule above does not reach: a feature exists because a manifest
+    // says so, so a word nothing declared is the ordinary "that feature is off" rather than a
+    // mistake — where a target symbol nobody knows is still refused.
+    "a feature nobody declared is false, and an unknown target symbol is still refused" in {
+      Conditional.gate(Source("<input>", "#if feature_nobody\nprint(1)\n#endif\n"), macos)
+        .map(_.text) shouldBe Right("\n\n\n")
+      Conditional.gate(Source("<input>", "#if nobody\n#endif\n"), macos).isLeft shouldBe true
     }
   }
 }

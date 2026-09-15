@@ -52,9 +52,20 @@ private def dependencies(cfg: Config, project: PackageConfig, roots: List[String
     fromRoots <- libDependencies(roots)
     dev        = devDependencies(cfg, project)
     declared   = project.dependencies ::: dev ::: fromRoots
-    got       <- if declared.isEmpty then Right(PackageSources.none)
+    got       <- if declared.isEmpty then ownFeaturesOnly(cfg, project)
                  else resolveDependencies(cfg, project.copy(dependencies = declared), roots, os)
   yield got.copy(devModules = devModules(got, dev))
+
+/** A project that depends on nothing: no packages, and the features it has enabled of its own.
+ *
+ * A project with no dependencies resolves nothing, and it still has features — which its own files
+ * may be gated on (`Conditional`). So the one answer a graph would have carried is worked out here
+ * instead, off the manifest and the command line alone: no cache, no network, and a refusal for a
+ * feature nobody declared arriving whether or not the project happens to depend on anything.
+ */
+private def ownFeaturesOnly(cfg: Config, project: PackageConfig): Either[String, PackageSources] =
+  FeatureResolution.rootEnabled(project, featureRequest(cfg), cfg.command == "test")
+    .map(features => PackageSources.none.copy(rootFeatures = features))
 
 /** Resolving a non-empty dependency list against this machine's cache, and recording what it got.
  *
@@ -214,7 +225,11 @@ private def collectPackages(graph: Resolve.Graph, os: Os): Either[String, Packag
   val fetched = graph.packages.filterNot(_.isRoot)
 
   try
-    val each = fetched.map(p => p -> Project.collect(p.root, Some(os)))
+    // Each package's files carry the features **that** package has enabled, and no others: a file is
+    // gated against its own manifest, so the root's `feature_server` is invisible in a dependency and
+    // a dependency's is invisible in the root (`Conditional.defined`).
+    val each = fetched.map(p =>
+      p -> Project.collect(p.root, Some(os)).map(_.enabling(graph.features.getOrElse(p.canonical, Set.empty))))
 
     each.find(_._2.isEmpty) match
       case Some((p, _)) => Left(s"'${p.canonical}' holds no sysl source files")
@@ -243,6 +258,7 @@ private def collectPackages(graph: Resolve.Graph, os: Os): Either[String, Packag
             p.config.pkgConfig.toList.sortBy(_._1).map((mod, why) => LibNeed(p.canonical, mod, why))),
           fetched.flatMap(p => p.config.allocator.map(p.canonical -> _)),
           defines,
+          rootFeatures = graph.features.getOrElse("", Set.empty),
         )))
   // A malformed per-OS directory is a mistake in the package rather than a package that would not
   // read (`reference/modules.md § Platform selection`), and the message names the directory and
