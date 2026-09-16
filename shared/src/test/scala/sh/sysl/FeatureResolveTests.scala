@@ -277,4 +277,24 @@ class FeatureResolveTests extends PackageCacheSupport {
     off.packages.map(_.canonical) should not contain "github.com.e.tiny"
     on.packages.map(_.canonical) should contain("github.com.e.tiny")
   }
+
+  // A feature member that is ALSO the label of an optional dependency of the same name turns on
+  // that DEPENDENCY rather than a like-named feature -- so resolving `server` alone must not walk
+  // into `lmdb`'s own feature list and turn `zstd` on.
+  "a feature member that is also a dependency's own label does not chain into that label's feature" in {
+    val cache = emptyCache()
+
+    publish(cache, "github.com/e/lmdb", Version(1, 0, 0), "lmdb")
+    publish(cache, "github.com/e/zstd", Version(1, 0, 0), "zstd")
+
+    val root = project(pkg("app", "0.1.0",
+      deps = s"""${entry("lmdb", "github.com/e/lmdb", "1.0.0", "optional = true")}, ${entry(
+          "zstd", "github.com/e/zstd", "1.0.0", "optional = true")}""",
+      feats = "server = [lmdb], lmdb = [zstd]"))
+
+    val g = graphFor(root, cache, FeatureRequest(features = List("server")))
+
+    g.features("") shouldBe Set("server")
+    selected(g).keySet shouldBe Set("github.com.e.lmdb")
+  }
 }

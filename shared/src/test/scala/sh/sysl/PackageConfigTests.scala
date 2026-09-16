@@ -1230,6 +1230,30 @@ class PackageConfigTests extends AnyFreeSpec with Matchers {
       e should include("reach an end")
     }
 
+    // A feature member that is ALSO the label of an optional dependency of the same name names that
+    // dependency, not a feature turning itself on -- this is not the cycle above.
+    "a feature naming an optional dependency of its own name is accepted" in {
+      val c = read("""
+        features     { lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb", optional = true } }
+      """)
+
+      c.features("lmdb") shouldBe List("lmdb")
+    }
+
+    "a feature naming a NON-optional dependency of its own name is refused as not optional" in {
+      val e = refused("""
+        features     { lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb" } }
+      """)
+
+      e should include("'features.lmdb'")
+      e should include("'lmdb'")
+      e should include("not optional")
+      e shouldNot include("turns on")
+      e shouldNot include("reach an end")
+    }
+
     "a feature may imply a feature as long as the chain ends" in {
       val c = read("""
         features {

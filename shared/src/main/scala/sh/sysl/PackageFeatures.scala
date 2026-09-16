@@ -18,6 +18,10 @@ import scala.collection.immutable.ListMap
  * dependencies are in the graph; what those dependencies then ask of the host is the ordinary
  * question the manifest already answers.
  *
+ * A member that is both a dependency's own label and the name of a feature of this same package
+ * names the dependency, not the feature — the only place this ambiguity can arise, since a request
+ * from the CLI or from a consumer's own `features = […]` always names a feature.
+ *
  * ==Why the reading and the checking are separate==
  *
  * The block is read off the file alone, and then checked against the dependencies the same file
@@ -64,7 +68,7 @@ object PackageFeatures {
     for
       _ <- everyMemberResolves(features, deps)
       _ <- everyOptionalIsReached(features, deps)
-      _ <- noCycles(features)
+      _ <- noCycles(features, deps)
     yield ()
 
   /** A `true`/`false` field of a dependency entry, or the default where the entry is silent.
@@ -114,6 +118,10 @@ object PackageFeatures {
    * The two are one walk because they are one question asked of one name, and splitting them would
    * read the same list twice to produce messages that differ only in which half of the answer was
    * missing.
+   *
+   * A name that is BOTH a dependency's label and a feature of this same package is read as the
+   * dependency — Cargo's `dep:` answer, without a second spelling — so the dependency label is
+   * checked first and only a name that names no dependency falls back to being read as a feature.
    */
   private def everyMemberResolves(features: Map[String, List[String]], deps: List[Dependency])
       : Either[String, Unit] = {
@@ -122,19 +130,19 @@ object PackageFeatures {
     PackageConfig
       .collect(features.toList) { (name, members) =>
         PackageConfig.collect(members) { member =>
-          if features.contains(member) then Right(())
-          else
-            byLabel.get(member) match
-              case Some(dep) if dep.optional => Right(())
-              case Some(_) =>
-                Left(s"${PackageConfig.FileName}: 'features.$name' names the dependency '$member', " +
-                  "which is not optional — a feature turns an optional dependency on, and this one " +
-                  "is taken whatever is asked for. Write 'optional = true' in that dependency's " +
-                  "entry, or drop it from the feature")
-              case None =>
-                Left(s"${PackageConfig.FileName}: 'features.$name' names '$member', which is neither " +
-                  "a dependency of this package nor a feature of it — a feature turns on things " +
-                  s"this manifest declares, so '$member' would select nothing")
+          byLabel.get(member) match
+            case Some(dep) if dep.optional => Right(())
+            case Some(_) =>
+              Left(s"${PackageConfig.FileName}: 'features.$name' names the dependency '$member', " +
+                "which is not optional — a feature turns an optional dependency on, and this one " +
+                "is taken whatever is asked for. Write 'optional = true' in that dependency's " +
+                "entry, or drop it from the feature")
+            case None =>
+              if features.contains(member) then Right(())
+              else
+                Left(s"${PackageConfig.FileName}: 'features.$name' names '$member', which is " +
+                  "neither a dependency of this package nor a feature of it — a feature turns on " +
+                  s"things this manifest declares, so '$member' would select nothing")
         }
       }
       .map(_ => ())
@@ -166,16 +174,22 @@ object PackageFeatures {
    * Walked from each feature in declaration order, so the cycle reported is the first one a reader
    * of the file would meet rather than whichever the map happened to hand over first. `done` keeps
    * the walk linear: a feature already proven to lead nowhere in a circle cannot start doing so.
+   *
+   * A member that is also a dependency's label names that dependency rather than a feature to
+   * follow, so it never continues the walk — which is what keeps `features { lmdb = [lmdb] }` over
+   * an optional dependency `lmdb` from reading as a feature turning itself on.
    */
-  private def noCycles(features: Map[String, List[String]]): Either[String, Unit] = {
-    val done = scala.collection.mutable.Set.empty[String]
+  private def noCycles(features: Map[String, List[String]], deps: List[Dependency]): Either[String, Unit] = {
+    val labels = deps.map(_.label).toSet
+    val done   = scala.collection.mutable.Set.empty[String]
 
     def walk(name: String, path: List[String]): Either[String, Unit] =
       if path.contains(name) then Left(cycleMessage(path.dropWhile(_ != name) :+ name))
       else if done(name) then Right(())
       else
         PackageConfig
-          .collect(features.getOrElse(name, Nil).filter(features.contains))(walk(_, path :+ name))
+          .collect(features.getOrElse(name, Nil).filter(m => features.contains(m) && !labels(m)))(
+            walk(_, path :+ name))
           .map { _ =>
             done += name
             ()

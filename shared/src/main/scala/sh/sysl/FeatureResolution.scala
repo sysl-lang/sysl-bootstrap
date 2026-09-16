@@ -55,13 +55,21 @@ object FeatureResolution {
    * Only names the manifest declares survive, so a member that is an optional dependency's label
    * rather than a feature drops out here and is read back by `active` instead. That keeps the
    * answer a set of *features*, which is what a consumer of this result is expecting to be handed.
+   *
+   * `depLabels` names this package's own dependency labels: a member of a feature's list that is
+   * ALSO one of them names the dependency rather than a same-named feature, so it is never expanded
+   * into its own feature edges — only `asked`, which always names features (a CLI request or a
+   * consumer's own `features = […]`, never a member inside a `features { … }` list), is exempt from
+   * this check.
    */
-  def closure(declared: Map[String, List[String]], asked: Iterable[String]): Set[String] = {
+  def closure(declared: Map[String, List[String]], asked: Iterable[String],
+             depLabels: Set[String] = Set.empty): Set[String] = {
     @annotation.tailrec
     def walk(queue: List[String], seen: Set[String]): Set[String] = queue match
       case Nil                                                  => seen
       case name :: rest if seen(name) || !declared.contains(name) => walk(rest, seen)
-      case name :: rest                                         => walk(declared(name) ::: rest, seen + name)
+      case name :: rest =>
+        walk(declared(name).filterNot(depLabels) ::: rest, seen + name)
 
     walk(asked.toList, Set.empty)
   }
@@ -86,7 +94,7 @@ object FeatureResolution {
         case None =>
           val asked = request.features ::: (if request.noDefaultFeatures then Nil else List("default"))
 
-          Right(closure(config.features, asked))
+          Right(closure(config.features, asked, config.dependencies.map(_.label).toSet))
 
   /** The dependencies of one package that are in the graph, given what that package has enabled.
    *
@@ -132,7 +140,8 @@ object FeatureResolution {
               val named   = requests.flatMap(_._2.features)
               val wantsUp = requests.exists(_._2.defaultFeatures)
 
-              Right(closure(declared, named ::: (if wantsUp then List("default") else Nil)))
+              Right(closure(declared, named ::: (if wantsUp then List("default") else Nil),
+                target.config.dependencies.map(_.label).toSet))
 
     collect(grouped.toList.sortBy(_._1))((name, requests) => unify(name, requests).map(name -> _))
       .map(_.toMap)
