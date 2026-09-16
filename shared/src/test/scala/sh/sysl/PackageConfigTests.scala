@@ -1254,6 +1254,87 @@ class PackageConfigTests extends AnyFreeSpec with Matchers {
       e shouldNot include("reach an end")
     }
 
+    // The exception is a SELF-reference only. A member naming a feature of this package is that
+    // feature wherever a dependency happens to share its label, which is what lets a package name
+    // its features after the dependencies they turn on.
+    "a feature member naming another feature is that feature even where a dependency shares its label" in {
+      val c = read("""
+        features     { default = [lmdb], lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb", optional = true } }
+      """)
+
+      c.features("default") shouldBe List("lmdb")
+      c.features("lmdb") shouldBe List("lmdb")
+    }
+
+    // A self-reference with NO dependency of that label really is a feature turning itself on, and
+    // there is nothing else it could mean, so the cycle refusal still has to fire.
+    "a feature that turns itself on with no dependency of that label is refused as a cycle" in {
+      val e = refused("""features { a = [b], b = [b] }""")
+
+      e should include("'b' turns on 'b'")
+      e should include("reach an end")
+    }
+
+    // `dep:X` names the dependency wherever it is written, so it is held to the same optional rule a
+    // bare dependency member is.
+    "a 'dep:' member naming an optional dependency is accepted" in {
+      val c = read("""
+        features     { server = ["dep:lmdb"], lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb", optional = true } }
+      """)
+
+      c.features("server") shouldBe List("dep:lmdb")
+    }
+
+    // `dep:` is WRITTEN IN QUOTES, because HOCON reads a bare colon as the separator between a key
+    // and its value and refuses the line long before any of this is reached. Cargo's TOML requires
+    // the quotes of it too, so there is nothing to choose between the two -- but a manifest that
+    // leaves them off gets a parse error rather than anything about features, which is worth pinning
+    // so a later reader knows the quotes are load-bearing.
+    "a 'dep:' member written without quotes is a parse error" in {
+      val e = refused("""
+        features     { server = [dep:lmdb], lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb", optional = true } }
+      """)
+
+      e should include("unexpected token")
+    }
+
+    "a 'dep:' member naming a NON-optional dependency is refused as not optional" in {
+      val e = refused("""
+        features     { server = ["dep:lmdb"] }
+        dependencies { lmdb { path = "../lmdb" } }
+      """)
+
+      e should include("'features.server'")
+      e should include("'lmdb'")
+      e should include("not optional")
+    }
+
+    // `dep:` says a dependency and nothing else, so it never falls back to reading as a feature --
+    // the refusal names the dependency the manifest is missing.
+    "a 'dep:' member naming no dependency of this package is refused" in {
+      val e = refused("""
+        features     { server = ["dep:nosuch"], lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb", optional = true } }
+      """)
+
+      e should include("'features.server'")
+      e should include("'nosuch'")
+      e should include("does not declare")
+    }
+
+    "a 'dep:' member naming a feature rather than a dependency is refused" in {
+      val e = refused("""
+        features     { server = ["dep:extras"], extras = [lmdb], lmdb = [lmdb] }
+        dependencies { lmdb { path = "../lmdb", optional = true } }
+      """)
+
+      e should include("'extras'")
+      e should include("does not declare")
+    }
+
     "a feature may imply a feature as long as the chain ends" in {
       val c = read("""
         features {

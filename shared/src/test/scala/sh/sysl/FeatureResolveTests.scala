@@ -278,10 +278,9 @@ class FeatureResolveTests extends PackageCacheSupport {
     on.packages.map(_.canonical) should contain("github.com.e.tiny")
   }
 
-  // A feature member that is ALSO the label of an optional dependency of the same name turns on
-  // that DEPENDENCY rather than a like-named feature -- so resolving `server` alone must not walk
-  // into `lmdb`'s own feature list and turn `zstd` on.
-  "a feature member that is also a dependency's own label does not chain into that label's feature" in {
+  // A bare member names the FEATURE of that name where one is declared, so `server`'s `lmdb` is the
+  // feature `lmdb` and its own list is followed -- `zstd` comes on with it.
+  "a feature member naming a feature chains into that feature even where a dependency shares its label" in {
     val cache = emptyCache()
 
     publish(cache, "github.com/e/lmdb", Version(1, 0, 0), "lmdb")
@@ -291,6 +290,68 @@ class FeatureResolveTests extends PackageCacheSupport {
       deps = s"""${entry("lmdb", "github.com/e/lmdb", "1.0.0", "optional = true")}, ${entry(
           "zstd", "github.com/e/zstd", "1.0.0", "optional = true")}""",
       feats = "server = [lmdb], lmdb = [zstd]"))
+
+    val g = graphFor(root, cache, FeatureRequest(features = List("server")))
+
+    g.features("") shouldBe Set("server", "lmdb")
+    selected(g).keySet shouldBe Set("github.com.e.lmdb", "github.com.e.zstd")
+  }
+
+  // The shape a package whose features are named after the dependencies they turn on actually has:
+  // every member of `default` is a feature, and each of those features turns its own dependency on
+  // through a self-reference. Both halves have to come out -- all six features enabled, so every
+  // `feature_*` symbol is defined, AND all six dependencies in the graph.
+  "a default naming features that each turn on their own like-named dependency enables both" in {
+    val cache = emptyCache()
+
+    for label <- List("redis", "lmdb", "zstd", "brotli", "nghttp2", "libwebp") do
+      publish(cache, s"github.com/e/$label", Version(1, 0, 0), label)
+
+    val optional = List("redis", "lmdb", "zstd", "brotli", "nghttp2", "libwebp")
+      .map(l => entry(l, s"github.com/e/$l", "1.0.0", "optional = true"))
+      .mkString(", ")
+
+    val root = project(pkg("app", "0.1.0", deps = optional,
+      feats = """default = [http2, redis, lmdb, zstd, brotli, webp],
+                 redis = [redis], lmdb = [lmdb], zstd = [zstd], brotli = [brotli],
+                 http2 = [nghttp2], webp = [libwebp]"""))
+
+    val g = graphFor(root, cache)
+
+    g.features("") shouldBe Set("default", "http2", "redis", "lmdb", "zstd", "brotli", "webp")
+    selected(g).keySet shouldBe Set("github.com.e.redis", "github.com.e.lmdb", "github.com.e.zstd",
+      "github.com.e.brotli", "github.com.e.nghttp2", "github.com.e.libwebp")
+  }
+
+  // The self-reference on its own: the feature is on, its dependency is on, and nothing read it as a
+  // feature turning itself on.
+  "a feature whose only member is its own like-named dependency turns that dependency on" in {
+    val cache = emptyCache()
+
+    publish(cache, "github.com/e/lmdb", Version(1, 0, 0), "lmdb")
+
+    val root = project(pkg("app", "0.1.0",
+      deps = entry("lmdb", "github.com/e/lmdb", "1.0.0", "optional = true"),
+      feats = "lmdb = [lmdb]"))
+
+    val g = graphFor(root, cache, FeatureRequest(features = List("lmdb")))
+
+    g.features("") shouldBe Set("lmdb")
+    selected(g).keySet shouldBe Set("github.com.e.lmdb")
+  }
+
+  // `dep:X` names the dependency wherever it is written, so it turns the dependency on WITHOUT
+  // enabling the feature that shares its name.
+  "a 'dep:' member turns the dependency on and leaves the like-named feature off" in {
+    val cache = emptyCache()
+
+    publish(cache, "github.com/e/lmdb", Version(1, 0, 0), "lmdb")
+    publish(cache, "github.com/e/zstd", Version(1, 0, 0), "zstd")
+
+    val root = project(pkg("app", "0.1.0",
+      deps = s"""${entry("lmdb", "github.com/e/lmdb", "1.0.0", "optional = true")}, ${entry(
+          "zstd", "github.com/e/zstd", "1.0.0", "optional = true")}""",
+      feats = """server = ["dep:lmdb"], lmdb = [zstd]"""))
 
     val g = graphFor(root, cache, FeatureRequest(features = List("server")))
 

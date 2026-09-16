@@ -56,20 +56,22 @@ object FeatureResolution {
    * rather than a feature drops out here and is read back by `active` instead. That keeps the
    * answer a set of *features*, which is what a consumer of this result is expecting to be handed.
    *
-   * `depLabels` names this package's own dependency labels: a member of a feature's list that is
-   * ALSO one of them names the dependency rather than a same-named feature, so it is never expanded
-   * into its own feature edges — only `asked`, which always names features (a CLI request or a
-   * consumer's own `features = […]`, never a member inside a `features { … }` list), is exempt from
-   * this check.
+   * `depLabels` names this package's own dependency labels, which `PackageFeatures.featureEdges`
+   * needs to tell a member that names a feature from one that names a dependency — the same reading
+   * the manifest's own cycle check uses, so the two can never disagree. `asked` is exempt: it always
+   * names features (a CLI request or a consumer's own `features = […]`, never a member inside a
+   * `features { … }` list), and a name it holds that no feature is declared for simply drops out.
    */
   def closure(declared: Map[String, List[String]], asked: Iterable[String],
              depLabels: Set[String] = Set.empty): Set[String] = {
+    val names = declared.keySet.toSet
+
     @annotation.tailrec
     def walk(queue: List[String], seen: Set[String]): Set[String] = queue match
-      case Nil                                                  => seen
+      case Nil                                                   => seen
       case name :: rest if seen(name) || !declared.contains(name) => walk(rest, seen)
       case name :: rest =>
-        walk(declared(name).filterNot(depLabels) ::: rest, seen + name)
+        walk(PackageFeatures.featureEdges(name, declared(name), names, depLabels) ::: rest, seen + name)
 
     walk(asked.toList, Set.empty)
   }
@@ -103,9 +105,12 @@ object FeatureResolution {
    * an optional dependency nothing turned on is not downloaded, not checked for the libraries its
    * manifest requires, and contributes nothing to the link line — which is the whole of what
    * `optional` is for.
+   *
+   * A member written `dep:X` reaches the dependency `X`, so the prefix comes off before the labels
+   * are matched — which is the whole of what spelling a dependency explicitly has to do here.
    */
   def active(config: PackageConfig, enabled: Set[String]): List[Dependency] = {
-    val turnedOn = enabled.flatMap(config.features.getOrElse(_, Nil))
+    val turnedOn = enabled.flatMap(config.features.getOrElse(_, Nil).map(PackageFeatures.bareLabel))
 
     config.dependencies.filter(dep => !dep.optional || turnedOn(dep.label))
   }

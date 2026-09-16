@@ -145,4 +145,33 @@ class FeatureGateTests extends PackageCacheSupport {
         "root sees x\nengine did not see x\n"
     }
   }
+
+  // The shape a package whose feature is named after the dependency it turns on actually has, end to
+  // end. Both halves have to land: the dependency in the graph, AND `feature_zstd` defined so the
+  // gated body is compiled. Reading `default`'s `zstd` as the dependency keeps the first and loses
+  // the second in silence -- the library links and every gated body is gone.
+  "a feature named after the dependency it turns on" - {
+
+    val dep = dependency("zstd", """tag() -> string = "compressed"""")
+
+    val program =
+      """#if feature_zstd
+        |print(zstd.tag())
+        |#else
+        |print("no zstd in this build")
+        |#endif
+        |""".stripMargin
+
+    "brings the dependency in AND defines its gate symbol" in {
+      run(app(manifestSaying(s"""zstd { path = "$dep", optional = true }""",
+        "default = [zstd], zstd = [zstd]"), program)) shouldBe "compressed\n"
+    }
+
+    // Freedom to disagree: the same program and the same manifest but for `default`, which now turns
+    // nothing on -- so a gate that kept every block regardless fails here.
+    "and leaves both out where default turns it off" in {
+      run(app(manifestSaying(s"""zstd { path = "$dep", optional = true }""",
+        "default = [], zstd = [zstd]"), program)) shouldBe "no zstd in this build\n"
+    }
+  }
 }

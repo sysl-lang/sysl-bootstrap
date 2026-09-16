@@ -18,9 +18,20 @@ import scala.collection.immutable.ListMap
  * dependencies are in the graph; what those dependencies then ask of the host is the ordinary
  * question the manifest already answers.
  *
- * A member that is both a dependency's own label and the name of a feature of this same package
- * names the dependency, not the feature — the only place this ambiguity can arise, since a request
- * from the CLI or from a consumer's own `features = […]` always names a feature.
+ * ==What a bare member names==
+ *
+ * A bare member names the **feature** of that name whenever this manifest declares one, so a package
+ * whose features are labelled after the dependencies they turn on reads the way its author wrote it:
+ * `default = [zstd]` beside `zstd = [zstd]` turns the feature `zstd` on, and the feature turns the
+ * dependency on in its turn.
+ *
+ * The one exception is a **self-reference** — `X` inside feature `X`'s own list — which names the
+ * dependency labelled `X`. That is the reading its author can only have meant, since a feature
+ * turning itself on selects nothing, and it is why such a list is no cycle.
+ *
+ * A member no feature is declared for names the dependency of that name, which is how an optional
+ * dependency with no like-named feature is reached. `dep:X` names the dependency `X` wherever it is
+ * written, so an author who wants the dependency and not the like-named feature can say so.
  *
  * ==Why the reading and the checking are separate==
  *
@@ -71,6 +82,40 @@ object PackageFeatures {
       _ <- noCycles(features, deps)
     yield ()
 
+  /** How a dependency is spelled inside a feature's list where the bare name would name a feature. */
+  val DepPrefix: String = "dep:"
+
+  /** The label written with `dep:` stripped off, which is the dependency a member actually reaches. */
+  private[sysl] def bareLabel(member: String): String =
+    if member.startsWith(DepPrefix) then member.drop(DepPrefix.length) else member
+
+  /** The dependency a member of feature `owner`'s list names, or `None` where it names a feature.
+   *
+   * `dep:X` names the dependency `X` wherever it appears. A bare member names the feature `X` when
+   * one is declared — except for a self-reference, `X` inside feature `X`'s own list, which names
+   * the dependency `X` when the manifest declares one. A bare member no feature is declared for
+   * names a dependency too, so a typo comes back here as a label nothing matches and is refused by
+   * name rather than passing for a feature.
+   *
+   * A self-reference with no dependency of that label is left as a feature edge on purpose: it is a
+   * feature turning itself on, and `noCycles` is the check that says so.
+   */
+  private[sysl] def dependencyNamed(owner: String, member: String, features: Set[String],
+                                    labels: Set[String]): Option[String] =
+    if member.startsWith(DepPrefix) then Some(bareLabel(member))
+    else if member == owner && labels(member) then Some(member)
+    else if features(member) then None
+    else Some(member)
+
+  /** The members of `owner`'s list that are edges to another feature of this same package.
+   *
+   * The one reading of a feature list that both the cycle check and the resolution's closure need,
+   * kept in one place so the two can never come to differ about what a member means.
+   */
+  private[sysl] def featureEdges(owner: String, members: List[String], features: Set[String],
+                                 labels: Set[String]): List[String] =
+    members.filter(m => dependencyNamed(owner, m, features, labels).isEmpty)
+
   /** A `true`/`false` field of a dependency entry, or the default where the entry is silent.
    *
    * A non-boolean is refused rather than warned about, for the reason `readDependency` refuses an
@@ -119,32 +164,38 @@ object PackageFeatures {
    * read the same list twice to produce messages that differ only in which half of the answer was
    * missing.
    *
-   * A name that is BOTH a dependency's label and a feature of this same package is read as the
-   * dependency — Cargo's `dep:` answer, without a second spelling — so the dependency label is
-   * checked first and only a name that names no dependency falls back to being read as a feature.
+   * Which of the two a member names is `dependencyNamed`'s question, so a name that reads as a
+   * feature is accepted here without ever reaching the dependency block, and only what really names
+   * a dependency is held to being an optional one.
    */
   private def everyMemberResolves(features: Map[String, List[String]], deps: List[Dependency])
       : Either[String, Unit] = {
     val byLabel = deps.map(d => d.label -> d).toMap
+    val names   = features.keySet.toSet
 
-    PackageConfig
-      .collect(features.toList) { (name, members) =>
-        PackageConfig.collect(members) { member =>
-          byLabel.get(member) match
+    def resolve(name: String, member: String): Either[String, Unit] =
+      dependencyNamed(name, member, names, byLabel.keySet) match
+        case None => Right(())
+        case Some(label) =>
+          byLabel.get(label) match
             case Some(dep) if dep.optional => Right(())
             case Some(_) =>
-              Left(s"${PackageConfig.FileName}: 'features.$name' names the dependency '$member', " +
+              Left(s"${PackageConfig.FileName}: 'features.$name' names the dependency '$label', " +
                 "which is not optional — a feature turns an optional dependency on, and this one " +
                 "is taken whatever is asked for. Write 'optional = true' in that dependency's " +
                 "entry, or drop it from the feature")
+            case None if member.startsWith(DepPrefix) =>
+              Left(s"${PackageConfig.FileName}: 'features.$name' names the dependency '$label', " +
+                s"which this package does not declare — '$DepPrefix' asks for a dependency of this " +
+                "manifest by name, so write that entry in the 'dependencies' block, or drop the " +
+                s"'$DepPrefix' to name a feature")
             case None =>
-              if features.contains(member) then Right(())
-              else
-                Left(s"${PackageConfig.FileName}: 'features.$name' names '$member', which is " +
-                  "neither a dependency of this package nor a feature of it — a feature turns on " +
-                  s"things this manifest declares, so '$member' would select nothing")
-        }
-      }
+              Left(s"${PackageConfig.FileName}: 'features.$name' names '$member', which is " +
+                "neither a dependency of this package nor a feature of it — a feature turns on " +
+                s"things this manifest declares, so '$member' would select nothing")
+
+    PackageConfig
+      .collect(features.toList)((name, members) => PackageConfig.collect(members)(resolve(name, _)))
       .map(_ => ())
   }
 
@@ -158,7 +209,7 @@ object PackageFeatures {
    */
   private def everyOptionalIsReached(features: Map[String, List[String]], deps: List[Dependency])
       : Either[String, Unit] = {
-    val named = features.values.flatten.toSet
+    val named = features.values.flatten.map(bareLabel).toSet
 
     deps.filter(d => d.optional && !named(d.label)).map(_.label) match
       case Nil => Right(())
@@ -175,12 +226,14 @@ object PackageFeatures {
    * of the file would meet rather than whichever the map happened to hand over first. `done` keeps
    * the walk linear: a feature already proven to lead nowhere in a circle cannot start doing so.
    *
-   * A member that is also a dependency's label names that dependency rather than a feature to
-   * follow, so it never continues the walk — which is what keeps `features { lmdb = [lmdb] }` over
-   * an optional dependency `lmdb` from reading as a feature turning itself on.
+   * Only a member that names another feature continues the walk, which is `featureEdges`' question.
+   * A self-reference over an optional dependency of the same label names that dependency, so
+   * `features { lmdb = [lmdb] }` is no circle; a self-reference with no such dependency still is one,
+   * and this is the check that says so.
    */
   private def noCycles(features: Map[String, List[String]], deps: List[Dependency]): Either[String, Unit] = {
     val labels = deps.map(_.label).toSet
+    val names  = features.keySet.toSet
     val done   = scala.collection.mutable.Set.empty[String]
 
     def walk(name: String, path: List[String]): Either[String, Unit] =
@@ -188,7 +241,7 @@ object PackageFeatures {
       else if done(name) then Right(())
       else
         PackageConfig
-          .collect(features.getOrElse(name, Nil).filter(m => features.contains(m) && !labels(m)))(
+          .collect(featureEdges(name, features.getOrElse(name, Nil), names, labels))(
             walk(_, path :+ name))
           .map { _ =>
             done += name
