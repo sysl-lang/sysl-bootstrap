@@ -557,4 +557,99 @@ class DeadCodeTests extends AnyFreeSpec with CodegenSupport with RunSupport {
       out should include("sysl.res$release")
     }
   }
+
+  /** The same rule asked of a **test build**, which is the one build whose roots are not the program.
+   *
+   * `sysl test` keeps every `@test` in the tree — a dependency's as readily as the project's — so a
+   * package's own suite runs inside a consumer's test binary. That makes the package's modules
+   * contributors of roots to this compilation, which is what `Tests.only` has to widen `own` by: the
+   * program's module graph reaches neither the package nor its tests, so before the widening the
+   * release hook the package's suite needed was emitted against a body pruned out from under it.
+   */
+  private val stdDrop =
+    Seq(
+      ("sysl", "std.sysl",
+       """module sysl
+         |trait Drop
+         |    drop(self)
+         |mark(n: int) -> int = n + 1
+         |""".stripMargin),
+    )
+
+  /** A handed package with a destructor, and a `@tests` file of its own that makes a value carrying
+   * one — which is the only thing in the whole compilation that does.
+   */
+  private val suite =
+    Seq(
+      ("pkg", "pkg.sysl",
+       """module pkg
+         |struct Handle
+         |    id: int
+         |end Handle
+         |
+         |open(n: int) -> &Handle = Handle(n)
+         |
+         |impl Drop for Handle
+         |    drop(self)
+         |        release(self.id)
+         |
+         |release(n: int) -> int = n
+         |""".stripMargin),
+      ("pkg", "tests.sysl",
+       """module pkg
+         |@tests
+         |
+         |@test
+         |makes_one()
+         |    val h = open(1)
+         |    release(h.id)
+         |""".stripMargin),
+    )
+
+  /** The IR of a test build against a handed package, which must compile.
+   *
+   * The package goes in as `libraries` and not as sources, which is where a fetched one actually
+   * arrives (`TestRunner.run`) and the whole of what makes the question askable: the modules a test
+   * build is *handed* are exactly the ones `Compiler.ownModules` does not name.
+   */
+  private def testIrAgainst(pkg: Seq[(String, String, String)])(fs: (String, String)*): String =
+    Compiler.compileTests(files(fs*), standInTree(pkg*)._1,
+      std = Some(standInTree(stdDrop*)._2)) match {
+      case Right((built, _)) => built.ir
+      case Left(e)           => fail(e)
+    }
+
+  /** Every symbol the module defines, by name. */
+  private def defines(out: String): Set[String] =
+    out.linesIterator
+      .filter(_.startsWith("define"))
+      .map(_.dropWhile(_ != '@').drop(1).takeWhile(_ != '('))
+      .toSet
+
+  "a root a handed package supplies to a test build" - {
+
+    // The shape a reader met: `clang` refused the test binary with `use of undefined value
+    // '@sh.sysl.brotli$Decoder.drop'` — out of a package the project had not imported, for a value
+    // only that package's own suite ever made. The call and the definition are asserted together
+    // because either alone passes for a compiler that emitted neither.
+    "is emitted where the package's own tests are the only thing that reaches it" in {
+      val out = testIrAgainst(suite)("main.sysl" -> "mark(1)\n")
+
+      out should include("call void @pkg$Handle.drop")
+      defines(out) should contain("pkg$Handle.drop")
+    }
+
+    // The widening is by the modules whose tests run and by nothing else, so a handed module with no
+    // test in it is pruned exactly as it was — the control that keeps the test above from passing for
+    // a compiler that simply stopped qualifying a root.
+    "while a handed module holding no test of its own is pruned as before" in {
+      val out = testIrAgainst(suite :+ ("spare", "spare.sysl",
+        """module spare
+          |@export("spare_thing")
+          |thing() -> int = 7
+          |""".stripMargin))("main.sysl" -> "mark(1)\n")
+
+      defines(out) should not contain "spare_thing"
+    }
+  }
 }

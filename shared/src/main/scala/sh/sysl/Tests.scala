@@ -259,10 +259,25 @@ object Tests {
    * `own` carries through to the same place for the same reason: a test build links a `main` of its
    * own, so a dependency's unreached `@export("main")` would fight it exactly as it fights a
    * program's.
+   *
+   * **And it is WIDENED by the modules whose tests this build runs, which is what `own` means here.**
+   * The tests are the roots, so a module that contributes one is a module this compilation is
+   * *producing* rather than one it merely links — and a test build keeps every `@test` in the tree, a
+   * dependency's as readily as the project's. Without the widening, a package whose own suite makes a
+   * value with a destructor put that instantiation into a consumer's test build while
+   * `Reachability.contributing` answered for the **program's** module graph, which reaches neither the
+   * package nor its tests: the release hook was emitted and the body pruned. What a reader got was
+   * `use of undefined value '@pkg$T.drop'` out of clang — a symbol no line of their program mentions,
+   * in a package they need never have imported, and only when the package's tests were the one thing
+   * that made the value.
+   *
+   * It stays one rule for all four kinds, and it makes a consumer's test build agree with the one the
+   * package runs over itself, where those modules are `own` already.
    */
   def only(program: TProgram, own: Option[Set[String]] = None): TProgram = {
     val kept    = program.copy(main = Nil, entry = None)
-    val entries = Reachability.entryPoints(kept, own)
+    val running = own.map(_ ++ (kept.tests.map(_.func) ::: kept.hooks.map(_.func)).map(Modules.moduleOf))
+    val entries = Reachability.entryPoints(kept, running)
     // The hooks are roots beside the tests, and for the same reason: the dispatcher lays down an arm
     // that calls each by name, so a hook the walk could not reach from a test — which is every one
     // of them, since nothing calls a hook — would be pruned out from under its own arm.
