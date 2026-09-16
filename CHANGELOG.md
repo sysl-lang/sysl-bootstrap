@@ -7,6 +7,49 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.116 — 2026-09-16
+
+### A path dependency's label no longer shadows an import
+
+A dependency with no coordinate answers to its label (`Dependency.canonical`), so a `path`
+dependency filed under the label `webview`, offering `sh.sysl.webview`, joined the compilation as
+`webview.sh.sysl.webview` — and `import sh.sysl.webview.{webview, Hint}` was refused: `'webview' is
+a module, so importing something else under that name would hide it`. A `git` dependency escaped
+only by the shape of its prefix (`github.com.sysl-lang.webview` begins no name anybody writes), so
+the same package refused the import under one kind of dependency and took it under the other.
+
+**The fix**: `Scoping.writesModule` now asks the question of the written name space instead of the
+canonical one — this file's own package's modules with that package's prefix taken back off, plus
+the module paths its manifest binds — which is what a binding could really hide.
+`ImportResolution.checkImportName` uses it in place of `namesModule`, which is unchanged elsewhere
+since `ownPackage` and `reachesModule` still want the canonical answer. A dependency whose modules
+do arrive under the label's spelling is still refused, because the label is then a bound path rather
+than a prefix nobody can name.
+
+This is an internal fix — nothing about the language or the manifest format changes — so no
+`sysl.sh` documentation page is owed. Regression test in `PackageBuildTests`.
+
+### Gate
+
+`./run-gate.sh`: **GATE: GREEN** — 11,395 succeeded, 0 failed, 0 retried, 27:36 wall clock.
+
+### Notes
+
+The standard library is untouched by this release (`shared/src/main` only), so the std artifact
+fingerprint is unchanged and nothing rebuilds it on upgrade.
+
+### Using it
+
+```scala
+libraryDependencies += "sh.sysl" %% "sysl" % "0.0.116"   // %%% in a cross-project
+```
+
+```
+brew update
+brew upgrade sysl
+brew test sysl
+```
+
 ## 0.0.115 — 2026-09-16
 
 ### A feature may share its name with the dependency it turns on
