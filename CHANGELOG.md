@@ -7,6 +7,50 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.115 — 2026-09-16
+
+### A feature may share its name with the dependency it turns on
+
+0.0.114 shipped `features { ... }` for package manifests, and a feature member that is *both* a
+dependency's own label and a feature of the same name was read as the feature — so
+`features { lmdb = [lmdb] }` over an optional dependency named `lmdb` was refused as a cycle,
+`'lmdb' turns on 'lmdb'`, that nobody wrote. That is the ordinary way to spell "this feature turns
+on this dependency and nothing else", and it was the one spelling the resolver could not accept.
+
+**The fix**: inside a `features { ... }` member list, a name that could mean either a dependency
+label or a feature of the same name is now read as the dependency. This is the only place the
+collision can arise — a CLI feature request or a consumer's own `features = [...]` always names a
+feature — so nothing outside a manifest's own `features` block changes meaning.
+`PackageFeatures.everyMemberResolves` checks dependency labels before falling back to reading a
+member as a feature, and `PackageFeatures.noCycles` / `FeatureResolution.closure` both stop
+expanding a member's own feature edges once it names a dependency — so
+`features { server = [lmdb], lmdb = [zstd] }` resolving `server` alone turns `lmdb` on without
+pulling `zstd` in through `lmdb`'s unrelated feature of the same name.
+
+This is a fix to 0.0.114's `features` block, not a new capability.
+
+### Gate
+
+`./run-gate.sh`: **GATE: GREEN** — 11,394 succeeded, 0 failed, 0 retried, ~34 minutes wall clock.
+`sbt syslDocJVM/test`: 30 succeeded, 0 failed.
+
+### Notes
+
+The standard library is untouched by this release (`shared/src/main` only), so the std artifact
+fingerprint is unchanged and nothing rebuilds it on upgrade.
+
+### Using it
+
+```scala
+libraryDependencies += "sh.sysl" %% "sysl" % "0.0.115"   // %%% in a cross-project
+```
+
+```
+brew update
+brew upgrade sysl
+brew test sysl
+```
+
 ## 0.0.114 — 2026-09-15
 
 ### Package features
