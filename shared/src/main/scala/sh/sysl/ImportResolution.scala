@@ -144,9 +144,15 @@ trait ImportResolution extends TraitLookup {
    *
    * Binding one name twice is the plainer mistake, and is reported at the second import rather
    * than at whichever use first found two answers.
+   *
+   * **The question is `writesModule` and not `namesModule`**, because what a binding can hide is a
+   * path somebody could have written rather than a canonical name the compilation keys on. A
+   * `path` dependency's canonical prefix is its label, which is an ordinary identifier and so looks
+   * exactly like the head of a module path while naming nothing — that is what refused an import a
+   * `git` dependency of the same package allowed.
    */
   private def checkImportName(bound: String, acc: Imports): Unit = {
-    if namesModule(bound) then
+    if writesModule(bound) then
       err(s"'$bound' is a module, so importing something else under that name would hide it — " +
         s"import it as another name with 'as'")
     if acc.binds(bound) then err(s"'$bound' is already imported")

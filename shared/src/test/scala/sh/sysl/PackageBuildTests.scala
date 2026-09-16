@@ -114,6 +114,23 @@ class PackageBuildTests extends PackageCacheSupport {
         |print(double(21))""".stripMargin, s"""g { path = "$geom" }""")) shouldBe "42\n"
   }
 
+  // The label is the consumer's private word for the dependency -- the key in their `dependencies`
+  // block -- and it is a canonical prefix rather than a module path, so no import line may be
+  // refused on account of it. A package with no coordinate answers to its label as a canonical
+  // name, which makes that prefix a single ordinary identifier and therefore exactly the shape of a
+  // name somebody writes: a package offering `sh.sysl.widget.widget` under the label `widget` was
+  // told `'widget' is a module, so importing something else under that name would hide it`, and the
+  // same package taken by coordinate imported cleanly, because `github.com.e.widget` puts no
+  // `widget.` at the front of anything.
+  "and the name it binds is not refused by the label the consumer filed it under" in {
+    val widget = packageOf("widget-lib", "sh/sysl/widget", "widget() -> int = 42")
+
+    run(app(
+      """import sh.sysl.widget.widget
+        |
+        |print(widget())""".stripMargin, s"""widget { path = "$widget" }""")) shouldBe "42\n"
+  }
+
   "a mount puts the package under a name of the consumer's choosing" in {
     val geom = packageOf("geom-lib", "geom", "double(n: int) -> int = n * 2")
 

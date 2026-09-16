@@ -396,6 +396,48 @@ trait Scoping extends DeclTables {
   protected def namesModule(name: String): Boolean =
     moduleNames(name) || moduleNames.exists(_.startsWith(s"$name."))
 
+  /** The same question asked of what a file **here can write**, which is what an import binding a
+   * name has to be checked against.
+   *
+   * `namesModule` reads the compilation's canonical names, and a package's canonical prefix is part
+   * of one without being part of any module path. A dependency with no coordinate answers to its
+   * label (`Dependency.canonical`), so a package offering `sh.sysl.widget` filed under the label
+   * `widget` contributes the canonical name `widget.sh.sysl.widget` — whose leading segment is a
+   * word the consumer chose for their own manifest and is no module at all: nothing imports
+   * `widget`, and nothing writes `widget.anything`. Asking the canonical question of a *bound* name
+   * therefore refused `import sh.sysl.widget.widget` as hiding a module that does not exist, while
+   * the same package taken by coordinate imported cleanly — `github.com.e.widget` begins no name
+   * anybody writes, so a `path` dependency and a `git` one were not the same package to an
+   * importing file.
+   *
+   * So the written name space is assembled instead: this file's own package's modules with that
+   * package's prefix taken back off, and the module paths its manifest binds. That is exactly what
+   * `inPackage` would resolve a written path against, and therefore exactly what a binding could
+   * hide. A dependency whose modules genuinely do arrive under the label's spelling is still
+   * refused, because the label is then one of the bound paths rather than a prefix nobody can name.
+   */
+  protected def writesModule(name: String): Boolean = {
+    val prefix = currentFile.map(packages.prefixOf).getOrElse("")
+    val mine   = moduleNames.iterator.filter(m => packageOf(m) == prefix)
+      .map(_.drop(if prefix.isEmpty then 0 else prefix.length + 1))
+
+    (mine ++ packages.imports.getOrElse(prefix, Map.empty).keysIterator)
+      .exists(m => m == name || m.startsWith(s"$name."))
+  }
+
+  /** The canonical prefix a module name arrived under — the longest package prefix it sits below,
+   * and the empty one for the project being built, its `--lib` source roots and the library, none
+   * of which is prefixed at all.
+   */
+  private def packageOf(module: String): String =
+    packagePrefixes.filter(p => module.startsWith(s"$p.")).maxByOption(_.length).getOrElse("")
+
+  /** Every canonical prefix in play, which is how a module name is told apart from the package it
+   * came in under. Empty for a compilation with no dependencies, which is what makes all of the
+   * above cost nothing there.
+   */
+  private lazy val packagePrefixes: Set[String] = packages.of.values.filter(_.nonEmpty).toSet
+
   /** Whether a **whole written path** leads anywhere: it is a module, begins one, or names something
    * a module declares.
    *
