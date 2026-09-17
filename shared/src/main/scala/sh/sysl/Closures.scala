@@ -593,8 +593,8 @@ trait Closures extends CallAnalysis {
         bound
       // A binding is in scope for what comes *after* it, so the shadow starts at the declaration and
       // the initializer is still read outside it — `var n = n` captures the outer `n`.
-      case VarDecl(n, _, init, _, _, _) => init.foreach(walk(_, bound)); bound + n
-      case ValDecl(n, _, v, _, _, _)   => walk(v, bound); bound + n
+      case VarDecl(n, _, init, _, _, _, _) => init.foreach(walk(_, bound)); bound + n
+      case ValDecl(n, _, v, _, _, _)       => walk(v, bound); bound + n
       case RefDecl(n, p)         => walk(p, bound); bound + n
       case ConstDecl(n, _, v, _) => walk(v, bound); bound + n
       case f: FuncDecl => scoped(f.body, bound ++ f.params.map(_.name)); bound

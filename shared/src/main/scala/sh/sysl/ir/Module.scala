@@ -63,15 +63,23 @@ case class TypeDef(name: String, fields: List[LType], packed: Boolean = false) {
  */
 case class Global(name: String, constant: Boolean, ty: LType, value: Option[Val] = None,
                   linkage: Linkage = Linkage.Private, section: Option[String] = None,
-                  align: Option[Int] = None) {
+                  align: Option[Int] = None,
+                  /** `thread_local` — one copy of this object per thread. It is written with **no
+                    * model in parentheses**, which leaves the choice to the back end: `local-exec`
+                    * where the object is in the executable itself, `initial-exec` or the general
+                    * dynamic form where a shared library may be involved. The keyword's position in
+                    * the grammar is after the linkage and before `global`/`constant`.
+                    */
+                  threadLocal: Boolean = false) {
 
   def render: String =
     val kind = if constant then "constant" else "global"
     val init = value.map(" " + _.render).getOrElse("")
     val sec  = section.map(s => s""", section "$s"""").getOrElse("")
     val at   = align.map(n => s", align $n").getOrElse("")
+    val tls  = if threadLocal then "thread_local " else ""
 
-    s"@${LlvmName.safe(name)} = ${linkage.prefix}$kind ${ty.render}$init$sec$at"
+    s"@${LlvmName.safe(name)} = ${linkage.prefix}$tls$kind ${ty.render}$init$sec$at"
 
   override def toString: String = render
 }

@@ -930,7 +930,7 @@ class DiagnosticTests extends AnyFreeSpec with Matchers {
     "even though each tree really does carry its own file's positions" in {
       def sourceOf(name: String): Option[String] =
         SyslParser.parse("var x = 1 + 2", name) match {
-          case Right(Program(List(VarDecl(_, _, Some(init), _, _, _)), _, _, _, _, _, _, _)) =>
+          case Right(Program(List(VarDecl(_, _, Some(init), _, _, _, _)), _, _, _, _, _, _, _)) =>
             init.pos.map(_.source.name)
           case other => fail(s"unexpected parse: $other")
         }

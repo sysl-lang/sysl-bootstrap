@@ -66,8 +66,18 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
     // is called `T`, and a name cannot mean the parameter in type position and a declaration in
     // call position. A built-in is asked about only where no declaration claims the name, which is
     // where it was asked before.
+    //
+    // **A declared FUNCTION claims the name too, which it did not until `funcInScope` was asked**,
+    // and the asymmetry was a hole rather than a design: a declared *type* of one of these names
+    // already won here, so `unit`, `int` and `byte` were words a module could take for a type and
+    // not for a function. What a reader got instead was a diagnostic about a conversion they had
+    // not written — *"a 'unit' conversion takes exactly one value"* for a nullary `unit()` — which
+    // names a built-in they were not reaching for and sends them to count arguments. The conversion
+    // is reachable in any case wherever the name is not a declaration's: that is what `u8(x)` is,
+    // and a module that takes the name still spells it `u8` in every other file.
     case Call(Ident(name), args) if lookupOpt(name).isEmpty &&
-        (tsubst.contains(name) || (typeKey(name).isEmpty && scalarType(name).isDefined)) =>
+        (tsubst.contains(name) ||
+          (typeKey(name).isEmpty && !funcInScope(name) && scalarType(name).isDefined)) =>
       convertAt(typeNamed(name).get, name, args)
 
     // A bare variant name in call position — `Circle(3)` — with the enum taken from the expected

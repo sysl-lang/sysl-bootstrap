@@ -159,7 +159,7 @@ class IrModuleTests extends AnyFreeSpec with Matchers {
   "a string literal is the bytes of one, in a global of its own" in {
     val m     = module("print(\"h\u00e9\")\n")
     val bytes = m.globals.collect {
-      case Global(_, _, LType.Arr(n, LType.I(8)), Some(Val.Bytes(bs)), _, _, _) => (n, bs)
+      case Global(_, _, LType.Arr(n, LType.I(8)), Some(Val.Bytes(bs)), _, _, _, _) => (n, bs)
     }
     val utf8  = List[Byte](0x68, 0xc3.toByte, 0xa9.toByte, 0)
 

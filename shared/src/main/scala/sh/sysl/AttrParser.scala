@@ -16,8 +16,8 @@ trait AttrParser extends ExprParser {
    */
   protected lazy val attribute: PackratParser[Attr] =
     testAttr ^^ Attr.Test.apply | hookAttr | tailrecAttr | pureAttr | ghostAttr | readsAttr | writesAttr |
-      crossingAttr | needsAttr | packedAttr | alignAttr | exportAttr | sectionAttr | borrowsHere |
-      unknownAttr | hashAttr
+      crossingAttr | needsAttr | packedAttr | alignAttr | threadLocalAttr | exportAttr |
+      sectionAttr | borrowsHere | unknownAttr | hashAttr
 
   /** What a member block reads where a member was wanted, for the three blocks that do not keep the
    * annotations: a trait's body, an `impl`'s, and a setter's line.
@@ -132,6 +132,17 @@ trait AttrParser extends ExprParser {
     err("'@align' names the boundary in parentheses — '@align(64)', or '@align(CACHE_LINE)' for a " +
       "constant that says what the number is for. There is no bare form: an alignment with no " +
       "number is not a weaker claim, it is no claim")
+
+  /** `@thread_local` — one copy of a module `var`'s storage per thread
+   * (`reference/attributes.md § @thread_local`).
+   *
+   * It takes no parentheses for `@packed`'s reason: there is nothing to configure. Which
+   * thread-local model the object gets is the back end's answer for the target — local-exec,
+   * initial-exec, or a call to `__tls_get_addr` — and a program naming one would be choosing on
+   * behalf of a linker that knows more about the link than it does.
+   */
+  protected lazy val threadLocalAttr: PackratParser[Attr] =
+    op("@") ~> attrWord("thread_local") ^^ (_ => Attr.ThreadLocal)
 
   /** `@export` and `@export("mylib_parse")` — the definition is C-callable, under its own name or
    * under the symbol named (`reference/ffi.md § @export`).
@@ -481,6 +492,10 @@ trait AttrParser extends ExprParser {
       // struct, and refuses the mix. Listed so that a new attribute makes this fold fail to compile
       // rather than silently drop what it was asked to record.
       case (d, Attr.Packed | _: Attr.Align) => d
+      // Nor does `@thread_local`, which marks a binding and only a binding — the grammar answers it
+      // with its own sentence before any declaration is read. Listed for the same reason as the two
+      // lines above it.
+      case (d, Attr.ThreadLocal) => d
     }
 
   private lazy val testArgs: Parser[TestAttr] =

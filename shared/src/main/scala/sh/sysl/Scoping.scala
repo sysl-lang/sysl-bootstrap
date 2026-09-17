@@ -654,6 +654,22 @@ trait Scoping extends DeclTables {
   protected def funcKey(written: String): Option[String] =
     resolveName(written, inReach = funcReachable)(funcDecls.contains)
 
+  /** Whether a **function** of this name can be named from where the walk currently is.
+   *
+   * It is `typeInScope`'s counterpart and is asked in the same kind of place and for the same
+   * reason: a guard deciding *which rule reads a call* rather than resolving a name a file wrote, so
+   * it has to answer rather than report. `funcKey` would raise on a candidate the site may not name
+   * and would file a module dependency on a declaration the program never reached.
+   *
+   * What it decides is that a declared function claims its name in call position ahead of a built-in
+   * conversion, exactly as a declared type already does — so a module may define `unit`, `int` or
+   * `byte` and have calls to it read as calls. Before it, `unit()` was read as a conversion to the
+   * `unit` type and answered *"a 'unit' conversion takes exactly one value"*, about a name the
+   * reader had declared themselves.
+   */
+  protected def funcInScope(written: String): Boolean =
+    resolveName(written, quiet = true)(funcDecls.contains).isDefined
+
   /** Whether any declaration of a function name may be named from where the analyzer currently is.
    *
    * **A name is out of reach only when every declaration of it is** — `reference/modules.md § A

@@ -102,8 +102,8 @@ object Bodies {
     // What the body binds is what a function could be reading. A `static` one is the module's, so it
     // is not among them — which is the whole of what the modifier does.
     val bindings = body.flatMap {
-      case VarDecl(n, _, _, _, _, _)  => List(n)
-      case ValDecl(n, _, _, _, _, _)  => List(n)
+      case VarDecl(n, _, _, _, _, _, _) => List(n)
+      case ValDecl(n, _, _, _, _, _)    => List(n)
       case RefDecl(n, _)        => List(n)
       case MultiDecl(ns, _, _)  => ns
       case PatternDecl(p, _, _) => patternNames(p)
@@ -141,8 +141,8 @@ object Bodies {
       case Ident(n) =>
         if !bound(n) then found += n
         bound
-      case VarDecl(n, _, init, _, _, _) => init.foreach(walk(_, bound)); bound + n
-      case ValDecl(n, _, v, _, _, _)   => walk(v, bound); bound + n
+      case VarDecl(n, _, init, _, _, _, _) => init.foreach(walk(_, bound)); bound + n
+      case ValDecl(n, _, v, _, _, _)       => walk(v, bound); bound + n
       case RefDecl(n, p)         => walk(p, bound); bound + n
       case ConstDecl(n, _, v, _) => walk(v, bound); bound + n
       case MultiDecl(ns, _, vs)  => vs.foreach(walk(_, bound)); bound ++ ns

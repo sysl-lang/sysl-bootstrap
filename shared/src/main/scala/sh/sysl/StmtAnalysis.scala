@@ -72,8 +72,8 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
 
   /** The names a statement binds, with where it binds them. */
   private def boundBy(stmt: Stmt): List[(String, Option[Pos])] = stmt match
-    case s @ VarDecl(n, _, _, _, _, _) => List(n -> s.pos)
-    case s @ ValDecl(n, _, _, _, _, _) => List(n -> s.pos)
+    case s @ VarDecl(n, _, _, _, _, _, _) => List(n -> s.pos)
+    case s @ ValDecl(n, _, _, _, _, _)    => List(n -> s.pos)
     case s @ RefDecl(n, _)             => List(n -> s.pos)
     case s @ MultiDecl(ns, _, _)       => ns.map(_ -> s.pos)
     case s @ PatternDecl(p, _, _)      => patternNames(p).map(_ -> s.pos)
@@ -298,8 +298,8 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
    * the name into an "undefined name" of its own, and the real mistake is lost among them.
    */
   private def bindFailed(stmt: Stmt): Unit = stmt match
-    case VarDecl(name, _, _, _, _, _) => declare(name, Type.Unknown)
-    case ValDecl(name, _, _, _, _, _) => declareReadOnly(name, Type.Unknown)
+    case VarDecl(name, _, _, _, _, _, _) => declare(name, Type.Unknown)
+    case ValDecl(name, _, _, _, _, _)    => declareReadOnly(name, Type.Unknown)
     // A ref whose place did not analyze binds the name at `Type.Unknown` like the other two, and
     // records no place: there is nothing to walk outward through, and a guard built from a poisoned
     // node would refuse assignments for a reason the program never gave.
@@ -644,6 +644,22 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
         "of whichever call is running, and a section is a region of the image the linker decides " +
         "once. Declare it as module storage, outside every function, for a section to be about")
 
+  /** `@thread_local` above a **local**, refused here for `noSection`'s reason and answered in its
+   * shape: the grammar cannot tell module storage from a local, and this is the first place that
+   * can.
+   *
+   * What it refuses is real rather than unimplemented, and it is the same fact read from the other
+   * side: a local already belongs to one thread. Its storage is the frame of whichever call is
+   * running, and a frame is one thread's stack — so the attribute asks for something the
+   * declaration already has, and the copy it would make is the one there already.
+   */
+  private def noThreadLocal(name: String, threadLocal: Boolean): Unit =
+    if threadLocal then
+      err(s"'$name' is a local, and a local is already one thread's: its storage is the frame of " +
+        "whichever call is running, and every thread has a stack of its own. '@thread_local' marks " +
+        "module storage, which is otherwise one object the whole program shares — declare it " +
+        "outside every function for the attribute to say anything")
+
   /** Most statements are one statement. The two comma forms are the exception, and the only reason
    * this hands back a list: a binding that names several things is several declarations.
    */
@@ -659,8 +675,9 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
       importInBlock(i)
       List(TExprStmt(TUnitLit()))
 
-    case VarDecl(name, typOpt, Some(init), _, align, section) =>
+    case VarDecl(name, typOpt, Some(init), _, align, section, perThread) =>
       noSection(name, section)
+      noThreadLocal(name, perThread)
       val declared = typOpt.map(rt)
       val ti       = analyzeExpr(init, declared)
       // A binding needs a value to hold, and an initializer that does not finish never produces
@@ -701,8 +718,9 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
 
       List(TRefDecl(declareRef(name, tp, refHazards(tp)), tp.ty, tp))
 
-    case VarDecl(name, typOpt, None, _, align, section) =>
+    case VarDecl(name, typOpt, None, _, align, section, perThread) =>
       noSection(name, section)
+      noThreadLocal(name, perThread)
       val ty = typOpt.map(rt).getOrElse(err(s"'$name' needs either a type or an initial value"))
       if !hasZero(ty) then err(s"${show(ty)} has no zero value, so '$name' needs an initial value")
       List(TVarDecl(declare(name, ty), ty, TZero(ty), boundary(name, align)))

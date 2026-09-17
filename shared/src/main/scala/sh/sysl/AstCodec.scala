@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 54
+  val Version: Int = 55
 
   private val Magic = "sysl-ast"
 
@@ -378,8 +378,12 @@ object AstCodec {
         // A section travels for the reason a layout does, one line below: it is a property of the
         // storage this declaration lays down, so a program reading the declaration back has to lay it
         // down in the same place the library's own build would have.
-        case VarDecl(n, t, i, vs, al, sc) =>
+        // And a per-thread copy travels for the same reason again: it is a property of the storage
+        // this declaration lays down, so a program reading the declaration back has to lay down a
+        // per-thread object where the library's own build would have.
+        case VarDecl(n, t, i, vs, al, sc, tl) =>
           tok("var"); sref(n); opt(t)(typ); opt(i)(expr); vis(vs); opt(al)(expr); opt(sc)(sref)
+          bool(tl)
         case ConstDecl(n, t, v, vs)       => tok("cst"); sref(n); typ(t); expr(v); vis(vs)
         case ValDecl(n, t, v, vs, al, sc) =>
           tok("val"); sref(n); opt(t)(typ); expr(v); vis(vs); opt(al)(expr); opt(sc)(sref)
@@ -857,7 +861,8 @@ object AstCodec {
     private def stmt(): Stmt = at {
       tok() match
         case "imp"  => ImportDecl(list(sref()), list(selector()), bool(), opt(sref()))
-        case "var"  => VarDecl(sref(), opt(typ()), opt(expr()), vis(), opt(expr()), opt(sref()))
+        case "var"  =>
+          VarDecl(sref(), opt(typ()), opt(expr()), vis(), opt(expr()), opt(sref()), bool())
         case "cst"  => ConstDecl(sref(), typ(), expr(), vis())
         case "val"  => ValDecl(sref(), opt(typ()), expr(), vis(), opt(expr()), opt(sref()))
         case "ref"  => RefDecl(sref(), expr())

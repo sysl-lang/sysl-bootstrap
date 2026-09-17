@@ -31,7 +31,12 @@ trait StaticEmitter extends StringEmitter {
                 v.ty.lty,
                 Some(v.init.filterNot(_ => v.computed).map(constantValue).getOrElse(ir.Val.Zero)),
                 section = v.section,
-                align = v.align)
+                align = v.align,
+                // `thread_local` with no model named, which is LLVM's own default: the back end
+                // picks between local-exec, initial-exec and a call to `__tls_get_addr` from what it
+                // knows about the link. A model written here would be a program deciding that on a
+                // linker's behalf, and the general one is the only always-correct answer.
+                threadLocal = v.threadLocal)
     }
 
   /** `@llvm.used` — the symbols this module places by hand and nothing in it reads

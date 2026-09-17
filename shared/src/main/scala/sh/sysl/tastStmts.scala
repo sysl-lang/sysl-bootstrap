@@ -308,6 +308,12 @@ case class TVal(
       * by the optimizer that finds no reader.
       */
     section: Option[String] = None,
+    /** `@thread_local` — one copy of this storage per thread rather than one for the program
+      * (`reference/attributes.md § @thread_local`). The initializer is a constant tree by the time
+      * this is set, which is what lets every thread's copy be the image the object file carries and
+      * is why there is nothing here for a prologue to run.
+      */
+    threadLocal: Boolean = false,
 )
 
 /** The `main` a program declared, which runs after its top-level statements (`reference/modules.md § Where a program starts`).

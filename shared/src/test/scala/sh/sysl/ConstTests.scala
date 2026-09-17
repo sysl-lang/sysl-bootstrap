@@ -192,6 +192,44 @@ class ConstTests extends AnyFreeSpec with CodegenSupport with RunSupport with Pa
     "floating-point arithmetic" in {
       run("const half: real = 1.0 / 4.0 + 0.25\nprint(str(half))") shouldBe "0.5\n"
     }
+
+    /** Two string literals joined, which is the one operator on strings that makes a value rather
+     * than a verdict. It is what a long constant written in pieces needs — a table, a census, a
+     * usage message, one line per source line so a reader can see the lines — and without it such a
+     * value had to be a `val`, which is storage and which no array bound may name.
+     */
+    "two string literals joined, which is what lets a long constant be written in pieces" in {
+      run(
+        """const greeting: string = "hello" + ", " + "world"
+          |print(greeting)
+          |""".stripMargin,
+      ) shouldBe "hello, world\n"
+    }
+
+    "including one built out of other constants" in {
+      run(
+        """const head: string = "usage: "
+          |const tail: string = "sysl <command>"
+          |const usage: string = head + tail
+          |print(usage)
+          |""".stripMargin,
+      ) shouldBe "usage: sysl <command>\n"
+    }
+
+    // It is folded rather than concatenated at run time, which is the claim that makes it a
+    // *constant* expression: a value that had to be built could not stand where a constant stands,
+    // and a pattern is one of the places that separates the two.
+    "and it is folded, so the joined value may stand as a pattern" in {
+      run(
+        """const tag: string = "ab" + "cd"
+          |describe(s: string) -> string =
+          |    s match
+          |        tag -> "the tag"
+          |        else "something else"
+          |print(s"${describe("abcd")} ${describe("ab")}")
+          |""".stripMargin,
+      ) shouldBe "the tag something else\n"
+    }
   }
 
   "a constant may be an array bound" - {

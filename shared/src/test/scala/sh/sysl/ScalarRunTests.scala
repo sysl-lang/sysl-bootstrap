@@ -176,6 +176,40 @@ class ScalarRunTests extends AnyFreeSpec with RunSupport {
     }
   }
 
+  /** A scalar type's name in call position is a conversion **only where no declaration claims it**,
+   * which is the rule a declared *type* of that name has always been held to and which a declared
+   * **function** was not.
+   *
+   * What a reader got instead was a diagnostic about a conversion they had not written. A program
+   * needing an accessor called `unit` — one that answers the unit a machine is running, say — was
+   * refused with *"a 'unit' conversion takes exactly one value"*, which names a built-in nobody
+   * reached for and sends the reader to count arguments on a call that has the right number.
+   */
+  "a declared function claims its name ahead of a built-in conversion" - {
+    "a nullary one, which is the shape the old diagnostic made unwriteable" in {
+      run("""unit() -> int = 7
+            |print(unit())
+            |""".stripMargin) shouldBe "7\n"
+    }
+
+    "one taking an argument, where the conversion would have been reached with the right count" in {
+      run("""int(n: int) -> int = n * 2
+            |print(int(21))
+            |""".stripMargin) shouldBe "42\n"
+    }
+
+    "and the conversion is untouched wherever the name is nobody's declaration" in {
+      run("print(int(3.9), byte(300u32))") shouldBe "3 44\n"
+    }
+
+    // A function in another module takes the name there and nowhere else, so a file that never
+    // imported it still writes the conversion.
+    "a module taking the name does not take it from a file that has not imported the function" in {
+      runOf("m/m.sysl" -> "module m\n\nbyte(n: int) -> int = n + 1\n",
+        "main.sysl"    -> "print(m.byte(1), byte(300u32))\n") shouldBe "2 44\n"
+    }
+  }
+
   /** `reference/types.md § char` gives `u32` → `char` two spellings by how trustworthy the value
    * is. `char(u)` traps; `char_from_u32(u)` answers. It is a free function because a scalar has no
    * member namespace for the `char.try` an earlier draft named — the obstacle `string.from_utf8`

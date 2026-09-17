@@ -648,6 +648,14 @@ trait ConstFolding extends ImportResolution {
       op match
         case "==" => Some(BoolLit(a == b))
         case "!=" => Some(BoolLit(a != b))
+        // Two string literals joined are a third string literal, which is the one operator on
+        // strings that produces a value rather than a verdict — and at compile time it is text
+        // beside text, with none of the allocating `sysl.str.concat` a run-time `+` lowers to. What
+        // it is for is the long constant written in pieces: a table, a census, a usage message, one
+        // line per source line so a reader can see the lines. Without it such a value could not be
+        // a `const` at all and had to be a `val`, which is storage, and which no array bound or
+        // `@assert` may name.
+        case "+"  => Some(StrLit(a + b))
         case _    => None
     case _ => None
 

@@ -186,6 +186,19 @@ trait StmtParser
           err("'@pure' already says '@reads()' and '@writes()', so a frame beside it says one thing " +
             "twice — write the frame alone if the function touches module storage, and '@pure' alone " +
             "if it touches none")
+        // `@thread_local` marks a binding and only a binding, so a set holding it is settled here
+        // rather than by any of the rules below — every one of those asks which *kind* of
+        // declaration is coming, and this one already knows.
+        case None if as.exists(perThread) && !as.forall(storage) =>
+          err("'@thread_local' gives one 'var' a copy per thread, so the only annotations it stands " +
+            "beside are the other two about storage — '@align(n)' and '@section(\"...\")'. The rest " +
+            "mark a function or a type, and neither is storage a thread could have its own of")
+        case None if as.exists(perThread) =>
+          storageDecl(as) | err(
+            "'@thread_local' gives one 'var' a copy per thread, and this declares no storage at " +
+              "all — a 'const' is folded into every use, an 'extern' names storage this program " +
+              "does not lay down, and a function is code every thread runs the one copy of",
+          )
         // `@packed` describes the arrangement of fields *within* a type and `@section` places one
         // object, so the two cannot be about the same declaration whichever kind it turns out to be:
         // a struct is not an object, and a binding has no fields.
@@ -350,6 +363,18 @@ trait StmtParser
     case _: Attr.Section => true
     case _               => false
 
+  /** Whether an attribute asks for **one copy per thread**, which is `@thread_local` and only
+   * `@thread_local`. It is a category of its own for the reason `@section` is: it marks a binding
+   * and nothing else, and it is the narrowest of the three — a section holds code as well as
+   * storage, and a boundary is a struct's question too.
+   */
+  private def perThread(a: Attr): Boolean = a == Attr.ThreadLocal
+
+  /** Whether an attribute is one of the three about a binding's **storage**, which is the set
+   * `@thread_local` may be written beside.
+   */
+  private def storage(a: Attr): Boolean = aligns(a) || places(a) || perThread(a)
+
   /** `@align(n)` above a `var` or a `val` — the boundary one object's storage begins on, which is C's
    * `alignas` rather than Rust's `#[repr(align)]`.
    *
@@ -369,13 +394,21 @@ trait StmtParser
    * against the binding, which is the diagnostic this whole shape exists to avoid.
    */
   private def storageDecl(as: List[Attr]): PackratParser[Stmt] =
-    if !as.forall(a => aligns(a) || places(a)) then failure("not a binding's annotation")
+    if !as.forall(storage) then failure("not a binding's annotation")
     else
       (staticDecl | visibility ~ (valDecl | varDecl) ^^ {
         case Visibility.Public ~ d => d
         case v ~ d                 => restrict(v, d)
       }) >> { d =>
-        if !oneBinding(d) then
+        // `@thread_local` is the one of the three that chooses between the two keywords, so it is
+        // answered before the shared "names several" rule below: a reader who wrote it above a
+        // `val` has a mistake about what the attribute is *for*, and the count of names it binds
+        // has nothing to do with it.
+        if as.exists(perThread) && !holdsAVar(d) then
+          err("'@thread_local' gives one 'var' a copy per thread, and a 'val' never changes — so " +
+            "the one copy every 'val' already has is every thread's, and a per-thread constant is " +
+            "a constant. Write it above a 'var' if the threads need to disagree")
+        else if !oneBinding(d) then
           // Two sentences rather than one about "an annotation", because each names the thing it is
           // about — and because `@align`'s is quoted verbatim on the site, where a word inserted into
           // the middle of a diagnostic breaks the page at the next version bump and not before.
@@ -389,6 +422,7 @@ trait StmtParser
           success(as.foldLeft(d) {
             case (s, Attr.Align(n))   => aligned(s, n)
             case (s, Attr.Section(n)) => placed(s, n)
+            case (s, Attr.ThreadLocal) => perThreadCopy(s)
             case (s, _)               => s
           })
       }
@@ -398,6 +432,25 @@ trait StmtParser
     case _: VarDecl | _: ValDecl => true
     case StaticDecl(d)           => oneBinding(d)
     case _                       => false
+
+  /** Whether a binding is a `var` — the one keyword `@thread_local` marks — reaching through the
+   * `static` wrapper exactly as the folds below do. A comma list and a pattern are `var`s too and
+   * are refused a line later by `oneBinding`, which is the sentence they want.
+   */
+  private def holdsAVar(s: Stmt): Boolean = s match
+    case _: VarDecl     => true
+    case m: MultiDecl   => m.mutable
+    case p: PatternDecl => p.mutable
+    case StaticDecl(d)  => holdsAVar(d)
+    case _              => false
+
+  /** `@thread_local` folded onto the `var` it was written above, reaching through the `static`
+   * wrapper exactly as the boundary and the section do.
+   */
+  private def perThreadCopy(s: Stmt): Stmt = s match
+    case d: VarDecl    => d.copy(threadLocal = true).setPos(d.pos)
+    case StaticDecl(d) => StaticDecl(perThreadCopy(d)).setPos(s.pos)
+    case other         => other
 
   /** One layout attribute folded onto whichever binding it was written above, reaching through the
    * `static` wrapper to the declaration inside it.

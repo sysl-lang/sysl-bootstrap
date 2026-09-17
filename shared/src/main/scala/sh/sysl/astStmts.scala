@@ -83,10 +83,16 @@ case class ImportDecl(
  * `section` is `@section("…")` — the linker section this object is placed in
  * (`reference/attributes.md § @section("...")`). It carries the string as written, because a
  * section name is the target's spelling and not sysl's.
+ *
+ * `threadLocal` is `@thread_local` — one copy of this storage per thread rather than one for the
+ * program (`reference/attributes.md § @thread_local`). It sits beside the other two because it is
+ * the same kind of fact about the same object: where the storage lives. What it costs is that the
+ * initializer must be a constant, since every thread's copy starts from the image the object file
+ * carries and there is no per-thread prologue to run anything else in.
  */
 case class VarDecl(name: String, typ: Option[TypeRef], init: Option[Expr],
                    vis: Visibility = Visibility.Public, align: Option[Expr] = None,
-                   section: Option[String] = None) extends Stmt
+                   section: Option[String] = None, threadLocal: Boolean = false) extends Stmt
 
 /** `const name: type = value` — a **module member** (`reference/modules.md § const — a value`). It is what a top-level `var` is not:
  * hoisted, order-free, and visible beyond its file under the ordinary rules, where a `var` at the
@@ -746,6 +752,19 @@ enum Attr(val word: String) {
     * third time — a spelling belongs to whoever consumes it.
     */
   case Section(name: String) extends Attr("section")
+
+  /** `@thread_local` — one copy of a module `var`'s storage per thread
+   * (`reference/attributes.md § @thread_local`).
+   *
+   * It is the third attribute about **storage**, beside `@align(n)` and `@section("…")`, and it
+   * composes with both: a per-thread object still begins on a boundary and still lands in a
+   * section. It takes no arguments, LLVM's thread-local models being the back end's choice for the
+   * target rather than something a program picks.
+   *
+   * It marks a `var` and nothing else. A `val` and a `const` never change, so one copy of either is
+   * already every thread's, and a per-thread constant is a constant.
+   */
+  case ThreadLocal extends Attr("thread_local")
 
   /** `@crossing(state)` — the parameters a value reaches another concurrency domain through
     * (`reference/memory.md § @crossing — where the rule is asked`).

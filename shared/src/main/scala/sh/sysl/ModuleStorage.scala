@@ -98,6 +98,8 @@ trait ModuleStorage extends ModuleFiles {
    * **It is `writable`**, which is what `TGlobal` carries to every read of the name so that an
    * assignment through it is allowed and a `@pure` function reading it is not
    * (`reference/verification.md § @pure`).
+   *
+   * **`@thread_local` adds one rule and takes nothing away**, and `checkPerThread` below is it.
    */
   protected def analyzeStaticVar(key: String): TVal = inDecl(key)(at(staticVarDecls(key).pos) {
     val decl = staticVarDecls(key)
@@ -123,9 +125,43 @@ trait ModuleStorage extends ModuleFiles {
         s"${show(ty)} has none — the same rule a local with no initializer is held to. A 'string' " +
         "and a slice both start empty and need no value written; a reference and an enum need one")
 
+    if decl.threadLocal then checkPerThread(key, init)
+
     TVal(key, ty, init, computed = init.exists(!isStatic(_)), writable = true,
-      align = boundaryOf(key, decl.align), section = decl.section)
+      align = boundaryOf(key, decl.align), section = decl.section,
+      threadLocal = decl.threadLocal)
   })
+
+  /** The two things `@thread_local` asks that a plain module `var` does not
+   * (`reference/attributes.md § @thread_local`).
+   *
+   * **The initializer has to be a constant**, and that is C's rule for the same reason rather than
+   * a borrowing of it: every thread's copy is made from one image the object file carries, and
+   * there is no per-thread prologue for anything else to run in. A program's `main` runs once on
+   * one thread; a thread started later never passes through it, so an initializer that was code
+   * would fill exactly one copy and leave every other thread reading zeroes. LLVM has no lazy form
+   * to fall back on either — a `thread_local global` takes a constant initializer and nothing else.
+   *
+   * **And the target has to have thread-local storage at all.** `Target.hasThreadLocalStorage` is
+   * the same question the ARC reaper's slot asks, and the reason it is asked rather than left to the
+   * back end is written out there: every target LLVM knows *accepts* the keyword, and a freestanding
+   * one silently gets the local-exec model, whose offset is read from a register nothing on a bare
+   * machine has written. So the alternative to this refusal is not a slower program, it is one that
+   * reads a wild address.
+   */
+  private def checkPerThread(key: String, init: Option[TExpr]): Unit =
+    if !target.hasThreadLocalStorage then
+      err(s"'${qn(key)}' cannot be '@thread_local' on '${target.name}': there is no loader and no " +
+        "libc on this target, so nothing lays a thread's storage down and nothing writes the thread " +
+        "pointer the offset would be read from. Declare it as a plain module 'var' and let the " +
+        "port's scheduler answer for which task is running, which is what the ownership runtime's " +
+        "reaper slot does")
+    else if init.exists(!isStatic(_)) then
+      err(s"'${qn(key)}' is '@thread_local', so its value has to be one the compiler can write " +
+        "down: every thread gets a copy of the initial value, and the copies are made from a single " +
+        "image in the object file rather than by code that runs per thread. A literal, 'null', a " +
+        "'const' and the arrays and structs built from them are all values; a call is not. Leave the " +
+        "value off to start every thread at the type's zero, and do the work in each thread instead")
 
   /** Holds a module-level `val` to something a name can stand for (`reference/modules.md § val — a thing`).
    *
