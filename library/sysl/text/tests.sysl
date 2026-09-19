@@ -426,6 +426,26 @@ real_renders_shortest()
     assert_eq(shortest(0.1), "0.1")
     assert_eq(shortest(0.5), "0.5")
     assert_eq(shortest(1.0 / 3.0), "0.3333333333333333")
+    assert_eq(shortest(1e23), "1e+23")
+    assert_eq(shortest(0.1 + 0.2), "0.30000000000000004")
+
+// A subnormal's neighbours are not evenly spaced, so a value down here can already round-trip at
+// fifteen digits without that being the shortest reading -- `5e-324` renders at fifteen digits as
+// `4.94065645841247e-324`, which reads back correctly and is fourteen characters longer than it
+// needs to be. These three each have a true shortest reading well under fifteen digits.
+@test("a subnormal renders at its true shortest, not just what fifteen digits round-trips")
+real_renders_shortest_subnormal()
+    assert_eq(shortest(5e-324), "5e-324")
+    assert_eq(shortest(-5e-324), "-5e-324")
+    assert_eq(shortest(1e-310), "1e-310")
+
+// Near the top of the subnormal range the spacing is as fine as the normal range's, so fifteen
+// digits already finds the true shortest reading -- these two are unchanged by the search added
+// for the cases above.
+@test("the subnormal-normal boundary needs no shorter reading than fifteen digits already finds")
+real_renders_shortest_at_the_boundary()
+    assert_eq(shortest(2.225073858507201e-308), "2.225073858507201e-308")
+    assert_eq(shortest(2.2250738585072014e-308), "2.2250738585072014e-308")
 
 // The value `str` shows a person, beside the one a document has to carry. They are different
 // renderings of one number on purpose -- six significant digits is a reasonable thing to print and a
@@ -451,8 +471,16 @@ real_round_trips()
     assert_round_trip(2.0 / 3.0)
     assert_round_trip(1.7976931348623157e308)
     assert_round_trip(5e-324)
+    assert_round_trip(-5e-324)
+    assert_round_trip(1e-310)
+    assert_round_trip(2.225073858507201e-308)
+    assert_round_trip(2.2250738585072014e-308)
+    assert_round_trip(3.141592653589793)
+    assert_round_trip(1e23)
+    assert_round_trip(0.1 + 0.2)
     assert_round_trip(-1234.56789012345)
     assert_round_trip(0.0)
+    assert_round_trip(-0.0)
 
 // `%g` chooses the exponent form for a value whose plain decimal would be long, and this function
 // leaves that choice where it found it: it decides the precision and nothing else. A `1` with no
