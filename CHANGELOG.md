@@ -7,6 +7,28 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.120 — 2026-09-19
+
+**Fix:** `display_real_shortest` now finds the true shortest round-tripping reading for a subnormal `real`. Fifteen significant digits already round-trips a subnormal, but the subnormal range is not evenly spaced, so a shorter reading can still exist below it — `5e-324` was rendering as the round-tripping but fourteen-characters-longer `4.9406564584124654e-324`. Normal reals and non-finite values are unaffected. See `library/sysl/render.sysl` and `library/sysl/text/tests.sysl`.
+
+## 0.0.119 — 2026-09-17
+
+**Feature:** `@thread_local` on a module `var` gives it one copy per thread rather than one for the whole program; the initializer must be a compile-time constant (or omitted for a zero start), and a freestanding target refuses the attribute by name since it has no loader to lay per-thread storage down. See `reference/attributes.md § @thread_local`. 33 cases in `ThreadLocalTests`.
+
+**Fixes:**
+- A declared function now claims its name ahead of a built-in conversion (e.g. a user's own `unit()` or `int(n)` in its own module is no longer shadowed by the built-in).
+- `const` now folds a concatenation of string literals (`const S = "a" + "b"`).
+
+**Rebuild note:** `AstCodec.Version` is now 55, so every `.syslib` is regenerated. Consumers should rebuild rather than reuse a cached artifact; the release tarball's own standard library is rebuilt fresh on first use.
+
+## 0.0.118 — 2026-09-16
+
+Feature-list members name the feature; only a self-reference names the dependency; "dep:x" spells the dependency (Cargo's rule). Reverses the 0.0.115 rule that made a dependency-named default member turn on the dependency and no feature.
+
+## 0.0.117 — 2026-09-16
+
+Keep a destructor a dependency's own tests reach in a test build: `sysl test` runs every `@test` in the tree, a dependency's as readily as the project's, so a package's suite can run inside a consumer's test binary and make a value with a destructor. That destructor's release hook is now kept as a root of the test build rather than pruned from under it, which previously made clang refuse the link with `use of undefined value @pkg$T.drop`.
+
 ## 0.0.116 — 2026-09-16
 
 ### A path dependency's label no longer shadows an import
