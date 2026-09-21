@@ -77,6 +77,36 @@ extend_by_empty()
     assert_eq(b.len(), 1)
 end extend_by_empty
 
+// `push` and `extend` reach the same storage through the same rule: capacity starts at eight and
+// doubles until it holds what was asked for. So a push at capacity doubles, and a run that
+// overshoots a doubling lands on the next power of two that fits rather than on an exact size --
+// the two are written once, and a buffer filled either way has the same room afterwards.
+@test("a push at capacity and a run that overshoots it grow by one rule")
+growth_is_one_rule()
+    var pushed: Buf[int] = buf()
+    var extended: Buf[int] = buf()
+
+    for i in 0..<8 do pushed.push(i)
+
+    extended.extend([0, 1, 2, 3, 4, 5, 6, 7])
+
+    assert_eq(pushed.cap(), 8)
+    assert_eq(extended.cap(), 8)
+
+    pushed.push(8)
+    extended.extend([8])
+
+    assert_eq(pushed.cap(), 16)
+    assert_eq(extended.cap(), 16)
+
+    var far: Buf[int] = buf()
+
+    far.extend([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+    assert_eq(far.cap(), 16)
+    assert_slice_eq(far.view(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+end growth_is_one_rule
+
 // -- shrinking ------------------------------------------------------------------------------------
 
 @test("pop answers with the last element and shortens")

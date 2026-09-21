@@ -762,9 +762,14 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       // platform's linker, and a machine that cannot list symbols cannot be asked about it.
       assume(listed.exitCode == 0, "nm not available")
 
-      // Reached: printing an int goes through the renderer and out to the sink.
+      // Reached: printing an int goes through the renderer, and the renderer through the encoder.
+      //
+      // **A symbol is what survives being reached, not what is called**, so the two named here are
+      // ones too large for a caller to absorb. `putbytes` used to be a third and is not one any
+      // more: it holds a release, and a release stopped being a copy of the reaper's drain loop the
+      // day that loop was marked `noinline cold` — so it now disappears into everything that writes.
       kept.count(_.contains(Library.key("printi"))) shouldBe 1
-      kept.count(_.contains(Library.key("putbytes"))) shouldBe 1
+      kept.count(_.contains(Library.key("encode_utf8"))) shouldBe 1
 
       // Not reached by `print(1)` — and every one of these was in the binary before dead-stripping,
       // which is what makes this a test of the flag rather than of the library's shape.
@@ -916,8 +921,13 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
         // The half that makes the absence below evidence: the symbol IS reachable, so a link that
         // does not carry it is one where dead-stripping worked rather than one where the module
         // never compiled.
+        //
+        // Matched at the end of the `nm` line rather than anywhere in it, because a function with a
+        // region the optimizer believes rare is split, and the outlined half carries the original
+        // name with a suffix (`…$from_int.cold.1`). That is one function in two pieces, not two
+        // copies of it, and a substring match counts it twice.
         withClue(s"$symbol should be in a program that calls it: ") {
-          kept.count(_.contains(symbol)) shouldBe 1
+          kept.count(_.endsWith(symbol)) shouldBe 1
         }
       }
 

@@ -754,6 +754,15 @@ object ArcEmitter {
     // and because it is the only arrangement under which the two halves of that chapter are both
     // true: a module that allocates nothing emits no hook and so names no `free`, while one holding
     // a heap slice something else made frees it with the allocator that made it.
+    //
+    // **`arc.reap` is kept out of line and declared rare, and that is what makes a release cheap
+    // wherever one is emitted.** Releasing is a decrement and a test; only the test succeeding
+    // reaches the worklist and its drain loop. Left inlinable, that loop is copied into every
+    // release site in the program — so a member holding a single release becomes too large for its
+    // own caller to absorb, and a sequence's `push` is a call and a frame rather than a store. With
+    // `noinline cold` the decrement and the branch stay where they were and everything after them
+    // sits behind a call that is almost never made, which is the arrangement every counted-reference
+    // runtime settles on.
     s"""%arc.header = type { $word, ptr, $word }
       |
       |%arc.reaper = type { ptr, i8 }
@@ -803,7 +812,7 @@ object ArcEmitter {
       |  ret void
       |}
       |
-      |define private void @arc.reap(ptr %p) {
+      |define private void @arc.reap(ptr %p) noinline cold {
       |entry:
       |$fetchSlot  %head = getelementptr %arc.reaper, ptr $slot, i32 0, i32 0
       |  %flag = getelementptr %arc.reaper, ptr $slot, i32 0, i32 1

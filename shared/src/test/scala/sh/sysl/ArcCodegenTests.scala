@@ -206,6 +206,20 @@ class ArcCodegenTests extends AnyFreeSpec with CodegenSupport {
       out should include("@arc.reaper.self = internal thread_local global %arc.reaper zeroinitializer")
     }
 
+    /** The drain is the rare half of a release and is marked as both — kept out of line, and
+     * declared cold so that the branch reaching it is laid out as the one not taken.
+     *
+     * **A release is emitted wherever a counted value is let go of, so what the drain costs is paid
+     * once per site rather than once.** Inlinable, the queue push, the re-entry flag, the loop and
+     * the indirect call to the object's hook are copied into every one of them, and a member holding
+     * a single release is then too large for its own caller to absorb. What the marks leave at a
+     * release site is a decrement, a test, and a call almost never made.
+     */
+    "and the drain itself is kept out of line and declared rare" in {
+      ir(chain + "var p: &Node = Node(1)") should
+        include("define private void @arc.reap(ptr %p) noinline cold")
+    }
+
     // A machine that knows what the current thread is has no reason to ask anybody: the slot is
     // reached by name, and the symbol a port would define is not emitted at all.
     "and a target with it asks nobody for the slot" in {

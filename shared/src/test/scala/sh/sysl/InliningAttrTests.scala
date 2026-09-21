@@ -200,4 +200,134 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
            |""".stripMargin) should include("define")
     }
   }
+
+  /** A hot loop over a `Buf[int]`, reading the elements back so that nothing in it is dead. */
+  private val plainBuffer =
+    """module demo
+      |
+      |import sysl.buf.*
+      |
+      |@export
+      |total(n: int) -> int
+      |    var b: Buf[int] = buf()
+      |    var i = 0
+      |
+      |    while i < n
+      |        b.push(i * 3)
+      |        i += 1
+      |
+      |    var sum = 0
+      |
+      |    for x in b.view() do sum += x
+      |
+      |    sum
+      |""".stripMargin
+
+  /** A `Buf` of a struct carrying a reference, which is the case that pays for a release: the slot
+   * being written to still holds whatever seeded it, so a push lets that occupant go.
+   */
+  private val countedBuffer =
+    """module demo
+      |
+      |import sysl.buf.*
+      |
+      |struct Node
+      |    x: int
+      |
+      |struct Cell
+      |    tag: i64
+      |    node: &Node
+      |
+      |@export
+      |gather(n: i64) -> usize
+      |    var node: &Node = Node(7)
+      |    var b: Buf[Cell] = buf()
+      |    var i = 0i64
+      |
+      |    while i < n
+      |        b.push(Cell(i, node))
+      |        i += 1
+      |
+      |    b.len()
+      |""".stripMargin
+
+  /** The lines of one definition, for a claim about what is *inside* a function rather than about
+   * what the module holds somewhere. A `}` alone on a line ends a definition in LLVM's text.
+   */
+  private def functionBody(out: String, name: String): String = {
+    val lines = out.linesIterator.toList
+    val start = lines.indexWhere(l => l.startsWith("define") && l.contains(name))
+
+    if start < 0 then fail(s"nothing defines a function named '$name':\n$out")
+
+    lines.drop(start).takeWhile(_ != "}").mkString("\n")
+  }
+
+  /** The library member the pair was added for: `sysl.buf`'s `push`.
+   *
+   * **A sequence's append is a store and a rare reallocation, and whether a caller has to hold the
+   * second decides what the first costs.** Written as one member, `push` carries an allocation, a
+   * copy and the release of the storage it replaces — enough that no caller can absorb it, so every
+   * append is a call, a frame, and the callee-saved registers spilled around it. Split, what is left
+   * is a compare, a store and a bump, and the caller takes all three.
+   *
+   * The assertions are on clang's output rather than on the emitted text, because both halves of the
+   * claim are the optimizer's answers: that `push` is gone from its caller, and that `grow` is not.
+   */
+  "a buffer's push is absorbed by its caller and its growth is not" - {
+
+    "for a plain element, the caller holds the push and calls the growth" in {
+      val out  = optimizedIr(plainBuffer)
+      val body = functionBody(out, "demo$total")
+
+      // Asked of the call instructions rather than of the whole text: clang names the block an
+      // inlined callee returned to after that callee, so the caller's *labels* mention `push`
+      // precisely because it is no longer called.
+      calls(body, "Buf.push.int") shouldBe false
+
+      // The other half, and what keeps the first from passing vacuously: the growth `push` guards
+      // is in the caller as a call, which is only true if `push` itself was absorbed.
+      calls(body, "Buf.grow.int") shouldBe true
+
+      defines(out, "Buf.grow.int") shouldBe true
+    }
+  }
+
+  /** What a release costs at the site it is emitted, which is what decides whether the member
+   * holding one can be inlined at all.
+   *
+   * **Releasing is a decrement and a test; only the test succeeding reaches the worklist.** With the
+   * drain loop inlinable, every release site in every program carries a copy of it — the queue push,
+   * the re-entry flag, the `step` loop and the indirect call to the object's hook — which is how a
+   * `push` storing a counted element came to be a hundred and seventy lines of IR. Marked `noinline
+   * cold`, the drain is a call that is almost never made and the release is a decrement and a branch.
+   */
+  "the reaper's drain is not copied into the code that releases" - {
+
+    "so a push over a counted slot reaches it by a call" in {
+      val body = functionBody(optimizedIr(countedBuffer), "Buf.push.demo$Cell")
+
+      body should include("void @arc.reap(")
+      body should not include "arc.reaper"
+      body should not include "drain"
+    }
+
+    "and the drain is still a definition, kept out of line and declared rare" in {
+      val out = optimizedIr(countedBuffer)
+
+      defines(out, "@arc.reap") shouldBe true
+      attributesOn(out, "@arc.reap") should include("noinline")
+      attributesOn(out, "@arc.reap") should include("cold")
+    }
+
+    // The growth is out of line here too, at an element type that carries a reference — the mark is
+    // on the declaration, so it belongs to every instantiation rather than to the one that was
+    // easiest to measure.
+    "while the growth for a counted element is out of line as well" in {
+      val out = optimizedIr(countedBuffer)
+
+      defines(out, "Buf.grow.demo$Cell") shouldBe true
+      calls(out, "Buf.grow.demo$Cell") shouldBe true
+    }
+  }
 }

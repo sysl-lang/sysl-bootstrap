@@ -361,6 +361,82 @@ class BufTests extends AnyFreeSpec with RunSupport {
     }
   }
 
+  /** A type whose destructor announces itself, so that the lines a program prints count the
+   * releases the buffer made.
+   */
+  private val handle =
+    """struct Handle
+      |    id: int
+      |
+      |impl Drop for Handle
+      |    drop(self) = print("drop", self.id)
+      |""".stripMargin
+
+  /** The counts themselves, read through a destructor rather than inferred from a value surviving.
+   *
+   * **The two failures a buffer of counted elements can have are invisible to every test above.** A
+   * release too few leaks, and a program that leaks still prints the right answers; a release too
+   * many frees an object something else is holding, and on a small program the freed bytes are
+   * usually still readable. A destructor that announces itself turns both into different output: a
+   * missing line is the leak and a repeated one is the double release.
+   *
+   * **The lines are sorted rather than pinned in order**, because the order is the reaper's — a
+   * worklist drained when the first count reaches zero, so which element announces itself first is
+   * a property of the drain rather than of the buffer. What the buffer promises is that each
+   * element is let go of exactly once, and a sorted comparison says exactly that.
+   */
+  "a counted element is released exactly once" - {
+
+    // Growth is where a double release would come from: the storage is seeded by repeating the
+    // value being pushed, the old storage is copied across, and then the buffer lets the old
+    // storage go. An element counted once for the copy and once for the seed would be freed twice.
+    "across the growth that the first push causes" in {
+      run(
+        s"""$handle
+           |hold()
+           |    var b: &Buf[&Handle] = buf()
+           |    for i in 0..<3 do b.push(Handle(i))
+           |    print("filled", b.len())
+           |
+           |hold()
+           |print("out")""".stripMargin
+      ).linesIterator.toList.sorted shouldBe List("drop 0", "drop 1", "drop 2", "filled 3", "out")
+    }
+
+    // A slot past the count still holds whatever seeded it, so pushing over one releases that
+    // occupant. Shortening and pushing again is the shortest program that reaches the case, and it
+    // is the one a stack written on a buffer runs on every step.
+    "when a push writes over a slot the count had left behind" in {
+      run(
+        s"""$handle
+           |hold()
+           |    var b: &Buf[&Handle] = buf()
+           |    b.push(Handle(1))
+           |    b.truncate(0)
+           |    b.push(Handle(2))
+           |    print("swapped", b.len())
+           |
+           |hold()
+           |print("out")""".stripMargin
+      ).linesIterator.toList.sorted shouldBe List("drop 1", "drop 2", "out", "swapped 1")
+    }
+
+    // Many growths rather than one, so that an element released once too often somewhere in the
+    // middle of the doublings is caught as well as one at the join.
+    "through every doubling on the way up" in {
+      run(
+        s"""$handle
+           |hold()
+           |    var b: &Buf[&Handle] = buf()
+           |    for i in 0..<40 do b.push(Handle(i))
+           |    print("filled", b.len())
+           |
+           |hold()
+           |print("out")""".stripMargin
+      ).linesIterator.count(_.startsWith("drop ")) shouldBe 40
+    }
+  }
+
   /** `extend` and `buf_with_capacity` — appending a run at once, and starting with room for one.
    *
    * Both are about the cost rather than the result, so the tests are written to pin the *result*

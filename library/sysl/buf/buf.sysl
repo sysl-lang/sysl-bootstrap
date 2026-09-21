@@ -43,47 +43,58 @@ struct Buf[T]
         self.elems[i] = v
 
     push(*self, v: T)
-        if self.count == self.elems.len
-            var bigger: []T = [v; if self.elems.len == 0 then 8usize else self.elems.len * 2]
-
-            copy(bigger, self.elems[0..<self.count])
-
-            self.elems = bigger
+        if self.count == self.elems.len then self.grow(self.count + 1, v)
 
         self.elems[self.count] = v
         self.count += 1
-    end push
+
+    /** Storage replaced by storage that holds at least `need` elements, with everything already
+     * there copied across. The growth is geometric -- the capacity doubles until it fits, rather
+     * than sizing exactly to what was asked for -- so a caller adding elements one at a time still
+     * pays amortized constant time per element. Sizing to fit would make a loop of `extend` calls
+     * quadratic in the same way `+=` on a string is.
+     *
+     * **It is out of line, and marked so, because that is what lets `push` disappear into its
+     * caller.** An allocation and a copy written inside `push` make the whole member too large for
+     * a caller to absorb, so every push is a call and a frame; behind a name that is kept out of
+     * line and declared rare, what is left where the growth was is a compare and a branch that is
+     * almost never taken. The marks are on the declaration, so every element type a program asks
+     * for carries them.
+     *
+     * **The fill is a parameter because a generic `T` has no zero**: an array is made by repeating
+     * a value, and nothing about `T` says what an unused slot should hold. None of those slots is
+     * read -- `count` is what says which elements are real.
+     */
+    @noinline
+    @cold
+    private grow(*self, need: usize, fill: T)
+        var bigger_len = if self.elems.len == 0 then 8usize else self.elems.len
+
+        while bigger_len < need
+            bigger_len *= 2
+
+        var bigger: []T = [fill; bigger_len]
+
+        copy(bigger, self.elems[0..<self.count])
+
+        self.elems = bigger
+    end grow
 
     /** Every element of a slice appended at once, which is what `push` in a loop was costing more
      * than it looked like. A run of n elements pushed one at a time asks the capacity question n
      * times and may reallocate several times along the way; this asks once, grows once to a size
      * that fits the whole run, and copies.
      *
-     * The growth stays geometric rather than sizing exactly to what is needed, so that a caller
-     * extending repeatedly still pays amortized constant time per element -- sizing to fit would
-     * make a loop of `extend` calls quadratic in the same way `+=` on a string is.
-     *
-     * The fill for the new storage is `xs[0]`, which is why the empty case leaves early: an array
-     * is made by repeating a value (`07`) and a generic `T` has no zero to repeat when there is no
-     * element in hand. Nothing is written to those slots afterwards anyway -- `count` is what says
-     * which of them are real.
+     * The empty case leaves early because the fill `grow` repeats is `xs[0]`, and a run of no
+     * elements has none to offer -- which costs nothing, since a run of no elements has nothing to
+     * append either.
      */
     extend(*self, xs: []const T)
         if xs.len == 0 then return
 
         var need = self.count + xs.len
 
-        if need > self.elems.len
-            var bigger_len = if self.elems.len == 0 then 8 else self.elems.len
-
-            while bigger_len < need
-                bigger_len *= 2
-
-            var bigger: []T = [xs[0]; bigger_len]
-
-            copy(bigger, self.elems[0..<self.count])
-
-            self.elems = bigger
+        if need > self.elems.len then self.grow(need, xs[0])
 
         copy(self.elems[self.count..], xs)
 
