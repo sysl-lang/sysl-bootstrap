@@ -7,6 +7,20 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.121 — 2026-09-21
+
+**Feature:** `sysl.math.bigint` gains a full bitwise and floored-division API on the infinite two's-complement reading: `and`/`or`/`xor`/`not` and their operators, `shl`/`shr`, `bit_length`/`trailing_zeros`/`test_bit`/`is_even`/`is_odd`, `from_u64`/`to_u64`/`fits_long`/`to_real`/`from_real`, floored division (`div_rem_floor`/`div_floor`/`mod_floor`), `gcd`/`lcm`/`mod_pow`/`isqrt`, and machine-sized fast paths (`add_long`/`sub_long`/`mul_long`/`cmp_long`/`div_rem_long`) for values that fit a machine word.
+
+**Feature:** `sysl.math` gains checked and overflow-detecting arithmetic, generic over every signed width: `checked_add`/`checked_sub`/`checked_mul` return `Option[T]`, and `overflowing_add`/`overflowing_sub`/`overflowing_mul` return `(T, bool)`.
+
+**Feature:** a new floating type, **`bf16`** — LLVM's `bfloat`, literal suffix `1.5bf16`, C header name `__bf16`. `f16` is finished alongside it: `impl Float for f16` and `bf16`.
+
+**Fixes:**
+- a generated C header spelled an exported `f16` as `double`; it now reads `_Float16`.
+- the `f16`↔`bf16` cast, neither one wider than the other, routed through an invalid `fptrunc`; it now goes through `f32`.
+
+**Rebuild note:** the library `@test` count went from 791 to 832; `StdSelfTests.floor` raised accordingly.
+
 ## 0.0.120 — 2026-09-19
 
 **Fix:** `display_real_shortest` now finds the true shortest round-tripping reading for a subnormal `real`. Fifteen significant digits already round-trips a subnormal, but the subnormal range is not evenly spaced, so a shorter reading can still exist below it — `5e-324` was rendering as the round-tripping but fourteen-characters-longer `4.9406564584124654e-324`. Normal reals and non-finite values are unaffected. See `library/sysl/render.sysl` and `library/sysl/text/tests.sysl`.
