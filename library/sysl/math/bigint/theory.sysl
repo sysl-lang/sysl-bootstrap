@@ -1,0 +1,122 @@
+module sysl.math.bigint
+
+// The number theory: the two divisors a pair shares, modular exponentiation, and an exact square
+// root.
+//
+// **These are the four the headline said belonged here and were not written yet.** Each is a real
+// function with a real subtlety, and each is written here rather than left to a caller because the
+// obvious version of it is wrong in a way that does not show on small inputs: `lcm` written as
+// `a * b / gcd` builds a product twice the size it needs, `mod_pow` written as `pow` then `%`
+// builds a number with as many digits as the exponent has units, and a square root taken through a
+// `real` is exact only while the value fits 53 bits.
+//
+// **What is still not here is primality**, and it stays out for the reason it always did: a useful
+// primality test is Miller-Rabin with a chosen witness set or a chosen number of rounds, and which
+// one it should be is a decision about what a caller is doing -- a deterministic set for values
+// under `2^64`, a probabilistic round count above it. Nothing in this library needs one.
+
+/** The largest value dividing both, and never a negative one: `gcd(-12, 18)` is `6`.
+ *
+ * **Euclid's algorithm over the magnitudes**, which is what makes one loop serve every combination
+ * of signs: the divisors of a number and of its negation are the same set, so the signs can be
+ * dropped at the door rather than reasoned about. `gcd(x, 0)` is the magnitude of `x`, everything
+ * dividing zero, and `gcd(0, 0)` is zero.
+ *
+ * The binary algorithm -- shifts and subtractions, no division -- is the faster one on a machine
+ * whose divide is slow, and it is a fair amount more code for a constant factor. This is the one
+ * that is obviously right.
+ */
+gcd(a: BigInt, b: BigInt) -> BigInt
+    var x = a.mag
+    var y = b.mag
+
+    while y.len > 0
+        val (_, r) = divmod_mag(x, y)
+
+        x = y
+        y = r
+
+    normalized(false, x)
+end gcd
+
+/** The smallest non-negative value both divide: `lcm(4, 6)` is `12`.
+ *
+ * **Divided before multiplied** -- `a / gcd(a, b) * b` rather than `a * b / gcd(a, b)`. The two
+ * agree on every input, `gcd` being a divisor of `a` so the quotient is exact, and the second builds
+ * an intermediate with as many limbs as both operands together. That costs nothing at a machine
+ * width and costs a real allocation here.
+ *
+ * **A zero operand answers zero**, which is both the right answer -- zero is a multiple of
+ * everything -- and the case that would otherwise divide by `gcd(0, 0)`.
+ */
+lcm(a: BigInt, b: BigInt) -> BigInt
+    if a.is_zero() || b.is_zero() then return zero()
+
+    abs(mul(div(a, gcd(a, b)), b))
+
+/** `base` raised to `exp`, modulo `m`, by square-and-multiply: `mod_pow(2, 10, 1000)` is `24`.
+ *
+ * **The reduction is what makes it possible at all.** `pow(base, exp)` on its own grows to roughly
+ * `exp * bit_length(base)` bits, so an exponent of a few thousand is a number nobody can hold;
+ * reducing after every squaring keeps every intermediate under twice the modulus.
+ *
+ * **The answer takes the modulus's sign**, which is `mod_floor`'s rule and Python's: it lands in
+ * `0..<m` for a positive `m`. A negative exponent traps -- `base^-1` modulo `m` is the modular
+ * inverse, which exists only where `base` and `m` are coprime and is a different function with a
+ * different failure. A zero modulus traps, as a division by it does.
+ *
+ * **This is NOT constant-time and must not be used where the exponent is a secret.** The loop
+ * multiplies on a set bit and does not on a clear one, so the time it takes reveals how many bits of
+ * the exponent are set, and a cache-timing attacker learns more than that. A constant-time modular
+ * exponentiation is a Montgomery ladder over a Montgomery-form modulus, and it is a separate
+ * function rather than a flag on this one -- saying which one a caller got is the point.
+ */
+mod_pow(base: BigInt, exp: BigInt, m: BigInt) -> BigInt
+    if m.is_zero() then panic("sysl.math.bigint: modular exponentiation by a zero modulus")
+    if exp.minus then panic("sysl.math.bigint: a negative exponent has no integer answer")
+
+    val modulus = abs(m)
+
+    if cmp(modulus, one()) == 0 then return zero()
+
+    var result = one()
+    var b = mod_floor(base, modulus)
+    var e = exp
+
+    while !e.is_zero()
+        if is_odd(e) then result = rem(mul(result, b), modulus)
+
+        e = shr(e, 1)
+
+        if !e.is_zero() then b = rem(mul(b, b), modulus)
+
+    if m.minus && !result.is_zero() then sub(result, modulus) else result
+end mod_pow
+
+/** The largest value whose square is at most `x`: `isqrt(17)` is `4`, and `isqrt(16)` is `4`.
+ *
+ * **Newton's method on the integers, and it lands exactly** -- there is no tolerance to choose and
+ * no epsilon anywhere in it. Starting from a guess at or above the answer, each step `(g + x/g) / 2`
+ * is still at or above it, and the sequence decreases until it cannot; the first step that fails to
+ * decrease is the one that has arrived, and the value before it is the floor. That is the standard
+ * argument and it needs the starting guess to be an over-estimate, which is what the shift gives:
+ * two raised to half the bit length, rounded up, is at least the root.
+ *
+ * **A negative value traps**, there being no integer answer and no reason for this to be the one
+ * function in the module that returns an `Option` for a mistake the caller can see coming.
+ */
+isqrt(x: BigInt) -> BigInt
+    if x.minus then panic("sysl.math.bigint: the square root of a negative number")
+    if x.is_zero() then return zero()
+
+    var g = shl(one(), (bit_length(x) + 1) / 2)
+
+    loop
+        val next = shr(add(g, div(x, g)), 1)
+
+        if cmp(next, g) >= 0 then break
+
+        g = next
+
+    g
+end isqrt

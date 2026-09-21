@@ -1,0 +1,175 @@
+module sysl.math.bigint
+
+import sysl.buf.{Buf, buf}
+import sysl.math.Float
+
+// The conversions to and from the machine's own numbers.
+//
+// `to_long` and `from_int` are on the type itself, those being the two a program reaches for first.
+// What is here is the rest of the surface: the unsigned word, the question a caller asks before
+// narrowing, and the two directions of a `real`.
+//
+// **The floating-point pair is the part that is an algorithm rather than a cast**, and both halves
+// are written to be exact about where they are not.
+//
+// `to_real` is **correctly rounded**: the answer is the nearest `real` to the value, and a tie goes
+// to the even mantissa -- the same rule the hardware applies to every arithmetic result, so a value
+// converted here and a value computed there round the same way. That needs three things out of the
+// magnitude rather than one: the top 53 bits, the bit below them, and whether anything at all is set
+// under that. Taking the top 53 and truncating would be off by one ulp half the time and would round
+// toward zero always, which is a bias a sum of many conversions accumulates.
+//
+// `from_real` is **exact for every finite `real`**, which is easier than it sounds: a double is an
+// integer times a power of two, and both fit here with room to spare. It truncates toward zero, as
+// `long(x)` does on a machine float and as every language's conversion does.
+
+/** The value `n` names, `n` being unsigned -- so the whole 64-bit range, where `from_int` stops at
+ * the largest positive `long`.
+ */
+from_u64(n: u64) -> BigInt
+    if n == 0 then return zero()
+
+    var out: Buf[u32] = buf()
+
+    out.push(u32(n & 0xffffffffu64))
+
+    if n >> 32 != 0 then out.push(u32(n >> 32))
+
+    BigInt(false, out.view())
+end from_u64
+
+impl From[u64] for BigInt
+    from(value: u64) -> BigInt = from_u64(value)
+
+/** The value as a `u64`, or `None` where it is negative or too large.
+ *
+ * **A negative value answers `None` rather than its two's-complement pattern**, which is the one
+ * decision this makes: the bit operations in this module read a negative number as an endless run of
+ * ones, and no truncation of that to 64 bits is more obviously right than any other. A caller that
+ * wants the low word of a two's-complement reading writes `and(x, from_u64(0xffffffffffffffff))`
+ * and gets a value that says what it is.
+ */
+to_u64(x: BigInt) -> Option[u64]
+    if x.minus || x.mag.len > 2 then return None
+
+    Some(low_u64(x.mag))
+
+/** Whether the value still fits a `long`, which is the question in front of every `to_long` and is
+ * worth asking on its own when the answer decides a route rather than a value.
+ */
+fits_long(x: BigInt) -> bool = x.to_long().is_some()
+
+/** The nearest `real` to the value, ties to even, and an infinity where the value is past what a
+ * `real` holds.
+ *
+ * **Every step of the rounding is done on the integer side**, where it is exact, and the result is
+ * assembled by a multiplication that cannot itself round: a mantissa of at most 53 bits converts
+ * exactly, and scaling it by a power of two is exact until it overflows -- at which point it becomes
+ * an infinity, which is the right answer.
+ */
+to_real(x: BigInt) -> real
+    if x.mag.len == 0 then return 0.0
+
+    val bits = bit_length(x)
+
+    // Past 1024 bits nothing is representable and the loop below would spin through a hundred
+    // multiplications to say so.
+    if bits > 1024 then return if x.minus then 0.0 - real.infinity() else real.infinity()
+
+    var m: u64 = 0
+    var e: usize = 0
+
+    if bits <= 53
+        m = low_u64(x.mag)
+    else
+        e = bits - 53
+
+        val (top, _) = shr_mag(x.mag, e)
+
+        m = low_u64(top)
+
+        // The bit below the mantissa decides, and everything under it breaks the tie: round up when
+        // the guard bit is set and either something else survives below it or the mantissa is odd.
+        if bit_of(x.mag, e - 1) && (any_below(x.mag, e - 1) || m & 1 == 1)
+            m += 1
+
+            // Rounding a run of ones up carries into a 54th bit, and the mantissa moves down a place.
+            if m == 0x20000000000000u64
+                m = m >> 1
+                e += 1
+
+    val v = scale_pow2(real(m), e)
+
+    if x.minus then 0.0 - v else v
+end to_real
+
+/** The value `f` names with its fraction discarded, or `None` for a NaN or an infinity.
+ *
+ * **It truncates toward zero**, as `long(f)` does: `from_real(-2.7)` is `-2`. A magnitude below one
+ * truncates to zero, including a negative one, there being no negative zero here.
+ *
+ * **Exact for every finite `real`**, however large -- which is the reason to convert through this
+ * type rather than through a machine integer, where `1e30` has no answer at all.
+ */
+from_real(f: real) -> Option[BigInt]
+    if f.is_nan() || f.is_infinite() then return None
+
+    val t = f.trunc()
+
+    if t == 0.0 then return Some(zero())
+
+    var a = t.abs()
+    var out: Buf[u32] = buf()
+
+    // A limb at a time, off the bottom. Both operations are exact: `a` is a whole number, dividing
+    // by a power of two and truncating is exact, and the difference of two whole `real`s that fits
+    // 32 bits is exact.
+    while a >= 1.0
+        val hi = (a / 4294967296.0).trunc()
+
+        out.push(u32(a - hi * 4294967296.0))
+        a = hi
+
+    Some(normalized(t < 0.0, trimmed(out)))
+end from_real
+
+/** The low 64 bits of a magnitude, which is the whole of it wherever a caller has already checked
+ * that it fits.
+ */
+private[bigint] low_u64(mag: []const u32) -> u64
+    var v: u64 = 0
+
+    if mag.len > 0 then v = u64(mag[0])
+    if mag.len > 1 then v = v | u64(mag[1]) << 32
+
+    v
+end low_u64
+
+/** Whether any bit below index `k` is set, which is the sticky bit a correct rounding needs. */
+private any_below(mag: []const u32, k: usize) -> bool
+    val whole = k / 32
+    val bit = u32(k % 32)
+
+    for i in 0..<whole
+        if i < mag.len && mag[i] != 0 then return true
+
+    bit != 0 && whole < mag.len && mag[whole] << (32 - bit) != 0
+end any_below
+
+/** `v * 2^e`, by multiplications that are each exact until the product leaves the range -- where it
+ * becomes an infinity, which is what the value had become.
+ */
+private scale_pow2(v: real, e: usize) -> real
+    var out = v
+    var k = e
+
+    while k >= 32
+        out = out * 4294967296.0
+        k -= 32
+
+    while k > 0
+        out = out * 2.0
+        k -= 1
+
+    out
+end scale_pow2

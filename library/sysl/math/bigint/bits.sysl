@@ -1,0 +1,311 @@
+module sysl.math.bigint
+
+import sysl.buf.{Buf, buf}
+import sysl.math.Bits
+
+// The bit operations, over the reading of a `BigInt` as a two's-complement number of infinite width.
+//
+// **That reading is the decision this file makes**, and it is Python's: a value is thought of as an
+// endless run of bits, a non-negative number padded upward with zeros and a negative one padded
+// upward with ones. So `-1` is every bit set, `~x` is `-x - 1` whatever `x` was, and `&`, `|` and `^`
+// are total over every pair of signs with no width to agree on first. The alternative — refusing a
+// negative operand, or fixing some width to complement within — makes an operation that is exact
+// everywhere else partial here, and there is nothing a caller could pass as the width that would not
+// be a guess.
+//
+// **The storage is sign and magnitude, so a negative operand is complemented on the fly.** `twos`
+// writes a value into a run of limbs in two's complement, `from_twos` reads one back, and each
+// operator between them is a single loop. The width they agree on is one limb more than the longer
+// operand needs, which is what makes the top limb of each side a pure sign: all zeros or all ones.
+// Without that extra limb a value whose top bit happens to be set would read back as negative.
+//
+// **Only `and`, `or` and `xor` pay for that.** `~` is a subtraction, the shifts move a magnitude and
+// fix the sign afterwards, and the queries below read the magnitude directly -- a bit of a negative
+// number being the complement of the corresponding bit of `|x| - 1`, which is what `-m == ~(m - 1)`
+// says and is cheaper than complementing the whole value to ask about one bit.
+
+/** `a & b`, on the two's-complement reading -- so `(-6) & 3` is `2`. Allocates.
+ *
+ * The sign follows the operation: a bit of the result is set only where both operands have one, and
+ * the sign bit is a bit like any other, so the answer is negative exactly when both operands are.
+ */
+and(a: BigInt, b: BigInt) -> BigInt
+    val w = complement_width(a, b)
+    val x = twos(a, w)
+    val y = twos(b, w)
+    var out: Buf[u32] = buf()
+
+    for i in 0..<w
+        out.push(x.at(i) & y.at(i))
+
+    from_twos(out)
+end and
+
+/** `a | b`, on the two's-complement reading -- so `(-6) | 3` is `-5`. Allocates.
+ *
+ * Negative wins, by the same reading `and` takes from the other side: the sign bit is set where
+ * either operand has it, so one negative operand makes the answer negative.
+ */
+or(a: BigInt, b: BigInt) -> BigInt
+    val w = complement_width(a, b)
+    val x = twos(a, w)
+    val y = twos(b, w)
+    var out: Buf[u32] = buf()
+
+    for i in 0..<w
+        out.push(x.at(i) | y.at(i))
+
+    from_twos(out)
+end or
+
+/** `a ^ b`, on the two's-complement reading -- so `(-6) ^ 3` is `-7`. Allocates.
+ *
+ * The answer is negative when exactly one operand is, which is the sign bit obeying the same rule
+ * every other bit does.
+ */
+xor(a: BigInt, b: BigInt) -> BigInt
+    val w = complement_width(a, b)
+    val x = twos(a, w)
+    val y = twos(b, w)
+    var out: Buf[u32] = buf()
+
+    for i in 0..<w
+        out.push(x.at(i) ^ y.at(i))
+
+    from_twos(out)
+end xor
+
+/** `~x`, which on an infinitely wide two's-complement number is `-x - 1`: `~5` is `-6` and `~(-1)`
+ * is `0`.
+ *
+ * **It is written as the subtraction rather than as a complement loop**, because that is what it is:
+ * inverting every bit of an endless run of them is the identity `-x - 1` and nothing else, and a
+ * loop over the limbs would have to invent a width to stop at.
+ */
+not(x: BigInt) -> BigInt = sub(negate(x), one())
+
+impl BitAnd for BigInt
+    bitand(self, rhs: BigInt) -> BigInt = and(self, rhs)
+
+impl BitOr for BigInt
+    bitor(self, rhs: BigInt) -> BigInt = or(self, rhs)
+
+impl BitXor for BigInt
+    bitxor(self, rhs: BigInt) -> BigInt = xor(self, rhs)
+
+impl Not for BigInt
+    not(self) -> BigInt = not(self)
+
+/** `x << n`, which is `x * 2^n` and keeps the sign. Allocates.
+ *
+ * There is no overflow to think about, which is the whole difference from a machine integer: a shift
+ * left grows the number rather than discarding what leaves the top.
+ */
+shl(x: BigInt, n: usize) -> BigInt
+    if x.is_zero() || n == 0 then return x
+
+    normalized(x.minus, shl_mag(x.mag, n))
+
+/** `x >> n`, **arithmetic**: the result floors toward negative infinity, so `(-1) >> 100` is `-1` and
+ * `(-7) >> 1` is `-4`. Allocates.
+ *
+ * **Flooring is what the two's-complement reading forces**, and it is worth seeing why rather than
+ * taking it as a convention. Shifting an endless run of bits right discards the low ones and drags
+ * the sign down from above, which for a negative number is exactly division rounding away from zero
+ * in magnitude. A truncating shift would disagree with `>>` on every machine integer in the language
+ * and with `div_floor` beside it, and there would then be two different meanings of the same symbol.
+ *
+ * So the magnitude is shifted and rounded **up** where anything was lost, and the sign put back.
+ */
+shr(x: BigInt, n: usize) -> BigInt
+    if x.is_zero() || n == 0 then return x
+
+    val (m, lost) = shr_mag(x.mag, n)
+
+    if !x.minus then return normalized(false, m)
+
+    normalized(true, if lost then add_mag(m, one().mag) else m)
+end shr
+
+impl Shl[usize] for BigInt
+    shl(self, rhs: usize) -> BigInt = shl(self, rhs)
+
+impl Shr[usize] for BigInt
+    shr(self, rhs: usize) -> BigInt = shr(self, rhs)
+
+/** How many bits the **magnitude** occupies, which is zero for zero and is Python's `bit_length`.
+ *
+ * It answers the same number for `x` and for `-x`, the sign not being one of the bits it counts.
+ * That is the question a caller actually has -- how big is this -- and it is the one that makes
+ * `bit_length(x) <= 64` the test for whether a value still fits a machine word.
+ */
+bit_length(x: BigInt) -> usize
+    if x.mag.len == 0 then return 0
+
+    val top = x.mag[x.mag.len - 1]
+
+    (x.mag.len - 1) * 32 + usize(32 - top.leading_zeros())
+end bit_length
+
+/** How many low bits are clear, which is how many times two divides the value.
+ *
+ * **Zero answers zero**, there being no highest power of two dividing it and no honest number to
+ * give; a caller that cares tests `is_zero` first. The sign does not matter: complementing a value
+ * leaves its trailing zeros exactly where they were, since `-m` is `~(m - 1)` and the borrow runs
+ * out at the lowest set bit.
+ */
+trailing_zeros(x: BigInt) -> usize
+    if x.mag.len == 0 then return 0
+
+    var i: usize = 0
+
+    while x.mag[i] == 0
+        i += 1
+
+    i * 32 + usize(x.mag[i].trailing_zeros())
+end trailing_zeros
+
+/** Whether bit `i` is set, on the two's-complement reading -- so every bit of `-1` is set, and every
+ * bit above the magnitude of a negative number is too.
+ *
+ * **A negative value is read through `|x| - 1` rather than complemented whole**: `-m` is `~(m - 1)`,
+ * so a bit of the negative is the complement of the same bit of `m - 1`, and one subtraction answers
+ * any index including the ones past the end. Allocates for a negative `x` and not for a positive.
+ */
+test_bit(x: BigInt, i: usize) -> bool
+    if x.mag.len == 0 then return false
+    if !x.minus then return bit_of(x.mag, i)
+
+    !bit_of(sub_mag(x.mag, one().mag), i)
+end test_bit
+
+/** Whether two divides the value. Zero is even, as it is everywhere else. */
+is_even(x: BigInt) -> bool = x.mag.len == 0 || x.mag[0] & 1 == 0
+
+/** Whether two does not divide the value. */
+is_odd(x: BigInt) -> bool = !is_even(x)
+
+// -- the complement, which is where the two's-complement reading is actually built -----------------
+
+/** How many limbs the pair is complemented into: one more than the longer magnitude needs.
+ *
+ * The extra limb is not slack. It is what makes the top limb of each operand a pure sign -- `0` or
+ * `0xffffffff` -- so that the sign of the result can be read off the top bit of the top limb without
+ * knowing which operand it came from.
+ */
+private complement_width(a: BigInt, b: BigInt) -> usize =
+    (if a.mag.len >= b.mag.len then a.mag.len else b.mag.len) + 1
+
+/** `x` written into `width` limbs in two's complement, least significant first.
+ *
+ * A non-negative value is its magnitude zero-padded; a negative one is that inverted with one added,
+ * carried in 64 bits so the add cannot overflow a limb. `width` is always at least one more than the
+ * magnitude needs, so the carry cannot run off the top.
+ */
+private twos(x: BigInt, width: usize) -> Buf[u32]
+    var out: Buf[u32] = buf()
+
+    for i in 0..<width
+        out.push(if i < x.mag.len then x.mag[i] else 0)
+
+    if x.minus
+        var carry: u64 = 1
+
+        for i in 0..<width
+            val t = u64(~out.at(i)) + carry
+
+            out.set(i, u32(t & 0xffffffffu64))
+            carry = t >> 32
+
+    out
+end twos
+
+/** The value a run of two's-complement limbs names, with the sign taken from the top bit.
+ *
+ * A negative one is complemented back the same way it was written, in place -- the buffer belongs to
+ * the operator that filled it and nothing else can see it change.
+ */
+private from_twos(t: Buf[u32]) -> BigInt
+    var b = t
+    val n = b.len()
+
+    if n == 0 || b.at(n - 1) >> 31 == 0 then return normalized(false, trimmed(b))
+
+    var carry: u64 = 1
+
+    for i in 0..<n
+        val v = u64(~b.at(i)) + carry
+
+        b.set(i, u32(v & 0xffffffffu64))
+        carry = v >> 32
+
+    normalized(true, trimmed(b))
+end from_twos
+
+/** Bit `i` of a magnitude, and `false` for every index past its top limb. */
+private[bigint] bit_of(mag: []const u32, i: usize) -> bool
+    val limb = i / 32
+
+    if limb >= mag.len then return false
+
+    mag[limb] >> u32(i % 32) & 1 == 1
+end bit_of
+
+/** `mag << n`, growing by as many limbs as the shift needs.
+ *
+ * The bits carried between limbs are taken with `>> (32 - bit)`, which is a shift by the whole width
+ * when `bit` is zero and is undefined there -- so the limb-aligned case is guarded rather than
+ * folded in.
+ */
+private[bigint] shl_mag(mag: []const u32, n: usize) -> []const u32
+    val whole = n / 32
+    val bit = u32(n % 32)
+    var out: Buf[u32] = buf()
+
+    for _ in 0..<whole
+        out.push(0)
+
+    var carry: u32 = 0
+
+    for i in 0..<mag.len
+        out.push(mag[i] << bit | carry)
+        carry = if bit == 0 then 0 else mag[i] >> (32 - bit)
+
+    if carry != 0 then out.push(carry)
+
+    trimmed(out)
+end shl_mag
+
+/** `mag >> n`, and whether any set bit was discarded -- which is what a caller flooring a negative
+ * number needs and cannot recover afterwards.
+ */
+private[bigint] shr_mag(mag: []const u32, n: usize) -> ([]const u32, bool)
+    val whole = n / 32
+    val bit = u32(n % 32)
+
+    if whole >= mag.len then return (empty(), mag.len > 0)
+
+    var lost = false
+
+    for i in 0..<whole
+        if mag[i] != 0 then lost = true
+
+    if bit != 0 && mag[whole] << (32 - bit) != 0 then lost = true
+
+    var out: Buf[u32] = buf()
+
+    for i in whole..<mag.len
+        var v = mag[i] >> bit
+
+        if bit != 0 && i + 1 < mag.len then v = v | mag[i + 1] << (32 - bit)
+
+        out.push(v)
+
+    (trimmed(out), lost)
+end shr_mag
+
+/** A sign and a magnitude as a value, with the one rule the representation has: zero is never
+ * negative, so a cancelled magnitude drops the sign it was carrying.
+ */
+private[bigint] normalized(minus: bool, mag: []const u32) -> BigInt =
+    if mag.len == 0 then zero() else BigInt(minus, mag)
