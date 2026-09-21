@@ -70,8 +70,14 @@ class ArcCodegenTests extends AnyFreeSpec with CodegenSupport {
     out should include regex store
   }
 
-  "a function owns its parameters and hands back its result with a count taken" in {
-    val out = ir(point + "keep(p: &Point) -> &Point = p\nvar q: &Point = Point(1, 2)\nvar r = keep(q)")
+  // A count of its own is what a function takes when it *can* release something, which is every
+  // function but the leaf reader `BorrowedParams` describes — that one reads through the caller's
+  // count instead, and `BorrowedParamTests` is where the difference is asserted. The result's count
+  // is taken either way, because what comes back is the caller's to hold.
+  "a function that can release owns its parameters and hands back its result with a count taken" in {
+    val src = point + "keep(p: &Point) -> &Point\n    print(p.x)\n    p\n" +
+      "var q: &Point = Point(1, 2)\nvar r = keep(q)"
+    val out = ir(src)
 
     out should include("call void @arc.retain(ptr %p.param)")
     out should include regex raw"call void @arc\.release\(ptr %t\d+\)\n  ret ptr %t\d+"

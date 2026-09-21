@@ -53,11 +53,16 @@ class ArrayCodegenTests extends AnyFreeSpec with CodegenSupport {
     out should include regex raw"getelementptr i32, ptr %a\.addr, i64 %t\d+"
   }
 
+  // The count is taken into a local rather than at the parameter, because a function that only
+  // reads a parameter reads it through the caller's count and takes none (`BorrowedParams`) — and
+  // what this is about is the shape of the walk, which a local's own copy asks for just as well.
   "an array of references is walked with a loop, not an unrolled chain" in {
     val src =
       """struct P
         |    x: int
-        |hold(a: [4]&P) -> int = a[0].x
+        |hold(a: [4]&P) -> int
+        |    var kept = a
+        |    kept[0].x
         |var p: &P = P(1)
         |print(hold([p, p, p, p]))
         |""".stripMargin

@@ -209,6 +209,28 @@ reading_within_the_count_is_fine()
     assert_eq(b.at(0), 1)
 end reading_within_the_count_is_fine
 
+// An element that owns storage is the case the int tests above cannot reach: reading one hands the
+// caller a share of the same bytes, and the buffer keeps its own. A read that took one share too few
+// would free the string under the buffer, and one that took one too many would leak it -- so the
+// same element is read repeatedly, and then read again after everything else has let go.
+@test("reading an element that owns storage leaves the buffer holding it")
+reading_a_counted_element_keeps_it()
+    var b: Buf[string] = buf()
+
+    b.extend(["alpha", "beta"])
+
+    var seen = ""
+    var i = 0usize
+
+    while i < 8
+        seen = b.at(0)
+        i += 1
+
+    assert_eq(seen, "alpha")
+    assert_eq(b.at(0), "alpha")
+    assert_eq(b.at(1), "beta")
+end reading_a_counted_element_keeps_it
+
 @test(should_trap)
 writing_past_the_count_traps()
     var b: Buf[int] = buf()

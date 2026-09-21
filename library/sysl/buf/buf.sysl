@@ -33,15 +33,13 @@ struct Buf[T]
     is_empty(self) -> bool = self.count == 0
 
     at(self, i: usize) -> T
-        if i >= self.count
-            print("panic: index", i, "past the", self.count, "elements of a Buf")
-            exit(1)
+        if i >= self.count then past_end(i, self.count)
+
         self.elems[i]
 
     set(*self, i: usize, v: T)
-        if i >= self.count
-            print("panic: index", i, "past the", self.count, "elements of a Buf")
-            exit(1)
+        if i >= self.count then past_end(i, self.count)
+
         self.elems[i] = v
 
     push(*self, v: T)
@@ -115,9 +113,7 @@ struct Buf[T]
      * has no way to represent, and panics the way every other index past the end does.
      */
     insert(*self, i: usize, v: T)
-        if i > self.count
-            print("panic: index", i, "past the", self.count, "elements of a Buf")
-            exit(1)
+        if i > self.count then past_end(i, self.count)
 
         self.push(v)
 
@@ -131,9 +127,7 @@ struct Buf[T]
     end insert
 
     remove(*self, i: usize) -> T
-        if i >= self.count
-            print("panic: index", i, "past the", self.count, "elements of a Buf")
-            exit(1)
+        if i >= self.count then past_end(i, self.count)
 
         var gone = self.elems[i]
 
@@ -149,6 +143,16 @@ struct Buf[T]
      */
     view(self) -> []T = self.elems[..<self.count]
 end Buf
+
+// The report an index past the end makes, out of line because of what a bounds-checked member costs
+// when it is not. Written inline, the report is a dozen calls in the middle of a two-instruction
+// accessor: the whole member is then too big for a caller to absorb, so every read is a call and a
+// frame. Behind a name that does not return, what is left where the check was is a compare and a
+// branch, and the accessor is small enough to disappear into its caller.
+private past_end(i: usize, n: usize) -> never
+    print("panic: index", i, "past the", n, "elements of a Buf")
+    exit(1)
+end past_end
 
 /** A buffer compares as the sequence it holds, which is `view()` -- the elements it actually has,
  * rather than the backing slice, whose slots past `count` were never written.

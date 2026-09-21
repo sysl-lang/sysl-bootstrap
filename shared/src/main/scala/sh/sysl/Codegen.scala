@@ -644,6 +644,11 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     selfParams = f.params
     selfVariant = f.variant
 
+    // A reader that can release nothing reads its parameters through the share its caller is
+    // already holding for the length of the call, so it takes none of its own and gives none back
+    // (`BorrowedParams`). The slot is still written, because the body addresses it like any other.
+    val borrowed = BorrowedParams.borrows(f)
+
     // A zero-sized parameter is not an argument: there is nothing to receive and nothing to keep,
     // so it takes no slot and the emitted signature below does not mention it.
     for (name, ty) <- f.params if !Type.zeroSized(ty) do
@@ -652,11 +657,11 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       // bytes and the count it takes is taken at the slot rather than off a value it never had.
       if layout.indirect(ty) then
         emitMemcpy(Val.Reg(s"$name.addr"), Val.Reg(s"$name.param"), layout.size(ty), layout.align(ty))
-        retainAt(ty, Val.Reg(s"$name.addr"))
+        if !borrowed then retainAt(ty, Val.Reg(s"$name.addr"))
       else
         emit(Inst.Store(ty.lty, Val.Reg(s"$name.param"), Val.Reg(s"$name.addr"), Access.Plain))
-        retainValue(ty, Val.Reg(s"$name.param"))
-      ownSlot(name, ty)
+        if !borrowed then retainValue(ty, Val.Reg(s"$name.param"))
+      if !borrowed then ownSlot(name, ty)
 
     // Where the function calls itself as the last thing it does, that call is a jump to here rather
     // than a second frame (`TailCalls`). The target sits *after* the parameter slots are written and
