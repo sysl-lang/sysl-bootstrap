@@ -416,6 +416,8 @@ object TypedAstPrinterTests {
       |        writes: None
       |        exported: None
       |        section: None
+      |        noinline: false
+      |        cold: false
       |    - TFunc
       |        name: "f"
       |        params: 
@@ -485,6 +487,8 @@ object TypedAstPrinterTests {
       |        writes: None
       |        exported: None
       |        section: None
+      |        noinline: false
+      |        cold: false
       |  main: []
       |  entry: None
       |  precompiled: []

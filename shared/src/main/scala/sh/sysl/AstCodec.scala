@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 55
+  val Version: Int = 56
 
   private val Magic = "sysl-ast"
 
@@ -258,6 +258,8 @@ object AstCodec {
       opt(m.writes)(ns => list(ns)(sref))
       list(m.borrows)(sref)
       bool(m.isStatic)
+      bool(m.noinline)
+      bool(m.cold)
     }
 
     private def variant(v: EnumVariantDecl): Unit = {
@@ -430,7 +432,7 @@ object AstCodec {
         case Variant(e)                   => tok("vnt"); expr(e)
 
         case FuncDecl(n, tps, ps, rt, b, bs, va, vs, tds, tvs, tpk, t, hk, cv, tr, pu, gh, rd, wr, ex, sc,
-                      cr, nd) =>
+                      cr, nd, ni, cd) =>
           tok("fn"); sref(n); list(tps)(sref); list(ps)(param); opt(rt)(typ); list(b)(stmt)
           bounds(bs); bool(va); vis(vs); tdefaults(tds); tdefaults(tvs); list(tpk.toList)(sref)
           opt(t)(testAttr); opt(hk)(hookAttr)
@@ -454,6 +456,11 @@ object AstCodec {
           // consumer. A declaration that dropped it would be a capability requirement that held
           // inside the library and nowhere else.
           list(nd)(sref)
+          // `@noinline` and `@cold` travel because they are properties of the **definition**, and a
+          // generic's definition is monomorphized in the consumer. A declaration that dropped them
+          // would be a library whose rare path is kept out of line in its own build and folded back
+          // into every caller that reads it from an artifact.
+          bool(ni); bool(cd)
 
         case ExternDecl(n, ps, rt, va, lk, vs, nd) =>
           tok("ext"); sref(n); list(ps)(param); opt(rt)(typ); bool(va); opt(lk)(sref); vis(vs)
@@ -752,7 +759,7 @@ object AstCodec {
       at(MethodDecl(sref(), opt(recv()), bool(), list(sref()), list(param()), opt(typ()),
         list(stmt()), bounds(), tdefaults(), vis(), bool(), bool(),
         crossing = list(sref()), reads = opt(list(sref())), writes = opt(list(sref())),
-        borrows = list(sref()), isStatic = bool()))
+        borrows = list(sref()), isStatic = bool(), noinline = bool(), cold = bool()))
 
     private def variant(): EnumVariantDecl =
       at(EnumVariantDecl(sref(), opt(expr()), list(param())))
@@ -887,7 +894,7 @@ object AstCodec {
             opt(hookAttr()),
             opt(at(CallConv(sref(), opt(sref())))), bool(), bool(), bool(),
             opt(list(sref())), opt(list(sref())), opt(at(ExportAttr(opt(sref())))), opt(sref()),
-            list(sref()), list(sref()))
+            list(sref()), list(sref()), bool(), bool())
         case "ext" =>
           ExternDecl(sref(), list(param()), opt(typ()), bool(), opt(sref()), vis(), list(sref()))
         case "extv" =>

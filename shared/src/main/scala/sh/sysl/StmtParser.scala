@@ -186,6 +186,14 @@ trait StmtParser
           err("'@pure' already says '@reads()' and '@writes()', so a frame beside it says one thing " +
             "twice — write the frame alone if the function touches module storage, and '@pure' alone " +
             "if it touches none")
+        // `@ghost` erases the function before codegen, so there is no definition for the optimizer
+        // to be told anything about. The two marks are not merely redundant together; they ask for
+        // opposite things, and nothing would say which the function was held to.
+        case None if as.exists(_ == Attr.Ghost) && as.exists(inlining) =>
+          err(as.filter(inlining).map(a => s"'@${a.word}'").mkString("", " and ", "") +
+            " tell the optimizer about a definition, and '@ghost' means there is none — a ghost " +
+            "function is erased before anything is emitted, so nothing is left to keep out of line " +
+            "or to place away from the hot path")
         // `@thread_local` marks a binding and only a binding, so a set holding it is settled here
         // rather than by any of the rules below — every one of those asks which *kind* of
         // declaration is coming, and this one already knows.
@@ -362,6 +370,14 @@ trait StmtParser
   private def places(a: Attr): Boolean = a match
     case _: Attr.Section => true
     case _               => false
+
+  /** Whether an attribute tells the optimizer how a definition is reached — `@noinline` and
+   * `@cold`. They are one category because the one thing either needs is a definition to be about,
+   * which is what `@ghost` takes away.
+   */
+  private def inlining(a: Attr): Boolean = a match
+    case Attr.NoInline | Attr.Cold => true
+    case _                         => false
 
   /** Whether an attribute asks for **one copy per thread**, which is `@thread_local` and only
    * `@thread_local`. It is a category of its own for the reason `@section` is: it marks a binding

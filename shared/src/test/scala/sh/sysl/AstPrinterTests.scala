@@ -600,6 +600,8 @@ object AstPrinterTests {
       |        section: None
       |        crossing: []
       |        needs: []
+      |        noinline: false
+      |        cold: false
       |    - FuncDecl
       |        name: "larger"
       |        tparams: ["T"]
@@ -665,6 +667,8 @@ object AstPrinterTests {
       |        section: None
       |        crossing: []
       |        needs: []
+      |        noinline: false
+      |        cold: false
       |    - FuncDecl
       |        name: "add"
       |        tparams: []
@@ -724,6 +728,8 @@ object AstPrinterTests {
       |        section: None
       |        crossing: []
       |        needs: []
+      |        noinline: false
+      |        cold: false
       |  module: ModuleName
       |    parts: ["demo"]
       |  capabilities: []

@@ -513,6 +513,12 @@ case class MethodDecl(
       * function it is, with no second case to write.
       */
     isStatic: Boolean = false,
+    /** `@noinline` — see `FuncDecl.noinline`. A member lowers to an ordinary function, and the mark
+      * is about that function, so it travels to the lowered declaration unchanged.
+      */
+    noinline: Boolean = false,
+    /** `@cold` — see `FuncDecl.cold`. */
+    cold: Boolean = false,
 ) extends Positioned {
 
   /** The mode this member takes its receiver in, or `None` for an associated function — which is the
@@ -624,6 +630,24 @@ case class FuncDecl(
       * word from the file header's `@requires(…)`.
       */
     needs: List[String] = Nil,
+    /** `@noinline` — the definition must survive as a call (`reference/attributes.md § @noinline and
+      * @cold`). It lowers to LLVM's bare `noinline` function attribute.
+      *
+      * It is what lets a library keep a rare path out of a hot one. A `private` function lowers to
+      * `internal`, so with a single call site the inliner folds it back into its caller and the
+      * caller is then too large to inline into *its* callers — which is the opposite of what
+      * splitting the rare path out was for.
+      */
+    noinline: Boolean = false,
+    /** `@cold` — the definition is reached rarely (`reference/attributes.md § @noinline and @cold`).
+      * It lowers to LLVM's bare `cold` function attribute.
+      *
+      * It is a separate axis from `noinline` and composes with it, which is LLVM's division rather
+      * than one chosen here: `noinline` forbids inlining outright, while `cold` states a frequency —
+      * the optimizer takes it as a reason to spend nothing on the path and to keep its blocks away
+      * from the hot ones, and still leaves the call eligible for inlining.
+      */
+    cold: Boolean = false,
 ) extends Stmt
 
 /** What `@export` says about the function it is written above (`reference/ffi.md § @export`).
@@ -810,6 +834,20 @@ enum Attr(val word: String) {
     * declaration saying so itself.
     */
   case Needs(caps: List[String]) extends Attr("needs")
+
+  /** `@noinline` and `@cold` — what the optimizer is told about the definition under them
+    * (`reference/attributes.md § @noinline and @cold`).
+    *
+    * **They are two axes and compose**, which is LLVM's division and not one chosen here. `noinline`
+    * forbids inlining; `cold` says the definition is reached rarely, which moves its blocks away
+    * from the hot ones and stops anything being spent on them, while still leaving the call
+    * eligible to be inlined. A rare slow path wants both — kept out of line, and known to be rare.
+    *
+    * Neither takes an argument: there is nothing to configure about a call that stays a call, and
+    * "how cold" is not a thing a program has a number for.
+    */
+  case NoInline extends Attr("noinline")
+  case Cold     extends Attr("cold")
 }
 
 /** `extern name(params) -> ret` — a function this program does not define but may call, resolved

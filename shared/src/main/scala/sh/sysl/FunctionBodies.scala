@@ -304,7 +304,11 @@ trait FunctionBodies extends ModuleStorage {
       f.exported.map(_.symbol.getOrElse(Modules.bare(f.name))),
       // `@section` travels as written: the name is the target's spelling, so there is nothing here to
       // resolve it against and nothing downstream that would rather have it in another form.
-      f.section)
+      f.section,
+      // Both reach the emitted `define` line and nothing else. They travel per **instantiation**
+      // rather than per declaration, which is what a generic marked with either one means: every
+      // copy the program asks for carries the mark the declaration was written with.
+      f.noinline, f.cold)
       // **The declaration's own position travels with it**, which is what lets the checks that run
       // on the *typed* tree point somewhere. `Exports.check` and `TailCalls.check` both complain
       // about a whole function rather than about an expression inside one, and until this they

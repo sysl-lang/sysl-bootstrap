@@ -726,7 +726,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       ir.FuncSig(symbolOf(f.name),
                  syslFnType(f.retTy, f.params, f.variadic, Some(f)),
                  if f.internal then ir.Linkage.Internal else ir.Linkage.Default,
-                 convention(f), attribute(f), f.section))
+                 convention(f), attribute(f), f.section, bareAttributes(f)))
   }
 
   /** What a sysl function looks like to LLVM, which is what its **definition** writes and what a
@@ -783,6 +783,15 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     f.conv.flatMap(_ => Conventions.interruptForm(target.cpu).toOption) match
       case Some(Conventions.Form.Convention(llvm)) => Some(llvm)
       case _                                       => None
+
+  /** The **enum** function attributes this definition carries, which LLVM writes as bare keywords
+   * rather than as quoted pairs (`reference/attributes.md § @noinline and @cold`).
+   *
+   * They are written in LLVM's own order — `noinline` before `cold` — so that a definition carrying
+   * both reads the same way whichever order the attributes were written above it.
+   */
+  private def bareAttributes(f: TFunc): List[String] =
+    List(Option.when(f.noinline)("noinline"), Option.when(f.cold)("cold")).flatten
 
   private def attribute(f: TFunc): List[(String, String)] =
     f.conv.zip(Conventions.interruptForm(target.cpu).toOption) match

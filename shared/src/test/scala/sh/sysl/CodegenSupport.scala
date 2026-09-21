@@ -1,5 +1,7 @@
 package sh.sysl
 
+import io.github.edadma.cross_platform.*
+
 import org.scalatest.Assertions
 import org.scalatest.matchers.should.Matchers
 
@@ -73,6 +75,45 @@ trait CodegenSupport extends Matchers { this: Assertions =>
    * none. Compiled once — it is the slowest thing here, and every call wants the same answer.
    */
   private lazy val libraryEnvs: Set[String] = envDefs(ir("print(1)\n")).keySet
+
+  /** The IR a real **optimizer** leaves of a program, rather than the IR the compiler emitted.
+   *
+   * Some claims are only about what survives `-O2`: that a definition is still a definition, that a
+   * call is still a call. Nothing in the unoptimized text can answer one of those — every function
+   * is there and every call is made — so the question has to be put to clang, exactly as an ABI
+   * question is put to it rather than remembered.
+   *
+   * The IR goes through a `.ll` file so clang reads it as IR rather than as C, and the result comes
+   * back on stdout because there is nothing here that wants a file. A machine with no clang
+   * **cancels** the case by name rather than passing it.
+   */
+  protected def optimizedIr(src: String, level: String = "2"): String = {
+    if !Toolchain.clangAvailable then cancel("clang is not installed, so there is no optimizer to ask")
+
+    val path = createTempFile("sysl-optimized-", ".ll")
+
+    try {
+      writeFile(path, ir(src))
+
+      val r = exec(Seq("clang", s"-O$level", "-S", "-emit-llvm", "-o", "-", path))
+
+      withClue(s"clang refused the emitted IR:\n${r.stderr}")(r.exitCode shouldBe 0)
+      r.stdout
+    } finally try deleteFile(path) catch case _: Exception => ()
+  }
+
+  /** Whether some IR defines a function whose symbol holds `name` — the question "did this survive
+   * the optimizer", asked without spelling a mangled symbol out.
+   */
+  protected def defines(out: String, name: String): Boolean =
+    out.linesIterator.exists(l => l.startsWith("define") && l.contains(name))
+
+  /** The `define` line of the function whose symbol holds `name`, for an assertion about what the
+   * line says rather than about whether it is there.
+   */
+  protected def defineLine(out: String, name: String): String =
+    out.linesIterator.find(l => l.startsWith("define") && l.contains(name))
+      .getOrElse(fail(s"nothing defines a function named '$name':\n$out"))
 
   /** The IR for a program built for a machine other than this one (`getting-started/cli.md §
    * targets`). Reading the text is the whole of what a cross-target test can do — there is nothing

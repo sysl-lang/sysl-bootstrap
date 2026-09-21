@@ -225,6 +225,17 @@ case class TFunc(
       * optimizer would otherwise drop a definition nothing calls.
       */
     section: Option[String] = None,
+    /** `@noinline` was written above it: the definition survives as a call however small it is
+     * (`reference/attributes.md § @noinline and @cold`). It becomes LLVM's bare `noinline` function
+     * attribute on the `define` line and reaches nothing else.
+      */
+    noinline: Boolean = false,
+    /** `@cold` was written above it: the definition is reached rarely. It becomes LLVM's bare `cold`
+     * function attribute, and is a separate axis from `noinline` rather than a stronger form of it —
+     * a cold function may still be inlined, and an inlined-away one still says its blocks are
+     * unlikely.
+      */
+    cold: Boolean = false,
 ) extends Positioned
 
 /** A function the linker supplies, which the module declares rather than defines. Only the ones

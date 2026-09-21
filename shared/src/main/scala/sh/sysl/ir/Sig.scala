@@ -171,21 +171,28 @@ enum Linkage {
  */
 case class FuncSig(name: String, ty: FnType, linkage: Linkage = Linkage.Default,
                    cconv: Option[String] = None, attrs: List[(String, String)] = Nil,
-                   section: Option[String] = None) {
+                   section: Option[String] = None, bareAttrs: List[String] = Nil) {
   // `cconv` and `attrs` are the two fields here that are still LLVM's own spelling, and knowingly:
   // both carry an interrupt handler's declaration (`reference/ffi.md § interrupt`), which LLVM
   // writes two different ways — x86-64's is a calling convention and RISC-V's a function attribute
   // — and neither is a set the compiler closes, since a new target may bring its own. `Conventions`
   // is where they come from.
+  //
+  // `bareAttrs` is the third, and it is a **separate list because LLVM has two spellings** rather
+  // than because the two mean different things. An enum attribute is a keyword — `noinline`,
+  // `cold` — and a string attribute is a quoted pair; writing one where the other belongs is not
+  // accepted, so which list a name goes in is the whole of the distinction and a single list of
+  // pairs could not express it.
 
 
   /** The `define` line, without the brace the printer adds. */
   def define: String =
-    val fn  = attrs.map((k, v) => s""" "$k"="$v"""").mkString
-    val sec = section.map(s => s""" section "$s"""").getOrElse("")
+    val bare = bareAttrs.map(" " + _).mkString
+    val fn   = attrs.map((k, v) => s""" "$k"="$v"""").mkString
+    val sec  = section.map(s => s""" section "$s"""").getOrElse("")
 
     s"define ${linkage.prefix}${cconv.map(_ + " ").getOrElse("")}${ty.result} " +
-      s"@${LlvmName.safe(name)}(${ty.paramList})$fn$sec"
+      s"@${LlvmName.safe(name)}(${ty.paramList})$bare$fn$sec"
 
   /** The `declare` line. */
   def declare: String = s"declare ${ty.result} @${LlvmName.safe(name)}(${ty.paramList})"
