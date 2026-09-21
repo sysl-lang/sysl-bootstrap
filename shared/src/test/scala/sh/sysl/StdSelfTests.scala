@@ -259,8 +259,13 @@ class StdSelfTests extends AnyFreeSpec with Matchers {
    * against a scan written out longhand in the test file — and two in `sysl.slices`. Measured with
    * the `grep` above before a case was written: it read **776** against a floor of 765, so the drift
    * was the eleven the margin above was, and the number here is the tree's exact count again.
+   *
+   * Raised to **824** for `sysl.math.bigint`'s bit operations, conversions, floored division,
+   * number theory and machine-sized operands (32 cases) and `sysl.math`'s checked and overflowing
+   * arithmetic (5). The runner collected **791** before a case was written, against a floor of 787,
+   * so the drift was four and the margin here is the same four -- 828 collected, 824 required.
    */
-  private val floor = 787
+  private val floor = 824
 
   /** The library, compiled as a **test build of itself**.
    *

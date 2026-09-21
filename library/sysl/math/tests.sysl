@@ -311,3 +311,125 @@ magnitude_orders_by_size()
     assert_eq(largest(xs), 40.0)
     assert_eq(largest(ns), 40)
 end magnitude_orders_by_size
+
+// -- arithmetic that reports its own overflow --------------------------------------------------------
+
+@test("the checked operators answer with the value wherever it fits")
+checked_ordinary_values()
+    assert_eq(checked_add(2, 3).unwrap(), 5)
+    assert_eq(checked_sub(2, 3).unwrap(), -1)
+    assert_eq(checked_mul(6, 7).unwrap(), 42)
+    assert_eq(checked_mul(-6, 7).unwrap(), -42)
+    assert_eq(checked_mul(-6, -7).unwrap(), 42)
+    assert_eq(checked_mul(0, 0).unwrap(), 0)
+    assert_eq(checked_mul(-1, 5).unwrap(), -5)
+    assert_eq(checked_mul(5, -1).unwrap(), -5)
+end checked_ordinary_values
+
+@test("the checked operators refuse at the ends of the width they are used at")
+checked_refuses_at_the_edges()
+    val imax: int = 2147483647
+    val imin: int = -2147483648
+
+    assert(checked_add(imax, 1).is_none())
+    assert(checked_sub(imin, 1).is_none())
+    assert(checked_mul(imin, -1).is_none())
+    assert(checked_mul(-1, imin).is_none())
+    assert_eq(checked_add(imax, -1).unwrap(), 2147483646)
+    assert_eq(checked_mul(imin, 1).unwrap(), imin)
+
+    val lmax: long = 9223372036854775807
+    val lmin: long = -9223372036854775807 - 1
+
+    assert(checked_add(lmax, 1).is_none())
+    assert(checked_add(lmin, -1).is_none())
+    assert(checked_sub(lmin, 1).is_none())
+    assert(checked_sub(lmax, -1).is_none())
+    assert_eq(checked_sub(lmax, 1).unwrap(), 9223372036854775806)
+
+    // The pair a machine divide cannot take, which is why `-1` is answered before anything divides.
+    assert(checked_mul(lmin, -1).is_none())
+    assert(checked_mul(-1, lmin).is_none())
+    assert_eq(checked_mul(lmin, 1).unwrap(), lmin)
+    assert_eq(checked_mul(1, lmin).unwrap(), lmin)
+    assert_eq(checked_mul(lmax, -1).unwrap(), -9223372036854775807)
+end checked_refuses_at_the_edges
+
+@test("the multiplication is right on either side of the bar that picks its route")
+checked_mul_takes_both_routes()
+    // Well under the bar, where the leading-zero counts settle it without dividing.
+    val small: long = 1000
+
+    assert_eq(checked_mul(small, small).unwrap(), 1000000)
+
+    // Either side of the largest product that fits, where only the division answers.
+    val under: long = 3037000499
+    val over: long = 3037000500
+
+    assert_eq(checked_mul(under, under).unwrap(), 9223372030926249001)
+    assert(checked_mul(over, over).is_none())
+
+    // And a product that needs the full width and fits exactly.
+    val half: long = 4294967296
+
+    assert(checked_mul(half, half).is_none())
+    assert_eq(checked_mul(half, 2147483647).unwrap(), 9223372032559808512)
+end checked_mul_takes_both_routes
+
+@test("the overflowing operators hand back the wrapped value beside the flag")
+overflowing_carries_the_value()
+    val lmax: long = 9223372036854775807
+    val lmin: long = -9223372036854775807 - 1
+
+    val (sum, sum_over) = overflowing_add(lmax, 1)
+
+    assert_eq(sum, lmin)
+    assert(sum_over)
+
+    val (difference, difference_over) = overflowing_sub(lmin, 1)
+
+    assert_eq(difference, lmax)
+    assert(difference_over)
+
+    val (product, product_over) = overflowing_mul(lmin, -1)
+
+    assert_eq(product, lmin)
+    assert(product_over)
+
+    val (fine, fine_over) = overflowing_add(2, 3)
+
+    assert_eq(fine, 5)
+    assert(!fine_over)
+end overflowing_carries_the_value
+
+@test("the checked operators agree with a wider computation over every pair of i8")
+checked_against_a_wider_width()
+    // Every operand a byte can hold against every other, with the answer computed at a width where
+    // it cannot overflow -- which is the only oracle that owes nothing to the code under test.
+    for a in -128..<128
+        for b in -128..<128
+            val x = i8(a)
+            val y = i8(b)
+            val sum: long = long(a) + long(b)
+            val difference: long = long(a) - long(b)
+            val product: long = long(a) * long(b)
+
+            check_one(x, y, sum, checked_add(x, y), overflowing_add(x, y))
+            check_one(x, y, difference, checked_sub(x, y), overflowing_sub(x, y))
+            check_one(x, y, product, checked_mul(x, y), overflowing_mul(x, y))
+end checked_against_a_wider_width
+
+/** One operation's two answers against the width-independent truth: the checked form carries the
+ * value exactly when it fits, and the overflowing form carries the wrapped value always and the
+ * flag that says which happened.
+ */
+private check_one(a: i8, b: i8, wide: long, checked: Option[i8], overflowing: (i8, bool))
+    val fits = wide >= -128 && wide <= 127
+    val (wrapped, flag) = overflowing
+
+    assert_eq(checked.is_some(), fits)
+    assert_eq(flag, !fits)
+    assert_eq(wrapped, i8(wide))
+
+    if fits then assert_eq(checked.unwrap(), i8(wide))
+end check_one
