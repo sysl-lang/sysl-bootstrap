@@ -36,15 +36,25 @@ import sysl.buf.{Buf, buf}
  * program is slow rather than decisions this module has to make now. What this is for is money,
  * identifiers, checksums and the occasional exact computation, none of which is GMP's territory.
  *
+ * ## The bit operations, and the reading they settled on
+ *
+ * `and`, `or`, `xor`, `~` and the two shifts read a value as a **two's-complement number of
+ * infinite width**: a non-negative one padded upward with zeros and a negative one padded upward
+ * with ones. That is Python's reading, and it is the only one that is total over both signs without
+ * a width the caller would have had to invent. So `~x` is `-x - 1` for every `x`, `-1` has every bit
+ * set, and `>>` floors toward negative infinity rather than toward zero. `bits.sysl` builds it and
+ * writes the argument out.
+ *
+ * **There are two divisions and both are here.** `div_rem` truncates, which is what the hardware and
+ * the language's own `/` do; `div_rem_floor` rounds toward negative infinity and leaves the
+ * remainder with the divisor's sign, which is what puts a modulus in a fixed range. A language
+ * implemented over this type picks one and says which.
+ *
  * ## What is deliberately not here
  *
- * **Modular exponentiation, primality, a gcd.** Each is a real function with real subtleties -- a
- * constant-time `mod_pow` is a different function from a fast one -- and none is needed by anything
- * this library ships. They belong here eventually and belong here written on purpose.
- *
- * **Bit operations.** `and`, `or` and a shift over a sign-and-magnitude number mean whatever a
- * two's-complement reading of an infinite-width value means, which is a decision rather than an
- * implementation, and nothing has asked.
+ * **Primality.** A useful test is Miller-Rabin, and which witness set or how many rounds it should
+ * use is a decision about what the caller is doing rather than one this module can make. Nothing
+ * here needs one, and a wrong answer from a primality test is the expensive kind.
  */
 
 /** An integer of no fixed width.

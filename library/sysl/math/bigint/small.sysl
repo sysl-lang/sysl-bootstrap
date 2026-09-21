@@ -1,0 +1,123 @@
+module sysl.math.bigint
+
+import sysl.buf.{Buf, buf}
+
+// Arithmetic between a `BigInt` and a machine-sized operand.
+//
+// **This exists for the program that has one big number and one small one**, which is the shape a
+// language implemented over this type produces constantly: an interpreter whose integers are a
+// 64-bit fast path promoting to this on overflow spends its life adding a literal to a value that
+// has already grown, and never holds two large numbers at once. Written as `add(a, from_int(n))`,
+// every one of those builds a one-limb `BigInt` to throw away a line later.
+//
+// **What is actually saved varies by operation, and the docstrings say which is which** rather than
+// implying the whole file is a fast path. `cmp_long` allocates nothing at all, which is the one that
+// matters most -- a comparison against a small constant is what a loop condition is. `mul_long` and
+// `div_rem_long` take a single-limb route where the operand fits a limb, which is the common case
+// and is a pass over the limbs rather than a pass plus a general multiply. `add_long` and `sub_long`
+// are the general functions with the conversion written once, and are here so that a caller's code
+// reads the same for all five.
+
+/** `a + n`. */
+add_long(a: BigInt, n: long) -> BigInt
+    if n == 0 then return a
+    if a.is_zero() then return from_int(n)
+
+    add(a, from_int(n))
+
+/** `a - n`.
+ *
+ * **Written as a subtraction rather than as `add_long(a, -n)`**, which would be wrong at the most
+ * negative `long`: that value has no positive counterpart, so negating it in a `long` wraps back to
+ * itself and the answer would come out added instead of taken away.
+ */
+sub_long(a: BigInt, n: long) -> BigInt
+    if n == 0 then return a
+
+    sub(a, from_int(n))
+
+/** `a * n`, one pass over the limbs where `n` fits a limb.
+ *
+ * The magnitude of the operand is taken as a `u64` before the width is tested, which is what lets
+ * the most negative `long` take the general route rather than wrapping on the way to it.
+ */
+mul_long(a: BigInt, n: long) -> BigInt
+    if n == 0 || a.is_zero() then return zero()
+
+    val w = if n < 0 then 0u64 - u64(n) else u64(n)
+    val negative = a.minus != (n < 0)
+
+    if w > 0xffffffffu64 then return mul(a, from_int(n))
+
+    normalized(negative, mul_mag_small(a.mag, u32(w)))
+end mul_long
+
+/** `-1`, `0` or `1` as `a` is below, equal to or above `n`. **Allocates nothing.**
+ *
+ * That is the whole reason it is here rather than left to `cmp(a, from_int(n))`. A comparison is
+ * what a loop tests and what a sort calls, so it is the operation most often on a hot path and the
+ * one where building a value to throw away is least defensible. The signs decide it where they
+ * differ, a magnitude of more than two limbs is past anything a `long` holds, and what is left is
+ * two `u64`s.
+ */
+cmp_long(a: BigInt, n: long) -> int
+    val sa = a.sign()
+    val sn = if n == 0 then 0 elif n < 0 then -1 else 1
+
+    if sa != sn then return if sa < sn then -1 else 1
+    if sa == 0 then return 0
+    if a.mag.len > 2 then return if a.minus then -1 else 1
+
+    val m = low_u64(a.mag)
+    val w = if n < 0 then 0u64 - u64(n) else u64(n)
+    val c = if m < w then -1 elif m > w then 1 else 0
+
+    if a.minus then 0 - c else c
+end cmp_long
+
+/** `(quotient, remainder)` for a machine-sized divisor, the remainder as a `long`.
+ *
+ * **The remainder always fits**, which is what makes the second result a `long` rather than another
+ * `BigInt`: it is smaller in magnitude than the divisor, and the divisor was a `long`. It truncates
+ * and takes the dividend's sign, as `div_rem` does -- `div_rem_floor` is the other rounding and has
+ * no small-operand form, a caller wanting it having `div_rem_floor(a, from_int(n))`.
+ *
+ * **A zero divisor traps**, as it does everywhere else in this module.
+ */
+div_rem_long(a: BigInt, n: long) -> (BigInt, long)
+    if n == 0 then panic("sysl.math.bigint: division by zero")
+    if a.is_zero() then return (zero(), 0)
+
+    val w = if n < 0 then 0u64 - u64(n) else u64(n)
+    val negative = a.minus != (n < 0)
+
+    if w > 0xffffffffu64
+        val (q, r) = div_rem(a, from_int(n))
+
+        return (q, r.to_long().unwrap())
+
+    val (qm, rm) = short_divide(a.mag, u32(w))
+    val rest = if rm.len == 0 then 0 else long(rm[0])
+
+    (normalized(negative, qm), if a.minus then 0 - rest else rest)
+end div_rem_long
+
+/** `mag * m`, the operand fitting a limb -- the multiply written for the case where one side is a
+ * single digit, which is a pass over the limbs rather than the quadratic loop.
+ */
+private mul_mag_small(mag: []const u32, m: u32) -> []const u32
+    var out: Buf[u32] = buf()
+    var carry: u64 = 0
+
+    for i in 0..<mag.len
+        val t = u64(mag[i]) * u64(m) + carry
+
+        out.push(u32(t & 0xffffffffu64))
+        carry = t >> 32
+
+    while carry != 0
+        out.push(u32(carry & 0xffffffffu64))
+        carry = carry >> 32
+
+    trimmed(out)
+end mul_mag_small

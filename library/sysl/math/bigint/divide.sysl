@@ -223,3 +223,33 @@ rem(a: BigInt, b: BigInt) -> BigInt = div_rem(a, b).1
 
 impl Rem for BigInt
     rem(self, rhs: BigInt) -> BigInt = rem(self, rhs)
+
+/** `(quotient, remainder)` **floored**: the quotient rounds toward negative infinity and the
+ * remainder takes the **divisor's** sign. `div_rem_floor(-7, 2)` is `(-4, 1)`.
+ *
+ * **This is the other division, and both are here because neither is the right one.** `div_rem`
+ * truncates, which is what the hardware does and what makes `abs(a / b)` independent of the signs;
+ * this floors, which is what makes the remainder land in a fixed range -- `0..<b` for a positive
+ * divisor, whatever the dividend was. A program indexing a ring buffer, reducing modulo a modulus,
+ * or bucketing a signed coordinate wants the second and gets a negative index from the first.
+ *
+ * Python's `//` and `%` are this pair, and a language implemented over this type reaches for it.
+ *
+ * **The identity `a == q * b + r` holds for both**, which is what makes them two roundings of one
+ * division rather than two different operations. They differ only where the remainder is non-zero
+ * and the operands' signs disagree, and there the quotient is one lower and the remainder one
+ * divisor higher.
+ */
+div_rem_floor(a: BigInt, b: BigInt) -> (BigInt, BigInt)
+    val (q, r) = div_rem(a, b)
+
+    if r.is_zero() || a.minus == b.minus then return (q, r)
+
+    (sub(q, one()), add(r, b))
+end div_rem_floor
+
+/** `a` divided by `b`, rounding toward negative infinity: `div_floor(-7, 2)` is `-4`. */
+div_floor(a: BigInt, b: BigInt) -> BigInt = div_rem_floor(a, b).0
+
+/** `a` modulo `b`, taking the divisor's sign: `mod_floor(-7, 2)` is `1`. */
+mod_floor(a: BigInt, b: BigInt) -> BigInt = div_rem_floor(a, b).1

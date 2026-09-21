@@ -2,6 +2,7 @@ module sysl.math.bigint
 @tests
 
 import sysl.buf.{Buf, buf}
+import sysl.math.Float
 import sysl.rand.{Rng, rng}
 
 // What `sysl.math.bigint` claims, asserted in sysl.
@@ -273,3 +274,476 @@ parse_refuses()
     assert(parse_radix("2", 2).is_none())
     assert(parse_radix("7", 1).is_none())
     assert(parse_radix("7", 37).is_none())
+
+// -- the bit operations ----------------------------------------------------------------------------
+
+/** `2^n`, built by the multiply rather than by a shift -- so that the shift can be asserted against
+ * it without the assertion being the shift's own answer twice.
+ */
+private two_pow(n: usize) -> BigInt = pow(from_int(2), n)
+
+@test("the bit operators answer what an infinite two's-complement reading says")
+bitwise_named_values()
+    // Every one of these is what Python answers, which is the reading this module adopted.
+    assert_eq(and(from_int(-6), from_int(3)), from_int(2))
+    assert_eq(or(from_int(-6), from_int(3)), from_int(-5))
+    assert_eq(xor(from_int(-6), from_int(3)), from_int(-7))
+    assert_eq(and(from_int(-6), from_int(-3)), from_int(-8))
+    assert_eq(or(from_int(-6), from_int(-3)), from_int(-1))
+    assert_eq(xor(from_int(-6), from_int(-3)), from_int(7))
+    assert_eq(and(from_int(12), from_int(10)), from_int(8))
+    assert_eq(or(from_int(12), from_int(10)), from_int(14))
+    assert_eq(xor(from_int(12), from_int(10)), from_int(6))
+end bitwise_named_values
+
+@test("the complement is the subtraction it is defined to be")
+bitwise_complement()
+    assert_eq(not(from_int(5)), from_int(-6))
+    assert_eq(not(from_int(-6)), from_int(5))
+    assert_eq(not(zero()), from_int(-1))
+    assert_eq(not(from_int(-1)), zero())
+
+    // `~` dispatches to the same function, and complementing twice is the identity.
+    assert_eq(~from_int(5), from_int(-6))
+    assert_eq(not(not(from_int(1234567890123))), from_int(1234567890123))
+end bitwise_complement
+
+@test("the operators dispatch from the symbols as well as from the names")
+bitwise_operators()
+    val a = from_int(-6)
+    val b = from_int(3)
+
+    assert_eq(a & b, and(a, b))
+    assert_eq(a | b, or(a, b))
+    assert_eq(a ^ b, xor(a, b))
+    assert_eq(a << 4, shl(a, 4))
+    assert_eq(a >> 1, shr(a, 1))
+end bitwise_operators
+
+@test("the identities hold, including the ones only an infinite width gives")
+bitwise_identities()
+    val x = parse("-123456789012345678901234567890").unwrap()
+    val ones = from_int(-1)
+
+    assert_eq(and(x, ones), x)
+    assert_eq(or(x, zero()), x)
+    assert_eq(xor(x, x), zero())
+    assert_eq(and(x, zero()), zero())
+    assert_eq(or(x, ones), ones)
+    assert_eq(xor(x, ones), not(x))
+end bitwise_identities
+
+@test("the operators agree with De Morgan and with each other over generated pairs")
+bitwise_laws()
+    var g = rng(271828, 18)
+
+    for n in 0..<60
+        val a = random_big(&g, 1 + usize(n % 4), n % 2 == 0)
+        val b = random_big(&g, 1 + usize(n % 3), n % 3 == 0)
+
+        // A pair of magnitudes of different lengths and every combination of signs, so the
+        // complement width and the sign extension above the shorter operand are both exercised.
+        assert_eq(not(and(a, b)), or(not(a), not(b)))
+        assert_eq(not(or(a, b)), and(not(a), not(b)))
+        assert_eq(or(and(a, b), xor(a, b)), or(a, b))
+        assert_eq(add(and(a, b), or(a, b)), add(a, b))
+end bitwise_laws
+
+@test("a shift left multiplies and a shift right floors, across the limb boundaries")
+shifts_named_values()
+    assert_eq(shl(from_int(1), 32), two_pow(32))
+    assert_eq(shl(from_int(1), 64), two_pow(64))
+    assert_eq(shl(from_int(-1), 31), from_int(-2147483648))
+    assert_eq(shl(zero(), 99), zero())
+
+    // The flooring cases, which is where this disagrees with a truncating shift.
+    assert_eq(shr(from_int(-1), 100), from_int(-1))
+    assert_eq(shr(from_int(-7), 1), from_int(-4))
+    assert_eq(shr(from_int(-8), 1), from_int(-4))
+    assert_eq(shr(from_int(7), 1), from_int(3))
+    assert_eq(shr(from_int(-1), 0), from_int(-1))
+    assert_eq(shr(two_pow(64), 64), one())
+    assert_eq(shr(from_int(5), 99), zero())
+    assert_eq(shr(from_int(-5), 99), from_int(-1))
+end shifts_named_values
+
+@test("a shift is the multiplication or the floored division it claims to be")
+shifts_against_arithmetic()
+    var g = rng(161803, 7)
+
+    for n in 0..<40
+        val x = random_big(&g, 1 + usize(n % 4), n % 2 == 0)
+
+        // 31, 32 and 33 are the interesting amounts: a limb boundary and either side of it.
+        for k in 0..<5
+            val amount = 30 + usize(k)
+            val p = two_pow(amount)
+
+            assert_eq(shl(x, amount), mul(x, p))
+            assert_eq(shr(x, amount), div_floor(x, p))
+
+        assert_eq(shr(shl(x, 97), 97), x)
+end shifts_against_arithmetic
+
+@test("the bit queries read the magnitude the way Python's do")
+bit_queries()
+    assert_eq(bit_length(zero()), 0)
+    assert_eq(bit_length(one()), 1)
+    assert_eq(bit_length(from_int(255)), 8)
+    assert_eq(bit_length(from_int(256)), 9)
+    assert_eq(bit_length(from_int(4294967295)), 32)
+    assert_eq(bit_length(from_int(4294967296)), 33)
+    assert_eq(bit_length(two_pow(64)), 65)
+
+    // The sign is not one of the bits counted, so a value and its negation answer alike.
+    assert_eq(bit_length(from_int(-255)), 8)
+    assert_eq(bit_length(negate(two_pow(64))), 65)
+
+    assert_eq(trailing_zeros(zero()), 0)
+    assert_eq(trailing_zeros(one()), 0)
+    assert_eq(trailing_zeros(from_int(12)), 2)
+    assert_eq(trailing_zeros(two_pow(96)), 96)
+    assert_eq(trailing_zeros(negate(two_pow(96))), 96)
+end bit_queries
+
+@test("a bit of a negative value is read off the endless run of ones above it")
+test_bit_cases()
+    assert(!test_bit(zero(), 0))
+    assert(!test_bit(zero(), 1000))
+    assert(test_bit(from_int(5), 0))
+    assert(!test_bit(from_int(5), 1))
+    assert(test_bit(from_int(5), 2))
+    assert(!test_bit(from_int(5), 64))
+
+    // `-1` is every bit, and `-2` is every bit but the lowest.
+    assert(test_bit(from_int(-1), 0))
+    assert(test_bit(from_int(-1), 500))
+    assert(!test_bit(from_int(-2), 0))
+    assert(test_bit(from_int(-2), 1))
+    assert(test_bit(from_int(-2), 500))
+
+    // Above a negative value's magnitude every bit is set, which is what the sign extension means.
+    assert(test_bit(negate(two_pow(64)), 64))
+    assert(test_bit(negate(two_pow(64)), 200))
+    assert(!test_bit(negate(two_pow(64)), 63))
+end test_bit_cases
+
+@test("a bit of a positive value is the one the shift puts in the lowest place")
+test_bit_against_shift()
+    var g = rng(141421, 3)
+
+    for n in 0..<20
+        val x = random_big(&g, 2, n % 2 == 0)
+
+        for i in 0usize..<70
+            assert_eq(test_bit(x, i), is_odd(shr(x, i)))
+end test_bit_against_shift
+
+@test("parity is the lowest bit, and zero is even")
+parity()
+    assert(is_even(zero()))
+    assert(!is_odd(zero()))
+    assert(is_odd(one()))
+    assert(is_even(from_int(-4)))
+    assert(is_odd(from_int(-5)))
+    assert(is_even(two_pow(64)))
+    assert(is_odd(add(two_pow(64), one())))
+end parity
+
+// -- the conversions -------------------------------------------------------------------------------
+
+@test("an unsigned word goes in and comes back, past where a long stops")
+u64_round_trip()
+    assert_eq(from_u64(0), zero())
+    assert_eq(from_u64(1), one())
+    assert_eq(to_u64(zero()).unwrap(), 0)
+    assert_eq(from_u64(18446744073709551615u64), sub(two_pow(64), one()))
+    assert_eq(to_u64(sub(two_pow(64), one())).unwrap(), 18446744073709551615u64)
+
+    // The two refusals: a negative value has no unsigned reading here, and `2^64` does not fit.
+    assert(to_u64(from_int(-1)).is_none())
+    assert(to_u64(two_pow(64)).is_none())
+end u64_round_trip
+
+@test("fits_long answers the question to_long is about to answer")
+fits_long_agrees()
+    val most: long = -9223372036854775807 - 1
+
+    assert(fits_long(zero()))
+    assert(fits_long(from_int(most)))
+    assert(fits_long(from_int(9223372036854775807)))
+    assert(!fits_long(two_pow(63)))
+    assert(!fits_long(negate(add(two_pow(63), one()))))
+end fits_long_agrees
+
+@test("a value inside a real's mantissa converts exactly")
+to_real_exact()
+    assert_eq(to_real(zero()), 0.0)
+    assert_eq(to_real(one()), 1.0)
+    assert_eq(to_real(from_int(-1)), -1.0)
+    assert_eq(to_real(from_int(1000000000000000000)), 1.0e18)
+    assert_eq(to_real(two_pow(53)), 9007199254740992.0)
+    assert_eq(to_real(negate(two_pow(53))), -9007199254740992.0)
+    assert_eq(to_real(two_pow(64)), 18446744073709551616.0)
+end to_real_exact
+
+@test("a value past the mantissa rounds to nearest, ties to even")
+to_real_rounds()
+    val base = two_pow(53)
+
+    // `2^53 + 1` is exactly halfway between two representable values and goes to the even one; `+2`
+    // is representable; `+3` is halfway again and goes up, the value below it being odd.
+    assert_eq(to_real(add(base, from_int(1))), 9007199254740992.0)
+    assert_eq(to_real(add(base, from_int(2))), 9007199254740994.0)
+    assert_eq(to_real(add(base, from_int(3))), 9007199254740996.0)
+    assert_eq(to_real(add(base, from_int(4))), 9007199254740996.0)
+
+    // Rounding a run of ones up carries into a new bit, and the answer is the next power of two.
+    assert_eq(to_real(sub(two_pow(64), one())), 18446744073709551616.0)
+    assert_eq(to_real(negate(sub(two_pow(64), one()))), -18446744073709551616.0)
+end to_real_rounds
+
+@test("a value past what a real holds becomes an infinity with the right sign")
+to_real_overflows()
+    assert(to_real(two_pow(2000)).is_infinite())
+    assert(to_real(two_pow(2000)) > 0.0)
+    assert(to_real(negate(two_pow(2000))).is_infinite())
+    assert(to_real(negate(two_pow(2000))) < 0.0)
+
+    // The largest finite real is `(2^53 - 1) * 2^971`, and one bit past it overflows.
+    val largest = mul(sub(two_pow(53), one()), two_pow(971))
+
+    assert(!to_real(largest).is_infinite())
+    assert(to_real(two_pow(1024)).is_infinite())
+end to_real_overflows
+
+@test("a real converts exactly, truncating toward zero")
+from_real_cases()
+    assert_eq(from_real(0.0).unwrap(), zero())
+    assert_eq(from_real(2.5).unwrap(), from_int(2))
+    assert_eq(from_real(-2.7).unwrap(), from_int(-2))
+    assert_eq(from_real(0.5).unwrap(), zero())
+    assert_eq(from_real(-0.5).unwrap(), zero())
+    assert_eq(from_real(1.0e18).unwrap(), from_int(1000000000000000000))
+    assert_eq(from_real(9007199254740992.0).unwrap(), two_pow(53))
+    assert_eq(from_real(18446744073709551616.0).unwrap(), two_pow(64))
+    assert_eq(from_real(-18446744073709551616.0).unwrap(), negate(two_pow(64)))
+end from_real_cases
+
+@test("a NaN and an infinity have no integer answer and say so")
+from_real_refuses()
+    assert(from_real(real.nan()).is_none())
+    assert(from_real(real.infinity()).is_none())
+    assert(from_real(0.0 - real.infinity()).is_none())
+
+@test("the two directions undo each other wherever the value fits a mantissa")
+real_round_trip()
+    var g = rng(577215, 5)
+
+    for n in 0..<40
+        // One limb plus a low bit, which keeps every value inside 53 bits so the conversion out is
+        // exact and the conversion back has something to be exact about.
+        val x = random_big(&g, 1, n % 2 == 0)
+
+        assert_eq(from_real(to_real(x)).unwrap(), x)
+        assert_eq(from_real(to_real(mul(x, two_pow(20)))).unwrap(), mul(x, two_pow(20)))
+end real_round_trip
+
+// -- the floored division --------------------------------------------------------------------------
+
+@test("floored division rounds toward negative infinity and the remainder takes the divisor's sign")
+floor_division_signs()
+    assert_eq(div_floor(from_int(7), from_int(2)), from_int(3))
+    assert_eq(mod_floor(from_int(7), from_int(2)), from_int(1))
+    assert_eq(div_floor(from_int(-7), from_int(2)), from_int(-4))
+    assert_eq(mod_floor(from_int(-7), from_int(2)), from_int(1))
+    assert_eq(div_floor(from_int(7), from_int(-2)), from_int(-4))
+    assert_eq(mod_floor(from_int(7), from_int(-2)), from_int(-1))
+    assert_eq(div_floor(from_int(-7), from_int(-2)), from_int(3))
+    assert_eq(mod_floor(from_int(-7), from_int(-2)), from_int(-1))
+end floor_division_signs
+
+@test("an exact division is the same under both roundings")
+floor_division_exact()
+    assert_eq(div_floor(from_int(-6), from_int(2)), div(from_int(-6), from_int(2)))
+    assert_eq(mod_floor(from_int(-6), from_int(2)), zero())
+    assert_eq(div_floor(zero(), from_int(-3)), zero())
+    assert_eq(mod_floor(zero(), from_int(-3)), zero())
+
+@test("the floored pair satisfies a == q*b + r over generated pairs, with r inside the divisor")
+floor_division_identity()
+    var g = rng(123581, 13)
+
+    for n in 0..<60
+        val a = random_big(&g, 1 + usize(n % 4), n % 2 == 0)
+        val b = random_big(&g, 1 + usize(n % 2), n % 3 == 0)
+
+        if !b.is_zero()
+            val (q, r) = div_rem_floor(a, b)
+
+            assert_eq(add(mul(q, b), r), a)
+
+            // The remainder lands strictly inside the divisor and carries the divisor's sign, which
+            // is the property the truncating pair does not have.
+            assert(cmp(abs(r), abs(b)) < 0)
+            assert(r.is_zero() || r.minus == b.minus)
+end floor_division_identity
+
+// -- the number theory -----------------------------------------------------------------------------
+
+@test("the greatest common divisor, and it is never negative")
+gcd_cases()
+    assert_eq(gcd(from_int(12), from_int(18)), from_int(6))
+    assert_eq(gcd(from_int(-12), from_int(18)), from_int(6))
+    assert_eq(gcd(from_int(12), from_int(-18)), from_int(6))
+    assert_eq(gcd(from_int(-12), from_int(-18)), from_int(6))
+    assert_eq(gcd(from_int(17), from_int(5)), one())
+    assert_eq(gcd(from_int(-9), zero()), from_int(9))
+    assert_eq(gcd(zero(), from_int(9)), from_int(9))
+    assert_eq(gcd(zero(), zero()), zero())
+    assert_eq(gcd(two_pow(64), two_pow(32)), two_pow(32))
+end gcd_cases
+
+@test("the greatest common divisor divides both and nothing larger does, over generated pairs")
+gcd_divides()
+    var g = rng(314159, 11)
+
+    for n in 0..<40
+        val a = random_big(&g, 1 + usize(n % 3), n % 2 == 0)
+        val b = random_big(&g, 1 + usize(n % 2), n % 3 == 0)
+        val d = gcd(a, b)
+
+        if !d.is_zero()
+            assert(rem(a, d).is_zero())
+            assert(rem(b, d).is_zero())
+
+            // Dividing both by it leaves a coprime pair, which is what "greatest" means.
+            assert_eq(gcd(div(a, d), div(b, d)), one())
+end gcd_divides
+
+@test("the least common multiple, which never builds the whole product")
+lcm_cases()
+    assert_eq(lcm(from_int(4), from_int(6)), from_int(12))
+    assert_eq(lcm(from_int(-4), from_int(6)), from_int(12))
+    assert_eq(lcm(from_int(4), from_int(-6)), from_int(12))
+    assert_eq(lcm(zero(), from_int(5)), zero())
+    assert_eq(lcm(from_int(5), zero()), zero())
+    assert_eq(lcm(two_pow(64), two_pow(32)), two_pow(64))
+    assert_eq(lcm(from_int(17), from_int(5)), from_int(85))
+end lcm_cases
+
+@test("modular exponentiation agrees with the definition it is an optimization of")
+mod_pow_against_definition()
+    var g = rng(112358, 9)
+
+    for n in 0..<30
+        val b = random_big(&g, 1, n % 2 == 0)
+        val m = abs(random_big(&g, 1, false))
+        val e = usize(n % 12)
+
+        if !m.is_zero()
+            assert_eq(mod_pow(b, from_int(long(e)), m), mod_floor(pow(b, e), m))
+end mod_pow_against_definition
+
+@test("modular exponentiation at an exponent nothing could raise to directly")
+mod_pow_named_values()
+    assert_eq(mod_pow(from_int(2), from_int(10), from_int(1000)), from_int(24))
+    assert_eq(mod_pow(from_int(3), zero(), from_int(7)), one())
+    assert_eq(mod_pow(from_int(5), from_int(3), one()), zero())
+    assert_eq(mod_pow(zero(), from_int(5), from_int(7)), zero())
+
+    // Fermat's little theorem over a prime, at an exponent whose plain power has 300 million digits.
+    val p = from_int(1000000007)
+
+    assert_eq(mod_pow(from_int(2), from_int(1000000006), p), one())
+    assert_eq(mod_pow(from_int(123456789), from_int(1000000006), p), one())
+
+    // A negative modulus takes the modulus's sign, as the floored remainder does.
+    assert_eq(mod_pow(from_int(2), from_int(3), from_int(-5)), from_int(-2))
+end mod_pow_named_values
+
+@test("the integer square root is the exact floor")
+isqrt_cases()
+    assert_eq(isqrt(zero()), zero())
+    assert_eq(isqrt(one()), one())
+    assert_eq(isqrt(from_int(2)), one())
+    assert_eq(isqrt(from_int(3)), one())
+    assert_eq(isqrt(from_int(4)), from_int(2))
+    assert_eq(isqrt(from_int(8)), from_int(2))
+    assert_eq(isqrt(from_int(9)), from_int(3))
+    assert_eq(isqrt(from_int(10)), from_int(3))
+    assert_eq(isqrt(two_pow(64)), two_pow(32))
+    assert_eq(isqrt(sub(two_pow(64), one())), sub(two_pow(32), one()))
+    assert_eq(isqrt(pow(from_int(10), 30)), pow(from_int(10), 15))
+end isqrt_cases
+
+@test("the square root squares back below the value and one more does not, over generated inputs")
+isqrt_brackets()
+    var g = rng(299792, 4)
+
+    for n in 0..<40
+        val x = abs(random_big(&g, 1 + usize(n % 4), false))
+        val r = isqrt(x)
+        val next = add(r, one())
+
+        assert(cmp(mul(r, r), x) <= 0)
+        assert(cmp(mul(next, next), x) > 0)
+end isqrt_brackets
+
+// -- the machine-sized operand -----------------------------------------------------------------------
+
+@test("a comparison against a machine integer answers what the general one does")
+cmp_long_agrees()
+    var g = rng(602214, 6)
+    val most: long = -9223372036854775807 - 1
+    val edges: [9]long = [0, 1, -1, 2147483647, -2147483648, 4294967295, 4294967296,
+                          9223372036854775807, most]
+
+    for n in 0..<30
+        val a = random_big(&g, 1 + usize(n % 4), n % 2 == 0)
+
+        for e in edges
+            assert_eq(cmp_long(a, e), cmp(a, from_int(e)))
+
+    // And the named answers, so a broken `cmp` cannot make both sides agree on nonsense.
+    assert_eq(cmp_long(zero(), 0), 0)
+    assert_eq(cmp_long(from_int(-1), 0), -1)
+    assert_eq(cmp_long(one(), 0), 1)
+    assert_eq(cmp_long(two_pow(64), 9223372036854775807), 1)
+    assert_eq(cmp_long(negate(two_pow(64)), most), -1)
+end cmp_long_agrees
+
+@test("the mixed arithmetic answers what the general arithmetic does")
+mixed_long_agrees()
+    var g = rng(662607, 15)
+    val most: long = -9223372036854775807 - 1
+    val edges: [9]long = [0, 1, -1, 7, -7, 4294967295, 4294967296, 9223372036854775807, most]
+
+    for n in 0..<24
+        val a = random_big(&g, 1 + usize(n % 4), n % 2 == 0)
+
+        for e in edges
+            assert_eq(add_long(a, e), add(a, from_int(e)))
+            assert_eq(sub_long(a, e), sub(a, from_int(e)))
+            assert_eq(mul_long(a, e), mul(a, from_int(e)))
+
+            if e != 0
+                val (q, r) = div_rem_long(a, e)
+                val (gq, gr) = div_rem(a, from_int(e))
+
+                assert_eq(q, gq)
+                assert_eq(from_int(r), gr)
+end mixed_long_agrees
+
+@test("the mixed arithmetic is written out on values a reader can check")
+mixed_long_named_values()
+    assert_eq(add_long(two_pow(64), 1), add(two_pow(64), one()))
+    assert_eq(sub_long(zero(), -9223372036854775807 - 1), two_pow(63))
+    assert_eq(mul_long(two_pow(64), -3), negate(mul(from_int(3), two_pow(64))))
+    assert_eq(mul_long(from_int(7), 0), zero())
+
+    val (q, r) = div_rem_long(from_int(-7), 2)
+
+    assert_eq(q, from_int(-3))
+    assert_eq(r, -1)
+end mixed_long_named_values

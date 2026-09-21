@@ -1,0 +1,126 @@
+module sysl.math
+@no_alloc
+
+// Arithmetic that reports its own overflow, for the program that cannot let one pass silently.
+//
+// **Plain integer arithmetic in sysl wraps**, which is the right default: it is what the
+// hardware does, it is one instruction, and a program that has proved its values fit pays nothing
+// for the proof. What it is not is a good default for a program that *cannot* prove it -- a parser
+// reading a number out of a document, a running total over untrusted input, or an interpreter whose
+// own integers have to promote to arbitrary precision when they no longer fit. Each of those needs
+// the question "did that fit?" answered, and the answer is not recoverable afterwards: the wrapped
+// result of `a + b` is indistinguishable from the honest sum of two other operands.
+//
+// **Two surfaces, because two questions get asked.** `checked_*` answers with an `Option`, for the
+// caller that abandons the operation -- refusing the document, returning an error. `overflowing_*`
+// answers with the wrapped value *and* the flag, for the caller that has somewhere else to go: an
+// interpreter that reaches for a wider representation wants to know it overflowed and does not want
+// the narrow answer at all, while a checksum wants the wrapped value and the flag both.
+//
+// **These are signed, and the bound says so.** `Signed` is the signed integers alone, and every test
+// below is a fact about a two's-complement sign bit -- the unsigned widths overflow by a different
+// rule (a sum below either operand, a difference above the minuend) and would need their own bodies.
+// That is a gap rather than a decision, and the day something needs it the functions are
+// `checked_add_unsigned` beside these.
+//
+// **What this costs, and what would be cheaper.** Every body here is ordinary arithmetic plus a test,
+// which is two or three instructions where the machine already computed the answer and set a flag.
+// The compiler does emit `llvm.sadd.with.overflow` and its siblings -- `ScalarEmitter.checkedArith`
+// -- but it emits them for the **ranged** integer types, where the check is part of what the type
+// promises, and there is no surface through which a program asks for one on a plain `int`. A builtin
+// that exposed it would make these a single instruction each. Until there is one, the bodies below
+// are what a program would otherwise write by hand, written once and written right.
+
+/** `a + b`, and whether it overflowed. The value is the wrapped sum either way.
+ *
+ * **The test is the sign bits**, and it is the standard one: a sum overflows exactly when both
+ * operands have the same sign and the result has the other. `a ^ s` has its top bit set when `a` and
+ * the sum disagree in sign, `b ^ s` likewise, and the `&` of the two is negative only when both
+ * disagree -- which cannot happen unless `a` and `b` agreed with each other. Two operands of
+ * opposite signs can never overflow an addition, and the expression says so by construction rather
+ * than by a branch.
+ */
+overflowing_add[T: Signed + Add + BitXor + BitAnd + Ord](a: T, b: T) -> (T, bool) =
+    val zero: T = 0
+    val s = a + b
+
+    (s, ((a ^ s) & (b ^ s)) < zero)
+
+/** `a - b`, and whether it overflowed. The value is the wrapped difference either way.
+ *
+ * **The mirror of the addition's test, with one operand's role changed**: a subtraction overflows
+ * exactly when the operands differ in sign and the result disagrees with the minuend. So the pair
+ * compared is `a ^ b` and `a ^ d` rather than `a ^ s` and `b ^ s`.
+ *
+ * It is written out rather than as `overflowing_add(a, zero - b)`, which is wrong at the most
+ * negative value of the width: negating that wraps to itself, so `a - min` would be computed as
+ * `a + min` and the flag would answer about the wrong operation.
+ */
+overflowing_sub[T: Signed + Sub + BitXor + BitAnd + Ord](a: T, b: T) -> (T, bool) =
+    val zero: T = 0
+    val d = a - b
+
+    (d, ((a ^ b) & (a ^ d)) < zero)
+
+/** `a * b`, and whether it overflowed. The value is the wrapped product either way.
+ *
+ * **Three cases, and the awkward one is why the first two exist.** The general test is to divide the
+ * product back by an operand and see whether the other comes out -- which is exact and needs no
+ * width, but divides, and traps for the one pair a machine divide cannot take: the most negative
+ * value over `-1`. So `-1` is answered before anything is divided, and the negation it becomes
+ * overflows at exactly that value and nowhere else.
+ *
+ * **The first case is the cheap one and it is the common one.** A product cannot overflow when the
+ * operands are small enough that it cannot: if the magnitudes occupy `p` and `q` bits then the
+ * product occupies at most `p + q`, so `p + q` below the width is enough, and the leading-zero
+ * counts say what `p` and `q` are without a division. The most negative value survives this test by
+ * failing it -- its magnitude is itself, which is negative, so its leading-zero count is zero and
+ * the sum can never clear the bar.
+ */
+overflowing_mul[T: Signed + Bits + Mul + Div + Sub + Shl + Eq + Ord](a: T, b: T) -> (T, bool) =
+    val zero: T = 0
+    val one: T = 1
+
+    if a == zero || b == zero then
+        (zero, false)
+    else
+        val width: u32 = a.count_ones() + a.count_zeros()
+        val room: u32 = a.abs().leading_zeros() + b.abs().leading_zeros()
+
+        if room > width then
+            (a * b, false)
+        else
+            val minus_one = zero - one
+            val smallest: T = one << T(width - 1)
+
+            if a == minus_one || b == minus_one then
+                val other = if a == minus_one then b else a
+
+                (zero - other, other == smallest)
+            else
+                val p = a * b
+
+                (p, p / b != a)
+
+/** `a + b`, or `none` where the sum does not fit.
+ *
+ * **The absent answer is the whole point**: an addition that overflowed has no value worth passing
+ * on, so a caller that would otherwise have to remember to look at a flag is handed something it
+ * cannot use without looking.
+ */
+checked_add[T: Signed + Add + BitXor + BitAnd + Ord](a: T, b: T) -> Option[T] =
+    val (s, over) = overflowing_add(a, b)
+
+    if over then None else Some(s)
+
+/** `a - b`, or `none` where the difference does not fit. */
+checked_sub[T: Signed + Sub + BitXor + BitAnd + Ord](a: T, b: T) -> Option[T] =
+    val (d, over) = overflowing_sub(a, b)
+
+    if over then None else Some(d)
+
+/** `a * b`, or `none` where the product does not fit. */
+checked_mul[T: Signed + Bits + Mul + Div + Sub + Shl + Eq + Ord](a: T, b: T) -> Option[T] =
+    val (p, over) = overflowing_mul(a, b)
+
+    if over then None else Some(p)
