@@ -118,6 +118,23 @@ class VerboseTests extends AnyFreeSpec with Matchers {
           not include "members staged in"
       }
     }
+
+    // **A suite links like anything else and was the one build that said nothing about it**, which
+    // is the wrong way round: a question about what clang was handed most often starts from a suite
+    // that failed to link, and the answer was available for every command but that one.
+    "the command line a test suite was linked with, which is a build like any other" in {
+      val dir = createTempDirectory("sysl-verbose-test-")
+
+      writeFile(s"$dir/main.sysl",
+        """@test("one is one")
+          |one() =
+          |    assert(1 == 1)
+          |""".stripMargin)
+
+      val notes = RunCache.disabledFor(said(Config(command = "test", file = dir, verbose = true)))
+
+      notes should include("link: clang")
+    }
   }
 
   "without it" - {

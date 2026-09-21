@@ -23,8 +23,10 @@ import io.github.edadma.cross_platform.*
  *     standard-module entry, and for the same reason: an executable is compiled code, so a release
  *     that changes what a program lowers to while touching none of its source produces different
  *     bytes at an identical fingerprint.
- *   - the **target**, the **allocator** pair and the **optimization** flag, each of which changes
- *     what is emitted.
+ *   - the **target**, the **allocator** pair and the **optimization level**, each of which changes
+ *     what is emitted. The level is the one the build resolved rather than the one `-O` named
+ *     (`Config.optimization`), so a project that raises its manifest's `optimization` rebuilds on the
+ *     next run instead of replaying a binary built at the old level from an unchanged tree.
  *   - every **source file** the program is made of — its own, every `--lib` source root's, and the C
  *     each of those trees carries — by `LibraryArtifact.fingerprint`, which is over each file's place
  *     in its tree and its text.

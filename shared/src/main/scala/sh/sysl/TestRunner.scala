@@ -111,7 +111,11 @@ object TestRunner {
     val keeping = cacheKey.flatMap(RunCache.reserve)
     val exe     = keeping.getOrElse(createTempFile("sysl-test-", ""))
 
-    Toolchain.build(built.ir, exe, target, archives, cfg.optimize, built.links, objects, paths) match
+    // `--verbose` traces the command line here as it does for every other command that links. It was
+    // the one build that did not, so a suite was the one place a reader could not ask what clang was
+    // handed — and a suite is where a question about the link is most likely to start.
+    Toolchain.build(built.ir, exe, target, archives, cfg.optimization, built.links, objects, paths,
+                    cfg.verbose) match
       case Left(err) => Project.discard(exe); fail(err)
       case Right(_) =>
         // **The sidecar is written after the binary exists**, so a hit that finds both finds a pair

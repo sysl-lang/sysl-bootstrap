@@ -161,6 +161,19 @@ private[sysl] def execute(asked: Config): Int = {
   // `unknownKeys`). On stderr, so it never lands in a program's own output, and once per key.
   project.warnings.foreach(Console.err.println)
 
+  // **The root manifest's optimization level, folded in where the command line named none**
+  // (`Config.withOptimization`). Here because this is the one funnel every building command's root
+  // config comes through, exactly as the compiler floor above is — so `build`, `run`, `test`,
+  // `build-c` and `build-lib` are all held to the project's level by one line, and it is above every
+  // use of `cfg.optimization`, the run cache's key included.
+  //
+  // **The ROOT's and nobody else's.** A dependency's manifest is read by `Resolve` and its key is
+  // never consulted: a library that could set the level would be deciding how a consumer's whole
+  // program is compiled, including the parts it has nothing to do with. This is the same ruling
+  // `targets.default` gets one step below, and it is silent for the same reason — a package that
+  // states its own build level has said nothing wrong, it is simply not the one being built.
+  cfg = cfg.withOptimization(project.optimization)
+
   // **Above the target, and above every other question a compilation settles.** A graph is a
   // property of the manifests rather than of the machine, so a project that cannot be built here can
   // still be inspected — which is the same argument `weave` makes above, and the reason this sits
@@ -616,7 +629,7 @@ private[sysl] def execute(asked: Config): Int = {
   def nativeSources(): Either[String, NativeSources.Built] =
     if links(cfg.command) then
       NativeSources.build(NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree, target.os),
-        target, cfg.optimize, paths, cfg.verbose)
+        target, cfg.optimization, paths, cfg.verbose)
     else Right(NativeSources.none)
 
   // **What `sysl run` built last time**, keyed over everything that can reach the bytes (`RunCache`).
@@ -636,7 +649,7 @@ private[sysl] def execute(asked: Config): Int = {
       BuildInfo.version,
       target.name,
       s"${allocator.alloc}/${allocator.free}",
-      cfg.optimize,
+      cfg.optimization,
       // The standard module's own identity: the archive's bytes where one was read, and the
       // library's fingerprint where it was compiled from source. `Std.fingerprint` is not enough on
       // its own, because `--std-lib` may name an artifact built from a different tree entirely.
@@ -780,7 +793,7 @@ private[sysl] def execute(asked: Config): Int = {
               "directory — the two cannot both have that name. Rename the package or the directory, " +
               "or say where the binary goes with '-o <path>'")
       else
-        Toolchain.build(compiled.ir, exe, target, archives, cfg.optimize, compiled.links, native.objects,
+        Toolchain.build(compiled.ir, exe, target, archives, cfg.optimization, compiled.links, native.objects,
           paths, cfg.verbose) match
           case Left(err) => fail(err)
           case Right(_)  => Console.err.println(s"wrote $exe"); 0
@@ -792,7 +805,7 @@ private[sysl] def execute(asked: Config): Int = {
       val keeping = runKey.flatMap(RunCache.reserve)
       val exe     = keeping.getOrElse(createTempFile("sysl-", ""))
 
-      Toolchain.build(compiled.ir, exe, target, archives, cfg.optimize, compiled.links, native.objects,
+      Toolchain.build(compiled.ir, exe, target, archives, cfg.optimization, compiled.links, native.objects,
         paths, cfg.verbose) match
         case Left(err) => Project.discard(exe); fail(err)
         case Right(_) =>

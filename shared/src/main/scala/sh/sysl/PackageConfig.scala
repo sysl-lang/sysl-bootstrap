@@ -126,6 +126,19 @@ case class PackageConfig(
     features: Map[String, List[String]] = Map.empty,
     allocator: Option[Allocator] = None,
     defines: Map[String, List[String]] = Map.empty,
+    /** The `optimization` key — the level this project is built at when the command line names none
+      * (`reference/packages.md § The optimization level a project is built at`).
+      *
+      * **The ROOT project's only, exactly as `targets.default` is.** A level reaches every object a
+      * build produces, so honouring a dependency's would let a library decide how its consumer's
+      * whole program is compiled — including code the library has nothing to do with. It is read off
+      * every manifest because reading is one function, and consulted only where the build being
+      * configured is the one the manifest belongs to (`Main`).
+      *
+      * A level clang does not have is refused when the file is read rather than passed on, which is
+      * the one thing this does that `--optimize` does not (`Toolchain.levels` argues the asymmetry).
+      */
+    optimization: Option[String] = None,
     sysl: Option[Version] = None,
     /** Keys this compiler did not recognize, as sentences to print — one per key, in the order the
       * file writes them (`unknownKeys`).
@@ -318,6 +331,7 @@ object PackageConfig {
         _       <- PackageFeatures.check(feats, deps)
         alloc   <- readAllocator(root)
         defs    <- readDefines(root)
+        level   <- readOptimization(root)
       yield PackageConfig(
         name = pkg.flatMap(string(_, "name")),
         version = pkg.flatMap(string(_, "version")),
@@ -333,6 +347,7 @@ object PackageConfig {
         features = feats,
         allocator = alloc,
         defines = defs,
+        optimization = level,
         warnings = unknownKeys(root, TopLevelKeys, "") :::
           pkg.toList.flatMap(unknownKeys(_, PackageKeys, "package.")),
       )
@@ -388,6 +403,40 @@ object PackageConfig {
       case Some(text) =>
         Version.parse(text).left.map(e => s"$FileName: 'package.sysl' names the oldest compiler " +
           s"this package builds with, and $e").map(Some(_))
+
+  /** `optimization` — the level this project's own builds hand clang, when the command line names
+   * none (`reference/packages.md § The optimization level a project is built at`).
+   *
+   * ==Why it is refused here rather than by clang==
+   *
+   * `--optimize` passes whatever was typed and lets clang rule on it, which is the right division for
+   * a flag: the person who typed it is watching the build that stops. A manifest is written once and
+   * read by everything afterwards, including a consumer who did not write it, so the same mistake
+   * arrives from inside clang with nothing naming the file or the key — and `sysl run`, whose second
+   * invocation replays a cached binary, would not even reach clang to produce that. The set is
+   * `Toolchain.levels`, which is the six every clang has.
+   *
+   * **A number is taken as well as a string**, because `optimization = 2` is what somebody writes
+   * before remembering the quotes and it says exactly one thing. HOCON keeps a number's literal text,
+   * so what is read is the `2` they wrote rather than a float rendered back. `s` and `z` have to be
+   * quoted whatever this does, since they are not numbers in any format.
+   */
+  private def readOptimization(root: ConfigObject): Either[String, Option[String]] =
+    root.fields.get("optimization") match
+      case None                                    => Right(None)
+      case Some(ConfigString(v)) if isLevel(v)     => Right(Some(v))
+      case Some(ConfigNumber(v)) if isLevel(v)     => Right(Some(v))
+      case Some(ConfigString(v))                   => Left(notALevel(v))
+      case Some(ConfigNumber(v))                   => Left(notALevel(v))
+      case Some(_) =>
+        Left(s"$FileName: 'optimization' names the level this project is built at, so it is one of " +
+          s"${Toolchain.levels.mkString(", ")} — written as a string, and not a block or a list")
+
+  private def isLevel(value: String): Boolean = Toolchain.levels.contains(value)
+
+  private def notALevel(value: String): String =
+    s"$FileName: 'optimization = \"$value\"' names no level clang has — it is one of " +
+      s"${Toolchain.levels.mkString(", ")}"
 
   private def checkName(name: Option[String]): Either[String, Unit] = name match
     case None => Right(())
@@ -905,7 +954,7 @@ object PackageConfig {
    */
   private val TopLevelKeys =
     Set("package", "targets", "capabilities", "requires", "dependencies", "dev_dependencies",
-        "features", "allocator", "defines")
+        "features", "allocator", "defines", "optimization")
 
   private val PackageKeys = Set("name", "version", "sysl")
 

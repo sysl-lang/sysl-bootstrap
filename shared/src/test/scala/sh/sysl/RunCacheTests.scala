@@ -129,7 +129,7 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
       val root = program("""print(21 * 2)""")
 
       ran(Config(command = "run", file = root)) shouldBe "42\n"
-      ran(Config(command = "run", file = root, optimize = "2")) shouldBe "42\n"
+      ran(Config(command = "run", file = root, optimize = Some("2"))) shouldBe "42\n"
 
       entries(cache) shouldBe 2
     }

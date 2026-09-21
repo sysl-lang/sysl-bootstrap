@@ -304,6 +304,27 @@ object Toolchain {
    */
   val defaultOptimization = "1"
 
+  /** The levels every clang has, which is what a **manifest** may name.
+   *
+   * ==Why a written-down set exists at all, when the flag needs none==
+   *
+   * `--optimize` passes whatever was written and lets clang rule on it, which is right for something
+   * somebody is typing: the build they are watching stops in the same second, with the authority on
+   * clang's levels saying so in its own words. `fast` and `g` are clang's too and a person reaching
+   * for one gets it.
+   *
+   * A manifest is the other case. It is written once and read on every later build, by consumers who
+   * did not write it and by `sysl run` replaying a cached binary — so the same mistake surfaces from
+   * inside clang, at a remove, naming no file and no key. A manifest is refused when it is read
+   * instead (`PackageConfig`), and the price of refusing early is that the accepted set has to be
+   * stated here rather than deferred.
+   *
+   * **So it is the six levels every clang has**, and deliberately not `fast` (which clang has been
+   * retiring) or `g` (which is about debugging rather than about what a release is built at). A
+   * project that needs one of those names it on the command line, where clang answers for itself.
+   */
+  val levels = List("0", "1", "2", "3", "s", "z")
+
   /** The flag a level is passed as. A level is whatever was written — `0`, `2`, `s`, `z`, `fast` are
    * all clang's — and one clang does not have is clang's to complain about, since it is the
    * authority on its own levels and would say so better than a list here could.

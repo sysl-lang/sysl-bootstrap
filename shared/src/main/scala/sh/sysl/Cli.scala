@@ -95,6 +95,10 @@ import scopt.OParser
  * nothing at all, which is what it used to be: `-O0` is a different instruction selector, it is the
  * mode a back end's own suite covers least, and a miscompile was found living there
  * (`Toolchain.defaultOptimization` has the case). A level clang does not have is clang's to report.
+ *
+ * **A project states its own level in its manifest** (`PackageConfig.optimization`), and the flag
+ * beats the key for the invocation that carries it: a project built at `2` is still profiled at `0`
+ * by typing it, and neither answer has to be repeated on every command line to hold.
  */
 case class Config(
     command: String = "",
@@ -166,7 +170,15 @@ case class Config(
     programArgs: List[String] = Nil,
     filter: Option[String] = None,
     failFast: Boolean = false,
-    optimize: String = Toolchain.defaultOptimization,
+    /** `-O` / `--optimize` — the level this invocation named, or nothing where it named none.
+      *
+      * **An `Option` because a manifest may name one too and the flag has to win.** Defaulted to the
+      * level itself, a build asked for `-O1` and a build that asked for nothing were one value, and
+      * the manifest's key could only have been applied by overruling a flag somebody typed. What a
+      * build actually hands clang is `optimization`, which is this where it was given and the
+      * manifest's or the default where it was not.
+      */
+    optimize: Option[String] = None,
     /** `build-c --header` — where the generated C header goes, when somewhere other than beside the
       * archive (`reference/ffi.md § @export`).
       */
@@ -197,6 +209,27 @@ case class Config(
     else
       copy(includePaths = includePaths ::: found.map(_._2),
            namedIncludes = namedIncludes ++ found)
+
+  /** The level every clang this build drives is handed: what `-O` said, then what the root manifest
+   * said, then `Toolchain.defaultOptimization`.
+   *
+   * **Read rather than stored, so that nothing can consult a level the manifest has not been folded
+   * into yet.** A build that reads this before `withOptimization` gets the default, which is what it
+   * would have got had there been no manifest at all — the failure a second field would have had is
+   * a stale copy, and the failure this has is a value that is merely early.
+   */
+  def optimization: String = optimize.getOrElse(Toolchain.defaultOptimization)
+
+  /** The same config with the root manifest's `optimization` folded in, where the command line named
+   * none (`PackageConfig.optimization`).
+   *
+   * **`orElse`, which is the whole of the precedence rule**: a flag somebody typed for this one
+   * invocation beats a key the project states for all of them, and the key beats the default. The
+   * fold happens once, in `Main`, just below where the root manifest is read — so every command that
+   * builds sees it, and `RunCache`'s key, which is over `optimization`, is over the level actually
+   * used rather than over the flag.
+   */
+  def withOptimization(manifest: Option[String]): Config = copy(optimize = optimize.orElse(manifest))
 }
 
 /** The option grammar, held apart from the entry point so that a test can ask what an argument list
@@ -483,10 +516,11 @@ private[sysl] val parser = {
           "read under, as 'NAME' or 'NAME=value' — what a host C project configures its own headers " +
           "with, and which finding the header does not supply; may be given more than once"),
       opt[String]('O', "optimize")
-        .action((o, c) => c.copy(optimize = o))
-        .text(s"the optimization level to hand clang, as it spells one after the '-O': " +
-          s"defaults to ${Toolchain.defaultOptimization}, and '0' is the mode a miscompile was " +
-          s"once found in. '-O2' is written the way clang writes it"),
+        .action((o, c) => c.copy(optimize = Some(o)))
+        .text(s"the optimization level to hand clang, as it spells one after the '-O': the " +
+          s"project's 'optimization' key where it has one and ${Toolchain.defaultOptimization} " +
+          s"otherwise, and '0' is the mode a miscompile was once found in. '-O2' is written the " +
+          s"way clang writes it"),
       checkConfig(c => if c.command.isEmpty then failure("a subcommand is required") else success),
     )
   }

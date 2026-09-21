@@ -1367,4 +1367,60 @@ class PackageConfigTests extends AnyFreeSpec with Matchers {
       e should include("'true' or 'false'")
     }
   }
+
+  /** `optimization` — the level this project's builds hand clang, stated once instead of on every
+   * command line (`PackageConfig.optimization`).
+   *
+   * **The refusal is the half worth pinning.** `--optimize` lets clang rule on what it was given,
+   * which is right for something typed at a build somebody is watching; a manifest is read by every
+   * later build and by consumers who did not write it, so a level clang has no answer for is refused
+   * where the key is, naming the key, what was written, and what may be.
+   */
+  "the optimization level" - {
+
+    "is the level a build hands clang, written as clang spells one after the '-O'" in {
+      read("optimization = \"2\"").optimization shouldBe Some("2")
+    }
+
+    "every level clang always has may be named" in {
+      for level <- Toolchain.levels do
+        withClue(level) { read(s"optimization = \"$level\"").optimization shouldBe Some(level) }
+    }
+
+    // What somebody writes before remembering the quotes, and it says exactly one thing. HOCON keeps
+    // a number's literal text, so what is read is the `2` they wrote.
+    "and an unquoted number is the level it spells" in {
+      read("""optimization = 2""").optimization shouldBe Some("2")
+    }
+
+    "a file that names none says nothing about the level" in {
+      read("""package { name = "thing", version = "1.0.0" }""").optimization shouldBe None
+    }
+
+    "'optimization' is a key this compiler knows, so it draws no unknown-key warning" in {
+      read("optimization = \"2\"").warnings shouldBe empty
+    }
+
+    "a level clang does not have is refused here rather than left to clang" in {
+      val e = refused("optimization = \"9\"")
+
+      e should include("'optimization = \"9\"'")
+      e should include("0, 1, 2, 3, s, z")
+    }
+
+    // `fast` and `g` are clang's own and are deliberately outside the set a manifest may name: one is
+    // being retired and the other is about debugging rather than about what a project is built at.
+    // Both are still typable on the command line, where clang answers for itself.
+    "including the ones clang has and a manifest may not name" in {
+      for level <- List("fast", "g") do
+        withClue(level) { refused(s"optimization = \"$level\"") should include(level) }
+    }
+
+    "and a block is refused with the same set, since there is nothing else it could mean" in {
+      val e = refused("""optimization { level = "2" }""")
+
+      e should include("'optimization'")
+      e should include("0, 1, 2, 3, s, z")
+    }
+  }
 }
