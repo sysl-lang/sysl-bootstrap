@@ -141,6 +141,23 @@ class CAbiTests extends AnyFreeSpec with RunSupport with CodegenSupport {
         ("declare %struct.S @give()", "declare void @take([4 x half])")
     }
 
+    /** **And `bf16` is a width of its own for this purpose, though it shares `f16`'s bit count.**
+      * Homogeneity is about the members being the same *type*, and these two are not: an aggregate
+      * of four `bf16` is four of one thing and passes as an array of them, while one holding both
+      * formats is a mixture and falls back exactly as `f64` beside `f32` does above.
+      */
+    "bf16 is homogeneous on its own and a mixture beside f16" in {
+      shape(arm, "    a: bf16\n    b: bf16") shouldBe
+        ("declare %struct.S @give()", "declare void @take([2 x bfloat])")
+      shape(arm, "    a: bf16\n    b: bf16\n    c: bf16\n    d: bf16") shouldBe
+        ("declare %struct.S @give()", "declare void @take([4 x bfloat])")
+      // The mixture is asserted against the shape a pair of plain `u16` gets, rather than against
+      // whatever text the ABI produces for four bytes. What is being claimed is that these two are
+      // not one width — so the aggregate stops being a floating one and travels as ordinary bytes —
+      // and putting it this way claims exactly that and nothing about how four bytes are carried.
+      shape(arm, "    a: f16\n    b: bf16") shouldBe shape(arm, "    a: u16\n    b: u16")
+    }
+
     // Sixteen bytes is two registers either way; what decides how they are *named* is the
     // alignment. Sixteen-byte alignment asks for one `i128`, which is a register pair; eight-byte
     // alignment asks for two of them.

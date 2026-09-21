@@ -49,9 +49,24 @@ object Type extends TypeQueries {
     def lty(using Word): LType = LType.I(bits)
   }
 
-  /** An IEEE binary floating-point type: `f16`, `f32`, `f64`. A closed set, not a family. */
-  case class Floating(bits: Int) extends Type {
-    def lty(using Word): LType = LType.F(bits)
+  /** A binary floating-point type: `f16`, `bf16`, `f32`, `f64`. A closed set, not a family.
+   *
+   * `brain` marks `bf16`, and it is here rather than in a case of its own because **width alone no
+   * longer identifies a format**. `bf16` is sixteen bits like `f16` and divides them differently —
+   * eight bits of exponent and seven of significand, which is binary32's range at a quarter of its
+   * precision. Every question the rest of the compiler asks a float is a question about its *width*
+   * — how many bytes it occupies, whether a conversion widens or narrows, which register class it
+   * is passed in — so the flag rides along with the width and only the handful of places that
+   * spell the format out have to read it.
+   *
+   * **The one place the width stops answering is a conversion between the two sixteen-bit
+   * formats**, where neither is wider and LLVM has no instruction that reinterprets one as the
+   * other; `ScalarEmitter.convert` routes that pair through `float`.
+   *
+   * `brain` is meaningful only at sixteen bits. Nothing constructs it otherwise.
+   */
+  case class Floating(bits: Int, brain: Boolean = false) extends Type {
+    def lty(using Word): LType = LType.F(bits, brain)
   }
 
   /** A Unicode scalar value. Layout-compatible with `u32` but not type-compatible: it has
@@ -566,6 +581,11 @@ object Type extends TypeQueries {
     "uint"   -> Integer(32, signed = false),
     "ulong"  -> Integer(64, signed = false),
     "real"    -> Floating(64),
+    // `bf16` is the one floating-point type whose name is not a width, because it is not a width
+    // that tells it apart from `f16`. So it is a name in this table rather than a shape `widthType`
+    // recognises, and everything that reaches a scalar by name — a type annotation, a cast, a
+    // literal suffix — finds it here.
+    "bf16"    -> Floating(16, brain = true),
     "va_list" -> VaList,
   )
 
@@ -583,7 +603,8 @@ object Type extends TypeQueries {
   private def canonicalName(t: Type): String = t match
     case Integer(_, signed, true) => if signed then "isize" else "usize"
     case Integer(bits, signed, _) => (if signed then "i" else "u") + bits
-    case Floating(bits)           => s"f$bits"
+    case Floating(16, true)       => "bf16"
+    case Floating(bits, _)        => s"f$bits"
     case Char                     => "char"
     case Bool                     => "bool"
     case Str                      => "string"

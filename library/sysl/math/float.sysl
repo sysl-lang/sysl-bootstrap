@@ -294,3 +294,146 @@ impl Float for f32
     to_radians(self) -> f32 = self * 0.017453292f32
     to_degrees(self) -> f32 = self * 57.295776f32
 end f32
+
+/** Binary16, and the first width whose mathematics is not its own.
+ *
+ * **libm stops at `float`.** There is no half-width entry point to bind -- no `sqrth`, no `sinh` that
+ * means the square root of a half -- because no C library offers one, and nothing about the width
+ * suggests one is coming: sixteen bits of significand is a storage format, and the machines that
+ * compute in it compute a lane at a time rather than a value at a time. So every body below widens to
+ * `f32`, calls the `f`-suffixed entry point the width above already binds, and narrows the answer.
+ *
+ * **That is not a compromise, it is the correct answer, and the reason is worth stating once here
+ * rather than doubted at each of the thirty-odd methods that use it.** `f32` holds every `f16`
+ * exactly -- more exponent range and more than twice the significand -- so widening loses nothing.
+ * The `f32` result is then within half an `f32` ulp of the true answer, and narrowing rounds it to
+ * the nearest `f16`. Two roundings rather than one, and the first is so much finer than the second
+ * that it changes the result only for an answer sitting within an `f32` ulp of the midpoint between
+ * two `f16` values -- which is the accuracy libm itself promises, not a loss this widening
+ * introduced.
+ *
+ * **The constants are written as the mathematics rather than as this width's nearest value.** A
+ * literal is narrowed to the type it is written at, so `3.141592653589793f16` *is* the nearest `f16`
+ * to pi and says which number was meant, where the eight digits that spelling rounds to would only
+ * say what came out. The two that have to be exact are exact anyway: the largest finite `f16` is
+ * 65504, and its epsilon is two to the minus tenth.
+ */
+impl Float for f16
+    max_value() -> f16 = 65504.0f16
+    epsilon() -> f16 = 0.0009765625f16
+
+    infinity() -> f16 = 1.0f16 / 0.0f16
+    nan() -> f16 = 0.0f16 / 0.0f16
+
+    pi() -> f16 = 3.141592653589793f16
+
+    sqrt(self) -> f16 = f16(sysl_sqrtf(f32(self)))
+    cbrt(self) -> f16 = f16(sysl_cbrtf(f32(self)))
+
+    exp(self) -> f16 = f16(sysl_expf(f32(self)))
+    exp2(self) -> f16 = f16(sysl_exp2f(f32(self)))
+    ln(self) -> f16 = f16(sysl_logf(f32(self)))
+    log2(self) -> f16 = f16(sysl_log2f(f32(self)))
+    log10(self) -> f16 = f16(sysl_log10f(f32(self)))
+
+    pow(self, exponent: f16) -> f16 = f16(sysl_powf(f32(self), f32(exponent)))
+    hypot(self, other: f16) -> f16 = f16(sysl_hypotf(f32(self), f32(other)))
+
+    sin(self) -> f16 = f16(sysl_sinf(f32(self)))
+    cos(self) -> f16 = f16(sysl_cosf(f32(self)))
+    tan(self) -> f16 = f16(sysl_tanf(f32(self)))
+    asin(self) -> f16 = f16(sysl_asinf(f32(self)))
+    acos(self) -> f16 = f16(sysl_acosf(f32(self)))
+    atan(self) -> f16 = f16(sysl_atanf(f32(self)))
+    atan2(self, x: f16) -> f16 = f16(sysl_atan2f(f32(self), f32(x)))
+
+    sinh(self) -> f16 = f16(sysl_sinhf(f32(self)))
+    cosh(self) -> f16 = f16(sysl_coshf(f32(self)))
+    tanh(self) -> f16 = f16(sysl_tanhf(f32(self)))
+    asinh(self) -> f16 = f16(sysl_asinhf(f32(self)))
+    acosh(self) -> f16 = f16(sysl_acoshf(f32(self)))
+    atanh(self) -> f16 = f16(sysl_atanhf(f32(self)))
+
+    /** The four roundings are the exception the paragraph above has to admit: their answer is an
+     * integral value, and every integral value an `f16` can hold is one an `f32` holds exactly. So
+     * these are the bodies where the widening provably changes nothing at all, rather than changing
+     * something too small to reach the result.
+     */
+    floor(self) -> f16 = f16(sysl_floorf(f32(self)))
+    ceil(self) -> f16 = f16(sysl_ceilf(f32(self)))
+    round(self) -> f16 = f16(sysl_roundf(f32(self)))
+    trunc(self) -> f16 = f16(sysl_truncf(f32(self)))
+    fmod(self, divisor: f16) -> f16 = f16(sysl_fmodf(f32(self), f32(divisor)))
+
+    abs(self) -> f16 = f16(sysl_fabsf(f32(self)))
+    copysign(self, sign: f16) -> f16 = f16(sysl_copysignf(f32(self), f32(sign)))
+
+    /** The two angle conversions multiply at `f32` rather than at this width, for the reason the
+     * calls above widen: the factor is not an `f16` and forcing it to be one would round it before
+     * the multiplication instead of rounding the product after, which is a worse answer for no gain.
+     */
+    to_radians(self) -> f16 = f16(f32(self) * 0.017453292f32)
+    to_degrees(self) -> f16 = f16(f32(self) * 57.295776f32)
+end f16
+
+/** Bfloat16 -- binary32's range at a quarter of its precision, and the other way sixteen bits can be
+ * divided up.
+ *
+ * **It is not a smaller `f16`, it is a shorter `f32`**, and the difference is the whole reason both
+ * exist. `f16` spends five bits on the exponent and ten on the significand, so it is precise to
+ * about three decimal digits and runs out of range above 65504. `bf16` spends eight and seven: it is
+ * precise to about two digits and reaches 3.4e38, exactly as far as an `f32`, because its bits *are*
+ * an `f32`'s top sixteen. So a value that overflows an `f16` is ordinary here, and a value the two
+ * both hold is held more accurately there.
+ *
+ * Everything the width above says about widening applies unchanged and for the same reason: `f32`
+ * holds every `bf16` exactly, and libm has no entry point at this width either.
+ */
+impl Float for bf16
+    max_value() -> bf16 = 3.3895313892515355e38bf16
+    epsilon() -> bf16 = 0.0078125bf16
+
+    infinity() -> bf16 = 1.0bf16 / 0.0bf16
+    nan() -> bf16 = 0.0bf16 / 0.0bf16
+
+    pi() -> bf16 = 3.141592653589793bf16
+
+    sqrt(self) -> bf16 = bf16(sysl_sqrtf(f32(self)))
+    cbrt(self) -> bf16 = bf16(sysl_cbrtf(f32(self)))
+
+    exp(self) -> bf16 = bf16(sysl_expf(f32(self)))
+    exp2(self) -> bf16 = bf16(sysl_exp2f(f32(self)))
+    ln(self) -> bf16 = bf16(sysl_logf(f32(self)))
+    log2(self) -> bf16 = bf16(sysl_log2f(f32(self)))
+    log10(self) -> bf16 = bf16(sysl_log10f(f32(self)))
+
+    pow(self, exponent: bf16) -> bf16 = bf16(sysl_powf(f32(self), f32(exponent)))
+    hypot(self, other: bf16) -> bf16 = bf16(sysl_hypotf(f32(self), f32(other)))
+
+    sin(self) -> bf16 = bf16(sysl_sinf(f32(self)))
+    cos(self) -> bf16 = bf16(sysl_cosf(f32(self)))
+    tan(self) -> bf16 = bf16(sysl_tanf(f32(self)))
+    asin(self) -> bf16 = bf16(sysl_asinf(f32(self)))
+    acos(self) -> bf16 = bf16(sysl_acosf(f32(self)))
+    atan(self) -> bf16 = bf16(sysl_atanf(f32(self)))
+    atan2(self, x: bf16) -> bf16 = bf16(sysl_atan2f(f32(self), f32(x)))
+
+    sinh(self) -> bf16 = bf16(sysl_sinhf(f32(self)))
+    cosh(self) -> bf16 = bf16(sysl_coshf(f32(self)))
+    tanh(self) -> bf16 = bf16(sysl_tanhf(f32(self)))
+    asinh(self) -> bf16 = bf16(sysl_asinhf(f32(self)))
+    acosh(self) -> bf16 = bf16(sysl_acoshf(f32(self)))
+    atanh(self) -> bf16 = bf16(sysl_atanhf(f32(self)))
+
+    floor(self) -> bf16 = bf16(sysl_floorf(f32(self)))
+    ceil(self) -> bf16 = bf16(sysl_ceilf(f32(self)))
+    round(self) -> bf16 = bf16(sysl_roundf(f32(self)))
+    trunc(self) -> bf16 = bf16(sysl_truncf(f32(self)))
+    fmod(self, divisor: bf16) -> bf16 = bf16(sysl_fmodf(f32(self), f32(divisor)))
+
+    abs(self) -> bf16 = bf16(sysl_fabsf(f32(self)))
+    copysign(self, sign: bf16) -> bf16 = bf16(sysl_copysignf(f32(self), f32(sign)))
+
+    to_radians(self) -> bf16 = bf16(f32(self) * 0.017453292f32)
+    to_degrees(self) -> bf16 = bf16(f32(self) * 57.295776f32)
+end bf16

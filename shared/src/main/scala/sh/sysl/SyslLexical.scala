@@ -748,7 +748,11 @@ class SyslLexical
       separators(mantissa, allowLeading = prefixed) match {
         case Left(msg)     => bad(msg)
         case Right(digits) =>
-          val floatSuffix = suffix.startsWith("f")
+          // `bf16` is the one floating suffix that does not start with the family letter, because
+          // it is a name rather than a width. Reading the family letter alone would send it down
+          // the integer arm and report it as an integer suffix, which is the opposite of what it
+          // is.
+          val floatSuffix = suffix.startsWith("f") || suffix == "bf16"
 
           if (suffix.nonEmpty && !validSuffix(suffix)) bad(s"invalid literal suffix '$suffix'")
           else if (isFloat && suffix.nonEmpty && !floatSuffix)
@@ -799,12 +803,15 @@ class SyslLexical
       if (digits.isEmpty) Left("missing digits") else Right(digits)
     }
 
-  /** A suffix names a canonical primitive: the systematic `iN` / `uN` / `fN` forms plus
-   * the two pointer-width types. The friendly aliases (`int`, `byte`, `real`, …) are not
+  /** A suffix names a canonical primitive: the systematic `iN` / `uN` / `fN` forms, the two
+   * pointer-width types, and `bf16`. The friendly aliases (`int`, `byte`, `real`, …) are not
    * suffixes — they reach a literal through a type context or a cast.
+   *
+   * `bf16` is here rather than in the systematic form because it is `f16`'s width and not its
+   * format, so no `fN` spelling could name it.
    */
   private def validSuffix(s: String): Boolean =
-    s == "usize" || s == "isize" ||
+    s == "usize" || s == "isize" || s == "bf16" ||
       (s.length > 1 && "iuf".contains(s.head) && s(1) != '0' && s.tail.forall(isDigit))
 
   /** A loop label `'name`: an apostrophe, an identifier, and — crucially — no closing apostrophe,

@@ -195,8 +195,14 @@ object CHeader {
     // it is; C's own name for that idea is `char32_t`, which needs a header C99 does not have.
     case Type.Char                           => "uint32_t"
     case Type.Integer(bits, signed, _)       => s"${if signed then "" else "u"}int${bits}_t"
-    case Type.Floating(32)                   => "float"
-    case Type.Floating(_)                    => "double"
+    // The two sixteen-bit formats have C names of their own, and neither of them is a `float`.
+    // Spelling either as a wider type would compile on both sides of the header and then pass a
+    // value of one width where the callee reads another, which is the single failure a generated
+    // header exists to make impossible.
+    case Type.Floating(16, true)             => "__bf16"
+    case Type.Floating(16, _)                => "_Float16"
+    case Type.Floating(32, _)                => "float"
+    case Type.Floating(_, _)                 => "double"
     // Pointed-to `void` has no size in C, so a pointer to nothing is `void *` and everything else
     // keeps its pointee. A pointer to a type C cannot spell never gets here.
     case Type.Ptr(Type.Unit)                 => "void *"

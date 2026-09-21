@@ -29,10 +29,14 @@ enum LType {
    */
   case I(bits: Int)
 
-  /** An IEEE binary float. LLVM names these rather than numbering them, which is the one place its
-   * type text is not systematic.
+  /** A binary float. LLVM names these rather than numbering them, which is the one place its type
+   * text is not systematic.
+   *
+   * `brain` picks `bfloat` out of the two sixteen-bit formats. It is not an IEEE binary16 — it is
+   * binary32 with the low sixteen bits of the significand dropped — so LLVM gives it a name of its
+   * own and no width distinguishes the pair.
    */
-  case F(bits: Int)
+  case F(bits: Int, brain: Boolean = false)
 
   /** An address. Opaque, as LLVM's pointers have been since it stopped typing them: what is at the
    * far end is said by the instruction that reaches through, not by the pointer.
@@ -85,9 +89,10 @@ enum LType {
    */
   def render: String = this match
     case I(bits)         => s"i$bits"
-    case F(16)           => "half"
-    case F(32)           => "float"
-    case F(_)            => "double"
+    case F(16, true)     => "bfloat"
+    case F(16, _)        => "half"
+    case F(32, _)        => "float"
+    case F(_, _)         => "double"
     case Ptr             => "ptr"
     case Void            => "void"
     case Arr(n, elem)    => s"[$n x ${elem.render}]"
@@ -112,7 +117,8 @@ enum LType {
    */
   def overloadSuffix: String = this match
     case I(bits)      => s"i$bits"
-    case F(bits)      => s"f$bits"
+    case F(16, true)  => "bf16"
+    case F(bits, _)   => s"f$bits"
     case Ptr          => "p0"
     case Vec(n, elem) => s"v$n${elem.overloadSuffix}"
     case other        => sys.error(s"no intrinsic overload suffix for ${other.render}")

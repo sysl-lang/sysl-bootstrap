@@ -99,6 +99,53 @@ class ScalarRunTests extends AnyFreeSpec with RunSupport {
             |""".stripMargin) shouldBe "0.0999756\n"
     }
 
+    "bf16 holds a value it can represent exactly" in {
+      run("""var b: bf16 = 0.5
+            |print(b + 0.25)
+            |""".stripMargin) shouldBe "0.75\n"
+    }
+
+    /** **The two sixteen-bit formats differ, and a tenth is the shortest input that says how.** They
+     * are the same width and divide it differently — `f16` keeps ten bits of significand and `bf16`
+     * seven — so the nearest each holds to a tenth is a different number, and `bf16`'s is the coarser
+     * of the two. A compiler that had quietly treated `bf16` as a second name for `f16` would print
+     * one answer twice here, which is the mistake this asserts against.
+     */
+    "f16 and bf16 round a tenth to different values" in {
+      run("""var h: f16 = 0.1
+            |var b: bf16 = 0.1
+            |print(h, b)
+            |""".stripMargin) shouldBe "0.0999756 0.100098\n"
+    }
+
+    /** **And the precision `bf16` gives up buys range, which is the whole point of it.** Its exponent
+     * is binary32's, so the largest finite `f16` doubles to an ordinary `bf16` number where at `f16`
+     * it is already past the end of the format.
+     */
+    "bf16 reaches where f16 overflows" in {
+      run("""var h: f16 = 65504.0
+            |var b: bf16 = 65504.0
+            |print(h * 2.0, b * 2.0)
+            |""".stripMargin) shouldBe "inf 131072\n"
+    }
+
+    /** **`sysl.math`'s `Float` reaches both of them, and what a reader checks that against is the
+     * printed answer** — which is what `library/math.md` puts on the page. It is pinned here because
+     * the site compiles against a *published* compiler, so a change to either width's constants or
+     * to the route the narrow widths compute by would be caught here and nowhere else before a
+     * release had already shipped it.
+     */
+    "the Float trait reaches both sixteen-bit widths" in {
+      run("""import sysl.math.Float
+            |
+            |var h: f16 = 9.0
+            |var b: bf16 = 9.0
+            |
+            |print(h.sqrt(), b.sqrt())
+            |print(f16.max_value(), bf16.epsilon())
+            |""".stripMargin) shouldBe "3 3\n65504 0.0078125\n"
+    }
+
     /** IEEE 754 leaves a `NaN` unequal to everything including itself, and makes `!=` the negation of
      * `==` rather than the ordered comparison the other three are. So exactly one of the five answers
      * true, and getting `!=` wrong is invisible in every test that does not use a `NaN` — which is why
@@ -173,6 +220,19 @@ class ScalarRunTests extends AnyFreeSpec with RunSupport {
 
     "carry a char to its codepoint and back" in {
       run("print(u32('A'), char(9731))") shouldBe "65 ☃\n"
+    }
+
+    /** **`f16` and `bf16` are the one pair where neither conversion is a widening or a narrowing**,
+     * and the back end has no instruction for it: both `fptrunc` and `fpext` insist the destination
+     * differ in width. The conversion goes through `f32`, which holds both exactly, so the only
+     * rounding is the destination's own — a quarter survives both directions because both formats
+     * hold it, and a tenth comes back as the destination's nearest rather than as the source's.
+     */
+    "carry a value between the two sixteen-bit formats" in {
+      run("""var h: f16 = 0.25
+            |var b: bf16 = 0.1
+            |print(bf16(h), f16(b), f16(bf16(0.1f16)))
+            |""".stripMargin) shouldBe "0.25 0.100098 0.100098\n"
     }
   }
 

@@ -463,6 +463,19 @@ class ExportTests extends AnyFreeSpec with CodegenSupport with TestFrameworkSupp
       h should include("double f(float a);")
     }
 
+    /** **And the two sixteen-bit ones as theirs, which they have and which is neither `float` nor
+      * each other's.** A header is read by a C compiler that will lay the call out from what it
+      * says, so spelling an `f16` parameter `double` produces a header that compiles on both sides
+      * and passes eight bytes where the callee reads two. That is the one failure a generated
+      * header exists to make impossible, and it is invisible in the sysl half of the program.
+      */
+    "spells the two sixteen-bit formats as C's own names, which are not each other's" in {
+      headerFor("module demo\n\n@export\nf(a: f16) -> f16 = a\n") should
+        include("_Float16 f(_Float16 a);")
+      headerFor("module demo\n\n@export\nf(a: bf16) -> bf16 = a\n") should
+        include("__bf16 f(__bf16 a);")
+    }
+
     // A `char` is a Unicode scalar value and four bytes wide, so C's `char` would be wrong by a
     // factor of four — which is a silently corrupt call rather than a compile error.
     "spells a 'char' as the 32-bit integer it is, never as C's 'char'" in {

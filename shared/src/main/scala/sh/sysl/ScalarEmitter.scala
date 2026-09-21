@@ -318,6 +318,15 @@ trait ScalarEmitter extends StringEmitter {
 
     case (a: Type.Integer, b: Type.Floating)  => castOp(if a.signed then CastOp.SIToFP else CastOp.UIToFP, a, b, v)
     case (a: Type.Floating, b: Type.Integer)  => saturatingCast(a, b, v)
+    // `f16` and `bf16` are the one pair of floating types neither of which is wider than the other,
+    // and LLVM has no instruction that turns one into the other — `fptrunc` and `fpext` both
+    // require the destination to differ in width. The conversion is a widening of one and a
+    // narrowing of the other with `float` in between, which holds both exactly: binary32 has
+    // binary16's precision and bfloat16's range, so the intermediate rounds nothing and the only
+    // rounding is the one the destination was always going to do.
+    case (a: Type.Floating, b: Type.Floating) if a.bits == b.bits =>
+      convert(Type.Floating(32), b, convert(a, Type.Floating(32), v))
+
     case (a: Type.Floating, b: Type.Floating) => castOp(if b.bits > a.bits then CastOp.FPExt else CastOp.FPTrunc, a, b, v)
 
     case (Type.Char, b: Type.Integer) => convert(Type.Integer(32, signed = false), b, v)

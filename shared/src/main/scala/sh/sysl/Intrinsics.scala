@@ -96,8 +96,8 @@ object Intrinsics {
           (params :+ ret).distinct match
             // The suffix is built by the registry rather than spelled here, so the one place a name
             // is assembled is the one place they are declared.
-            case List(Type.Floating(bits)) => Right(entry.at(LType.F(bits)))
-            case _                         =>
+            case List(Type.Floating(bits, brain)) => Right(entry.at(LType.F(bits, brain)))
+            case _                                =>
               Left(s"'$base' takes and returns one floating-point type, and this declaration " +
                 s"states ${(params :+ ret).map(Type.show).distinct.mkString(" and ")}")
 }

@@ -86,6 +86,10 @@ class LexerTests extends AnyFreeSpec with Matchers {
     "float suffixes" in withLexer { l =>
       l.bare("3.0f32") shouldBe List(l.FloatLit("3.0", Some("f32")))
       l.bare("1.5f16") shouldBe List(l.FloatLit("1.5", Some("f16")))
+      // The one floating suffix that does not start with the family letter. Reading the first
+      // character alone sends it down the integer arm and reports it as an integer suffix on a
+      // float, which is both wrong and the opposite of what it is.
+      l.bare("1.5bf16") shouldBe List(l.FloatLit("1.5", Some("bf16")))
     }
 
     "an integer suffix on a float is rejected" in withLexer { l =>

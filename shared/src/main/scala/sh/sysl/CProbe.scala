@@ -525,9 +525,11 @@ object CProbe {
 
     // Narrower than the widths a C constant expression is written at, and narrow enough that
     // rounding onto it is not something the value could survive being read back through.
-    val notMeasurable = refuse(
-      "'f16' is not a width a 'c const' is measured at — C writes a constant expression as a " +
-        "'float', a 'double' or a 'long double', so the two widths that read back without " +
+    // Both sixteen-bit formats are refused, and by the written name rather than by a shared one:
+    // the reader who wrote `bf16` is not helped by a message about `f16`.
+    def notMeasurable(written: String) = refuse(
+      s"'$written' is not a width a 'c const' is measured at — C writes a constant expression as " +
+        "a 'float', a 'double' or a 'long double', so the two widths that read back without " +
         "guessing are 'f32' and 'f64'")
 
     def follow(ref: TypeRef, seen: Set[String]): Either[Diagnostic, Declared] = ref match
@@ -535,8 +537,8 @@ object CProbe {
         Type.scalars.get(name).orElse(width(name)) match
           case Some(Type.Integer(bits, signed, _)) =>
             Right(Declared.Now(Kind.Whole(bits, signed, name)))
-          case Some(Type.Floating(16))    => notMeasurable
-          case Some(Type.Floating(bits))  => Right(Declared.Now(Kind.Fraction(bits, name)))
+          case Some(Type.Floating(16, _))    => notMeasurable(name)
+          case Some(Type.Floating(bits, _))  => Right(Declared.Now(Kind.Fraction(bits, name)))
           case Some(_)                    => notNumber
           case None if seen(name) =>
             refuse(s"'$name' is declared in terms of itself, so which number it is has no answer")

@@ -80,6 +80,13 @@ class IntrinsicTests extends AnyFreeSpec with RunSupport with CodegenSupport {
       ir("""private extern "llvm.fabs" mag(x: f16) -> f16""" + "\n\nprint(mag(-1.5f16))") should
         include("declare half @llvm.fabs.f16(half)")
     }
+
+    // And the fourth, which shares the third's width and not its name. The suffix comes off the
+    // type rather than off the bit count, so `bf16` names its own intrinsic instead of `f16`'s.
+    "the other format at that width names its own intrinsic" in {
+      ir("""private extern "llvm.fabs" mag(x: bf16) -> bf16""" + "\n\nprint(mag(-1.5bf16))") should
+        include("declare bfloat @llvm.fabs.bf16(bfloat)")
+    }
   }
 
   "the library takes the instruction rather than the call" - {

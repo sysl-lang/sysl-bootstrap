@@ -383,3 +383,15 @@ impl Zero for f32
 
 impl One for f32
     one() -> f32 = 1.0f32
+
+impl Zero for f16
+    zero() -> f16 = 0.0f16
+
+impl One for f16
+    one() -> f16 = 1.0f16
+
+impl Zero for bf16
+    zero() -> bf16 = 0.0bf16
+
+impl One for bf16
+    one() -> bf16 = 1.0bf16

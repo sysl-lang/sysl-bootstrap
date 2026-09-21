@@ -89,7 +89,11 @@ trait GenericInstantiation extends ConstFolding {
       if name.head == 'f' then
         if bits == 16 || bits == 32 || bits == 64 then Some(Type.Floating(bits))
         else if bits == 128 then err("'f128' is not lowered yet — the widest float is 'f64'")
-        else err(s"'$name' is not an IEEE floating-point width; they are f16, f32, and f64")
+        // `bf16` is named rather than measured — it is `f16`'s width and not its format — so it is
+        // not a width this shape could have produced, and the message names it where a reader
+        // reaching for a sixteen-bit float would look.
+        else err(s"'$name' is not an IEEE floating-point width; they are f16, f32, and f64, and " +
+          "the other sixteen-bit format is 'bf16'")
       else if bits >= 1 && bits <= Type.MaxIntegerBits then
         Some(Type.Integer(bits, signed = name.head == 'i'))
       else err(s"'$name' is wider than the ${Type.MaxIntegerBits} bits the back end lowers")

@@ -187,6 +187,51 @@ round_half_away()
     assert_eq(2.5.round(), 3.0)
     assert_eq(3.5.round(), 4.0)
 
+// -- the two sixteen-bit widths --------------------------------------------------------------------
+
+// `Float` reaches every width the back end lowers, and the two narrow ones get there by widening to
+// `f32`, computing, and narrowing back -- libm has no entry point at sixteen bits to bind. So these
+// assert what that route is supposed to preserve: a root and a floor whose answers the width holds
+// exactly come back exact, rather than a fraction off from having gone the long way round.
+@test("the trait reaches both sixteen-bit widths")
+half_width_mathematics()
+    assert_eq(9.0f16.sqrt(), 3.0f16)
+    assert_eq(9.0bf16.sqrt(), 3.0bf16)
+    assert_eq((-2.5f16).floor(), -3.0f16)
+    assert_eq((-2.5bf16).floor(), -3.0bf16)
+
+// Each width's own constants, asserted where they are a property rather than where they are a
+// number. `epsilon` is the smallest step above one, which is a claim two comparisons make: adding it
+// moves off one, and adding half of it rounds back to one.
+@test("each sixteen-bit width's constants are its own")
+half_width_constants()
+    assert_eq(f16.max_value(), 65504.0f16)
+
+    assert(f16.one() + f16.epsilon() != f16.one())
+    assert(f16.one() + f16.epsilon() / 2.0f16 == f16.one())
+    assert(bf16.one() + bf16.epsilon() != bf16.one())
+    assert(bf16.one() + bf16.epsilon() / 2.0bf16 == bf16.one())
+end half_width_constants
+
+// The two formats are the same width and divide it differently -- ten bits of significand against
+// seven -- so the nearest each holds to a tenth is a different number. Compared as `f32`, which
+// holds both exactly, so what is asserted is the two values and not a third rounding.
+@test("the two sixteen-bit formats round a tenth differently")
+half_widths_round_differently()
+    var h: f16 = 0.1
+    var b: bf16 = 0.1
+
+    assert_eq(f32(h), 0.0999755859375f32)
+    assert_eq(f32(b), 0.10009765625f32)
+
+// And the precision `bf16` gives up buys range: its exponent is `f32`'s, so the largest finite `f16`
+// doubles to an ordinary number where at `f16` it is already past the end of the format.
+@test("bf16 keeps f32's range where f16 runs out")
+bf16_reaches_further()
+    assert(!(65504.0f16 * 2.0f16).is_finite())
+    assert((65504.0bf16 * 2.0bf16).is_finite())
+    assert_eq(f32(65504.0bf16 * 2.0bf16), 131072.0f32)
+
 // The two values no literal spells, and the reason `is_nan` exists at all: NaN is the one value not
 // equal to itself, so `x == x` is the test and `x == nan()` is never true.
 @test("NaN is not equal to itself")

@@ -351,6 +351,18 @@ class CConstTests extends AnyFreeSpec with CodegenSupport with RunSupport with P
             |""".stripMargin) should include("'f16' is not a width a 'c const' is measured at")
     }
 
+    /** `bf16` is refused for the same reason and named for itself. The two sixteen-bit formats are
+      * one case to the rule and two to the reader, and a message about `f16` sent to somebody who
+      * wrote `bf16` reads as a compiler confusing the two.
+      */
+    "'bf16', refused the same way and under its own name" in {
+      err("""c const
+            |    B: bf16 = "0.5"
+            |
+            |print(B)
+            |""".stripMargin) should include("'bf16' is not a width a 'c const' is measured at")
+    }
+
     /** C settles this one and hands back an infinity, so the refusal is sysl's rather than clang's —
       * and it has to be, because an infinity folded into a program is a number nobody wrote.
       */

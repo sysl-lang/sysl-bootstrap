@@ -178,6 +178,7 @@ class ExternCodegenTests extends AnyFreeSpec with CodegenSupport {
     "a narrow float is widened to double, whichever narrow float it is" in {
       ir("extern f(n: int, ...)\nvar x: f32 = 1.5f32\nf(1, x)") should include("fpext float")
       ir("extern f(n: int, ...)\nvar x: f16 = 1.5f16\nf(1, x)") should include("fpext half")
+      ir("extern f(n: int, ...)\nvar x: bf16 = 1.5bf16\nf(1, x)") should include("fpext bfloat")
     }
 
     // Each variadic callee is written with *its own* function type, so two of them in one program

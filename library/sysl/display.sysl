@@ -48,10 +48,21 @@ impl Display for string
 impl Display for real
     display(self, out: *Writer, fmt: FormatSpec) = display_real(self, out, fmt)
 
-/** The narrower float widens on the way in, which is what the lowering did for it before: one
+/** The narrower floats widen on the way in, which is what the lowering did for them before: one
  * renderer per kind rather than one per type, and `%g` is written against a `double`.
+ *
+ * Widening is exact at all three widths -- a `real` holds every value any of them can -- so what is
+ * rendered is the value the narrower type actually holds, not an approximation of it. That is why
+ * `f16`'s nearest tenth prints as something other than a tenth: the digits are the ones the width
+ * really has.
  */
 impl Display for f32
+    display(self, out: *Writer, fmt: FormatSpec) = display_real(real(self), out, fmt)
+
+impl Display for f16
+    display(self, out: *Writer, fmt: FormatSpec) = display_real(real(self), out, fmt)
+
+impl Display for bf16
     display(self, out: *Writer, fmt: FormatSpec) = display_real(real(self), out, fmt)
 
 /** The integers, which are the family that is **open**: `i5` and `u24` are types a program may
