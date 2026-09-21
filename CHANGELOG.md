@@ -7,6 +7,12 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.122 — 2026-09-21
+
+**Optimization:** a by-value parameter is now passed **borrowed** — no retain/release around the call — when the callee writes no memory and every call inside it is `-> never`. The panic sites in `sysl.buf`'s indexing moved out of line to qualify, so `Buf.at`, `Buf.len` and their neighbours inline at `-O1`. Measured **1.4–2.0x** on a consumer interpreter's hot loops.
+
+**Feature:** a project states its own optimization level in its manifest — `optimization = "2"`. The precedence is flag beats manifest key beats the default of `1`; the key is read from the **root** project only, and an unrecognised level is refused when the manifest loads rather than at link time. `sysl test --verbose` now traces the clang invocation it builds, so the level that was actually used is visible.
+
 ## 0.0.121 — 2026-09-21
 
 **Feature:** `sysl.math.bigint` gains a full bitwise and floored-division API on the infinite two's-complement reading: `and`/`or`/`xor`/`not` and their operators, `shl`/`shr`, `bit_length`/`trailing_zeros`/`test_bit`/`is_even`/`is_odd`, `from_u64`/`to_u64`/`fits_long`/`to_real`/`from_real`, floored division (`div_rem_floor`/`div_floor`/`mod_floor`), `gcd`/`lcm`/`mod_pow`/`isqrt`, and machine-sized fast paths (`add_long`/`sub_long`/`mul_long`/`cmp_long`/`div_rem_long`) for values that fit a machine word.
