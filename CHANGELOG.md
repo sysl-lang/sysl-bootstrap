@@ -7,6 +7,56 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.125 — 2026-09-22
+
+Add @inline, the mark that says a definition is worth absorbing
+
+@inline lowers to LLVM's bare `inlinehint` function attribute, beside the
+`noinline` and `cold` that landed with it. It is a hint and not an
+instruction: the inliner raises the budget it will spend on the callee
+and decides as it decides, which is what a library needs of it.
+
+It is the opposite of @noinline and is refused beside it, with a sentence
+that names @cold as the different thing the writer may have meant. It is
+not the opposite of @cold: those are separate axes and compose, which
+LLVM spells `inlinehint cold` and accepts. @ghost beside it is refused
+for the reason the other two are, and it stands beside @tailrec and @test
+because neither says anything about how a call is made.
+
+`sysl.buf`'s push carries it. A sequence's append is written to be
+absorbed by its caller, but the member costs a little more for every word
+of the element and a good deal more for every counted field, so the
+element type rather than the member decided whether an append was a store
+or a call and a frame. Measured by sweeping element shapes with the mark
+and without it: an element of nine words carrying one reference is a call
+at the default budget and a store at the raised one, and the two runs
+agree everywhere else.
+
+AstCodec.Version 56 -> 57: the mark travels in an artifact, since a
+generic's definition is monomorphized in the consumer.
+
+
+---
+
+sysl.process: a child may be given a deadline
+
+`run` and `capture` waited for a child for as long as it took, so a program that never ends held
+its caller for ever -- a `node` that hung in another project's test suite held a build for three
+and a half hours at no CPU at all, which is the failure a bound exists to prevent.
+
+Both calls now take a trailing `timeout` in milliseconds, zero (the default) meaning no bound, so
+nothing that already calls them changes. A child that outstays it is sent `SIGTERM`, given a fifth
+of a second, then `SIGKILL`, and the answer is a new `Status.TimedOut` -- distinct from
+`Signalled`, because a caller that set the bound knows exactly what stopped the child and wants to
+say "it took too long" rather than "it crashed". A capture still hands back what the child wrote
+before it was stopped.
+
+The wait is a `waitpid(WNOHANG)` poll against `CLOCK_MONOTONIC`, backing off from one millisecond
+to twenty, because every alternative -- a `SIGCHLD` handler, a blocked signal, `sigtimedwait` --
+changes signal state belonging to the whole program, and `sigtimedwait` is not on macOS anyway.
+The signals go to the child and not to a process group, which would take it out of the terminal's
+foreground group and stop a person's own interrupt reaching it.
+
 ## 0.0.124 — 2026-09-22
 
 Buf.push: the growth arm stores too, so a counted element inlines
