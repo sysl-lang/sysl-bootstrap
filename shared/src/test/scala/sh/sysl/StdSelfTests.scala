@@ -264,8 +264,12 @@ class StdSelfTests extends AnyFreeSpec with Matchers {
    * number theory and machine-sized operands (32 cases) and `sysl.math`'s checked and overflowing
    * arithmetic (5). The runner collected **791** before a case was written, against a floor of 787,
    * so the drift was four and the margin here is the same four -- 828 collected, 824 required.
+   *
+   * Raised to **844** for `sysl.process`'s deadline: `run` and `capture` timing out a child that
+   * never ends, the boundary between a signal and a timeout, and the argument checks around the
+   * new parameter. The tree collects 844 against the prior floor of 824.
    */
-  private val floor = 824
+  private val floor = 844
 
   /** The library, compiled as a **test build of itself**.
    *
