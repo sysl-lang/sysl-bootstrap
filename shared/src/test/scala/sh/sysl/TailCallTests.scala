@@ -399,12 +399,15 @@ class TailCallTests extends AnyFreeSpec with RunSupport with CodegenSupport {
     // Which annotations exist is `TestAttributeTests`' assertion, and it is asserted there one name
     // at a time — a sentence counting them goes stale every time the set grows, which it did twice
     // in one afternoon when `17` added `@pure` and `@ghost`.
+    // The word written here was `@inline` until the language grew one, which is the hazard
+    // `TestAttributeTests` records against the same case: one written against a plausible word is
+    // one waiting to be rewritten. `@serializable` names a facility sysl has no notion of at all.
     "an attribute sysl does not know is named in the refusal" in {
       err(
-        """@inline
+        """@serializable
           |double(n: int) -> int = n * 2
           |print(double(5))""".stripMargin
-      ) should include("'inline' is not an annotation a declaration takes")
+      ) should include("'serializable' is not an annotation a declaration takes")
     }
 
     "the same attribute twice is refused" in {
