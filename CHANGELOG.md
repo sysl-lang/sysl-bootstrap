@@ -7,6 +7,12 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.123 — 2026-09-22
+
+**Feature:** two function/member attributes about a definition, `@noinline` and `@cold`. `@noinline` lowers to LLVM's bare `noinline`, `@cold` to bare `cold`, on the `define` line — what lets a library keep a rare path out of a hot one, since a `private` function with a single call site is otherwise folded back into its caller by the inliner. The two are separate axes and compose (LLVM's own division), both may stand above a function or a member, both reach every instantiation of a generic, and `@ghost` beside either is refused. AstCodec version 55 -> 56: the marks travel in an artifact, since a generic's definition is monomorphized in the consumer.
+
+**Optimization:** `Buf.push`'s growth (the allocation, copy and release of the storage it replaced) moves behind `@noinline @cold private grow(need, fill)`, which `extend` now shares — one rule for both: capacity starts at eight and doubles until it fits. What is left in `push` is a compare, a store and a bump that the caller absorbs. The ARC reaper's drain loop gets the same treatment: `@arc.reap` is now `noinline cold`, so a release at a call site is a decrement, a branch, and a call almost never made, instead of carrying the queue push, the re-entry flag and the drain loop inline at every site. Measured on 500 million push-and-pop rounds at `-O2`, best of five: `Buf[int]` 0.7766s -> 0.2993s, and a 40-byte struct with a counted field 2.7492s -> 2.1993s.
+
 ## 0.0.122 — 2026-09-21
 
 **Optimization:** a by-value parameter is now passed **borrowed** — no retain/release around the call — when the callee writes no memory and every call inside it is `-> never`. The panic sites in `sysl.buf`'s indexing moved out of line to qualify, so `Buf.at`, `Buf.len` and their neighbours inline at `-O1`. Measured **1.4–2.0x** on a consumer interpreter's hot loops.
