@@ -107,6 +107,7 @@ trait HoistMembers extends HoistImpl {
       tpacks = m.tpacks,
       noinline = m.noinline,
       cold = m.cold,
+      inline = m.inline,
     ).setPos(m.pos))
 
   /** Records that a default is read **in its trait's terms**, and hands it back.

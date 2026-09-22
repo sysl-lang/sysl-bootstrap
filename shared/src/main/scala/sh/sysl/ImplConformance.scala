@@ -226,11 +226,12 @@ trait ImplConformance extends MemberLowering {
       reads = m.reads,
       writes = m.writes,
       crossing = m.crossing,
-      // `@noinline` and `@cold` are about the function a member lowers to, which is this one, so
-      // they cross unchanged as well — and they reach every instantiation of a generic member for
-      // the reason the signature does: the declaration is what is instantiated.
+      // `@noinline`, `@inline` and `@cold` are about the function a member lowers to, which is this
+      // one, so they cross unchanged as well — and they reach every instantiation of a generic
+      // member for the reason the signature does: the declaration is what is instantiated.
       noinline = m.noinline,
       cold = m.cold,
+      inline = m.inline,
     ).setPos(m.pos)
   }
 

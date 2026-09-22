@@ -785,13 +785,16 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       case _                                       => None
 
   /** The **enum** function attributes this definition carries, which LLVM writes as bare keywords
-   * rather than as quoted pairs (`reference/attributes.md § @noinline and @cold`).
+   * rather than as quoted pairs (`reference/attributes.md § @noinline, @inline and @cold`).
    *
-   * They are written in LLVM's own order — `noinline` before `cold` — so that a definition carrying
-   * both reads the same way whichever order the attributes were written above it.
+   * They are written in one fixed order — the inlining mark, then `cold` — so that a definition
+   * carrying two reads the same way whichever order the attributes were written above it.
+   * `noinline` and `inlinehint` never appear together, since the two contradict and the pair is
+   * refused where it is written.
    */
   private def bareAttributes(f: TFunc): List[String] =
-    List(Option.when(f.noinline)("noinline"), Option.when(f.cold)("cold")).flatten
+    List(Option.when(f.noinline)("noinline"), Option.when(f.inline)("inlinehint"),
+         Option.when(f.cold)("cold")).flatten
 
   private def attribute(f: TFunc): List[(String, String)] =
     f.conv.zip(Conventions.interruptForm(target.cpu).toOption) match
