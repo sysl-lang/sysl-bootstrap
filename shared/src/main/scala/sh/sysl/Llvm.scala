@@ -87,6 +87,18 @@ object Llvm {
    */
   val trap = declare("llvm.trap", "the runtime-safety stop")
 
+  /** A fact the optimizer may rely on and that nothing evaluates at run time — what a caller is told
+   * a callee's `ensure` established, and the whole of how a contract reaches the optimizer
+   * (`ContractEmitter.assumeEnsures`).
+   *
+   * **It is a claim rather than a check, and the check is somewhere else.** The callee traps on the
+   * same condition before every return, so what is asserted here is something the program has
+   * already established by the time control arrives; this only says it in a form LLVM reads. A back
+   * end without an assume drops these entirely and loses nothing but the folding they buy — which is
+   * why the caller's own bounds test is still emitted and still correct.
+   */
+  val assume = declare("llvm.assume", "a fact the optimizer may rely on")
+
   /** An aggregate copied whole. A back end with no memcpy intrinsic emits the call to libc's, which
    * costs a hosted target nothing and is exactly what a freestanding one cannot do.
    *

@@ -39,6 +39,15 @@ trait ContractEmitter extends ArcEmitter with ScalarEmitter {
   protected var selfParams: List[(String, Type)] = Nil
   protected var selfVariant: Option[TExpr]       = None
 
+  /** The locals of the body being emitted whose value a **call it makes** could change under it —
+   * what `ContractAssume.exposed` finds, and the one thing an argument has to be clear of before a
+   * postcondition may be written in terms of it.
+   *
+   * It defaults to `ContractAssume.unknown`, which substitutes nothing, so a body that never says
+   * what it exposes gives up the optimization rather than claiming something it has not checked.
+   */
+  protected var callerExposed: Set[String] = ContractAssume.unknown
+
   override protected def startFunction(): Unit = {
     super.startFunction()
     ensures = Nil
@@ -46,6 +55,7 @@ trait ContractEmitter extends ArcEmitter with ScalarEmitter {
     selfName = ""
     selfParams = Nil
     selfVariant = None
+    callerExposed = ContractAssume.unknown
   }
 
   /** Whether a call to `name` is the self-call a `variant` is checked at. */
@@ -129,6 +139,86 @@ trait ContractEmitter extends ArcEmitter with ScalarEmitter {
       resultSSA = result
       for (cond, _) <- ensures do emitContract(cond, "ensure")
       resultSSA = None
+
+  /** Whether a clause is a proof obligation rather than something to lay down: it names a ghost
+   * function, which will not be there (`reference/verification.md § @ghost — what costs nothing to
+   * say`).
+   *
+   * **It is the one switch a contract has, and everything that follows a contract is wired to it.**
+   * A clause that is not ghostly is checked at every return and an `assume` may repeat it; a clause
+   * that is ghostly is not checked at all, so nothing may claim it. There is no build mode, flag or
+   * optimization level that strips a check sysl emitted — a contract is `§1` of
+   * `reference/verification.md`, one program with one meaning — and if one is ever added, the assume
+   * has to be taken out by the same switch or a caller will be told something no longer established.
+   */
+  protected def ghostly(x: Any): Boolean = ghostFuncs.nonEmpty && Ghost.mentions(x, ghostFuncs)
+
+  /** The ghost functions of this program, which nothing emitted may name. */
+  protected lazy val ghostFuncs: Set[String] =
+    program.funcs.filter(_.ghost).map(_.name).toSet
+
+  /** Every function that declares a postcondition worth repeating at a call, by the name a call
+   * site writes, each with the parameters its own body may have rebound before the check ran
+   * (`ContractAssume.rebound`). A `@ghost` function is not in here because nothing executable calls
+   * one.
+   *
+   * **The rebinding is worked out once per function rather than once per call site**, which is what
+   * keeps the feature off the compiler's clock: it is a walk of a whole body, and the library has
+   * call sites in the hundreds.
+   */
+  private lazy val contracted: Map[String, (TFunc, Set[String])] =
+    program.funcs.filter(f => f.ensures.nonEmpty && !f.ghost)
+      .map(f => f.name -> (f, ContractAssume.rebound(f.body))).toMap
+
+  /** **What a caller is told a call established** — an `llvm.assume` per postcondition, laid down
+   * after the call has returned (`reference/verification.md § What the optimizer is told`).
+   *
+   * **Without this a contract stops at the callee's own frame.** `grow` promises storage for what
+   * was asked for and traps if it did not deliver, and the store on the line after the call still
+   * carries a bounds test — because LLVM sees a call to a `@noinline` function and then a subscript,
+   * and nothing connects them. Repeating the promise as a fact is the connection, and it costs the
+   * program nothing at run time: `llvm.assume` emits no code.
+   *
+   * **Three things make repeating it sound, and all three are load-bearing:**
+   *
+   *  - The callee checks the same condition **before every return**. `ensure` is checked at each of
+   *    them (`Codegen.genFunction`), and the two ways a function can leave without reaching one —
+   *    a tail call and a `become` — are both refused outright on a function that has an `ensures`
+   *    (`TailCalls`, `TailJumps`). So control arriving here is control that passed the check.
+   *  - Nothing strips that check. See `ghostly` above: the only clause that does not run is one
+   *    naming a ghost function, and those are skipped here by the same test rather than by a
+   *    second one that could drift from it.
+   *  - The clause reads the same values in both places, which is `ContractAssume`'s half — and the
+   *    caller's side of that is `callerExposed`, since an argument the call itself can change is
+   *    not a name the promise was made about.
+   *
+   * A clause that cannot be rewritten, or whose lowering turns out to do anything at all, is simply
+   * not repeated — the program is then exactly what it was before, which is the failure mode this
+   * is allowed to have.
+   */
+  protected def assumeEnsures(name: String, args: List[TExpr], result: Option[Val]): Unit =
+    for
+      (f, written) <- contracted.get(name).toList
+      (clause, _)  <- f.ensures
+      if !ghostly(clause)
+      ported <- ContractAssume.atCall(clause, f.params, args, written, result.isDefined,
+                                      callerExposed ++ promoted)
+    do
+      val saved = resultSSA
+
+      resultSSA = result
+      tryPure {
+        pushTemps()
+        val ok = genExpr(ported)
+
+        popTemps()
+        ok
+      } match
+        case Some(ok) if ok != Val.Nothing =>
+          usesAssume = true
+          emit(Inst.Call(None, LType.Void, Val.Global(Llvm.assume.name), List(Arg(i1, ok))))
+        case _ => ()
+      resultSSA = saved
 
   /** Sets up a `variant`'s two slots at the point the loop is entered (`reference/verification.md §
    * invariant and variant on a loop`), then emits the loop.

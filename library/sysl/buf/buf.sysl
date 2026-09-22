@@ -104,10 +104,22 @@ struct Buf[T]
      * **The fill is a parameter because a generic `T` has no zero**: an array is made by repeating
      * a value, and nothing about `T` says what an unused slot should hold. None of those slots is
      * read -- `count` is what says which elements are real.
+     *
+     * **The contract is what carries the growth back out to the caller.** A postcondition is
+     * repeated at every call site as a fact the optimizer may use, so the store `grow_store` makes
+     * on the line after the call needs no bounds test of its own -- without it LLVM sees a call to
+     * something it was told not to inline, then a subscript, and has nothing joining the two. What
+     * is promised is the smallest thing that does the job: the count is a valid index once the
+     * storage has been replaced. The precondition beside it is what makes that true rather than
+     * hopeful, and both callers satisfy it -- `grow_store` asks for one more than the count, and
+     * `extend` for the count plus a run it has already found to be non-empty.
      */
     @noinline
     @cold
     private grow(*self, need: usize, fill: T)
+        require need > self.count
+        ensure self.count < self.elems.len
+
         var bigger_len = if self.elems.len == 0 then 8usize else self.elems.len
 
         while bigger_len < need

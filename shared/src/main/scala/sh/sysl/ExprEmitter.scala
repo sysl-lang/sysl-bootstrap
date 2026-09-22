@@ -784,8 +784,13 @@ trait ExprEmitter extends ArithEmitter {
       // inside the callee, which is what lets it be made out of values already in hand.
       if checksVariant(name) then genVariantAtCall(staged)
       val (what, callee) = calleeParts(name, ty)
+      val r              = genSyslCall(what, callee, formatArgs(staged), ty, None)
 
-      genSyslCall(what, callee, formatArgs(staged), ty, None)
+      // What the callee promised, said again where the caller's own code can be folded against it
+      // (`ContractEmitter.assumeEnsures`). It goes after the call because a postcondition is about
+      // the state the call left behind.
+      assumeEnsures(name, args, Option.when(r != Val.Nothing)(r))
+      r
 
     // Erasing costs one word: the value goes on pointing where it pointed, and the table for the
     // type it is losing is a constant beside it. Nothing is retained — a counted object holds the

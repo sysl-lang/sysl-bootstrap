@@ -328,6 +328,11 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
 
           genSyslCall(what, callee, formatArgs(staged), ty, Some(dest))
 
+          // A large result never becomes an LLVM value, so `result` has no register to name here and
+          // a clause mentioning it is left alone; one written about the parameters alone is repeated
+          // exactly as it is on the register path.
+          assumeEnsures(name, args, None)
+
         case _ =>
           genBorrowedInto(dest, e)
           retainAt(e.ty, dest)

@@ -137,6 +137,12 @@ trait Emitter {
    */
   protected var usesMemcpy = false
 
+  /** Whether anything told the optimizer what a contract established, which is what `llvm.assume` is
+   * declared for (`ContractEmitter.assumeEnsures`). A module whose callees declare no postcondition
+   * — or none that survives `tryPure` — never names it.
+   */
+  protected var usesAssume = false
+
   /** LLVM intrinsic `declare` lines the module turned out to need — the saturating float-to-integer
    * casts, the checked arithmetic, and the bit operations `sysl.math`'s `Bits` lowers to. Each is
    * declared once under its overload-mangled name, which is why this is a set rather than a flag:
@@ -703,6 +709,70 @@ trait Emitter {
     currentLbl = l
     terminated = !reached.contains(l)
   }
+
+  /** Emits `body`, and keeps what it emitted **only if every instruction of it is one the program
+   * could equally not have run** — no call, no store, no allocation, no branch, no trap. On anything
+   * else the emitted text is taken back out and the answer is `None`, leaving the function exactly as
+   * it was down to the register counter.
+   *
+   * **This exists because a contract clause is ordinary sysl, and a clause read somewhere other than
+   * where it was written may not be allowed to do anything** (`ContractEmitter.assumeEnsures`). A
+   * postcondition may short-circuit an `and`, which opens a block; it may subscript, which traps; it
+   * may build a temporary, which allocates and releases. None of those may happen a second time at a
+   * caller, whose only business with the clause is to repeat a fact the callee has already checked.
+   *
+   * **The test is on the instructions rather than on the node kinds, which is what keeps it honest.**
+   * A whitelist of the tree shapes that are safe is a second copy of what every lowering does, and it
+   * goes stale the first time one of them grows a check — silently, and in the direction that emits an
+   * `assume` for something the callee never established. What came out is the thing to read.
+   */
+  protected def tryPure[A](body: => A): Option[A] = {
+    val hoisted = prologue.length
+    val filed   = blocks.length
+    val here    = current.toList
+    val end     = currentEnd
+    val lbl     = currentLbl
+    val closed  = terminated
+    val edges   = reached.toSet
+    val regs    = temp
+    val labels  = label
+    val out     = body
+
+    if !closed && !terminated && blocks.length == filed &&
+      prologue.length == hoisted && current.view.drop(here.length).forall(effectFree)
+    then Some(out)
+    else {
+      prologue.remove(hoisted, prologue.length - hoisted)
+      blocks.remove(filed, blocks.length - filed)
+      current.clear()
+      current ++= here
+      currentEnd = end
+      currentLbl = lbl
+      terminated = closed
+      reached.clear()
+      reached ++= edges
+      temp = regs
+      label = labels
+      None
+    }
+  }
+
+  /** Whether an instruction computes a value and does nothing else — what `tryPure` keeps.
+   *
+   * **Integer division and remainder are excluded although LLVM calls them side-effect free**,
+   * because a zero divisor is undefined behaviour: emitting one at a call site introduces a way for
+   * the program to be wrong that the source never wrote. Every other arithmetic instruction sysl
+   * emits is total at every operand.
+   */
+  private def effectFree(inst: ir.Inst): Boolean = inst match
+    case ir.Inst.Bin(_, op, _, _, _) =>
+      op != ir.BinOp.SDiv && op != ir.BinOp.UDiv && op != ir.BinOp.SRem && op != ir.BinOp.URem
+    case _: ir.Inst.Neg | _: ir.Inst.IntCmp | _: ir.Inst.FloatCmp | _: ir.Inst.Cast |
+        _: ir.Inst.Load | _: ir.Inst.Gep | _: ir.Inst.Extract | _: ir.Inst.Insert |
+        _: ir.Inst.Select | _: ir.Inst.ExtractElement | _: ir.Inst.InsertElement |
+        _: ir.Inst.Shuffle =>
+      true
+    case _ => false
 
   /** A runtime helper's signature: `private`, `void`, and parameters named as the body reads them.
    *

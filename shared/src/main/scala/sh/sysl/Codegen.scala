@@ -34,14 +34,6 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
   // source file, so this is whole-program where `promoted` is per body.
   promotedTemps = promotions.temporaries
 
-  /** The ghost functions of this program, which nothing emitted may name (`reference/verification.md § @ghost — what costs nothing to say`). */
-  private val ghostFuncs: Set[String] = program.funcs.filter(_.ghost).map(_.name).toSet
-
-  /** Whether a clause is a proof obligation rather than something to lay down: it names a ghost
-   * function, which will not be there.
-   */
-  private def ghostly(x: Any): Boolean = ghostFuncs.nonEmpty && Ghost.mentions(x, ghostFuncs)
-
   // --- module --------------------------------------------------------------------------
 
   /** **The module, as data.** `gen` below is this written down.
@@ -274,6 +266,8 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       Option.when(usesVaCopy)(sig(Llvm.vaCopy.at(LType.Ptr), LType.Void, LType.Ptr, LType.Ptr)),
       Option.when(usesMemcpy)(
         sig(Llvm.memcpyName, LType.Void, LType.Ptr, LType.Ptr, LType.I(64), i1)),
+      // What a call site was told its callee's `ensure` established (`ContractEmitter.assumeEnsures`).
+      Option.when(usesAssume)(sig(Llvm.assume.name, LType.Void, i1)),
     )
   }
 
@@ -373,6 +367,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
   private def genMain(vals: List[TVal], stmts: List[TStmt], entry: Option[TEntry]): ir.Func = {
     startFunction()
     promoted = promotions(None)
+    callerExposed = ContractAssume.exposed((vals, stmts, entry))
     pushTemps()
     pushOwned()
 
@@ -445,6 +440,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
   private def genTestMain(vals: List[TVal], tests: List[TTest], hooks: List[THook]): ir.Func = {
     startFunction()
     promoted = promotions(None)
+    callerExposed = ContractAssume.exposed((vals, tests, hooks))
     pushTemps()
     pushOwned()
 
@@ -571,6 +567,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
   private def genModuleInit(vals: List[TVal]): ir.Initializer = {
     startFunction()
     promoted = promotions(None)
+    callerExposed = ContractAssume.exposed(vals)
     pushTemps()
     pushOwned()
 
@@ -637,6 +634,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
   private def genFunction(f: TFunc): ir.Func = {
     startFunction()
     promoted = promotions(Some(f.name))
+    callerExposed = ContractAssume.exposed(f.body)
     pushTemps()
     pushOwned()
     ensures = f.ensures.filterNot((c, _) => ghostly(c))

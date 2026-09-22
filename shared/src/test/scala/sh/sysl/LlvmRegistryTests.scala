@@ -77,6 +77,14 @@ class LlvmRegistryTests extends AnyFreeSpec with CodegenSupport {
          |    return first
          |print(total(1, 2))""".stripMargin),
     "a placed symbol"        -> "@section(\".noinit\")\nstatic var reason: u32 = 0u32\nprint(reason)",
+    // What a caller is told a postcondition established. The callee is `@noinline` so the call is
+    // still a call by the time the assume is laid down beside it.
+    "a contract at a call"   ->
+      ("""@noinline
+         |wide(n: usize) -> usize
+         |    ensure result >= n
+         |    n + 8usize
+         |print(wide(3usize))""".stripMargin),
   )
 
   /** Every name in LLVM's namespace a module reaches: the globals and calls it writes with an `@`,
@@ -122,7 +130,7 @@ class LlvmRegistryTests extends AnyFreeSpec with CodegenSupport {
     // registry declares rather than by a literal.
     "every family the compiler emits for is reached" in {
       val bases = List(
-        Llvm.trap.base, Llvm.memcpy.base, Llvm.vaStart.base, Llvm.vaCopy.base,
+        Llvm.trap.base, Llvm.memcpy.base, Llvm.vaStart.base, Llvm.vaCopy.base, Llvm.assume.base,
         Llvm.fptosiSat.base, Llvm.fptouiSat.base,
         Llvm.withOverflow("mul", signed = false).base, Llvm.withOverflow("add", signed = true).base,
         Llvm.bits("ctpop").base, Llvm.bits("fshl").base,
