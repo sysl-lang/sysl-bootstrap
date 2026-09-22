@@ -7,6 +7,55 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.124 — 2026-09-22
+
+Buf.push: the growth arm stores too, so a counted element inlines
+
+`push` had one store shared by both arms, and an element that has to
+survive the growth call is an element the caller has to spill: the frame
+every append paid for was large enough to hold the value across a call
+that is almost never made. Moving the store onto the rare side leaves
+each arm holding only what it writes.
+
+Three parts, and each one is load-bearing:
+
+  - room is asked for with `>=` rather than `==`, so the arm that does not
+    grow is reached knowing `count < elems.len` and its store needs no
+    bounds check of its own;
+  - the growth *and the store that follows it* sit behind one `@noinline
+    @cold private grow_store(v)`, which calls the same `grow` that
+    `extend` shares, so nothing the store needs outlives a call;
+  - the count is raised once, after both arms -- deliberately *not* inside
+    `grow_store`, because a count raised in there is a count a caller
+    appending in a loop must read back out of the buffer every turn
+    instead of keeping it in a register.
+
+That last part is the whole difference between this shape and an early
+return on the growth arm. The early return shrinks the frame just as
+well and measured **3x slower** on `Buf[int]`, because a cold arm that
+moves the count forces the loop-carried count and length through memory.
+
+LLVM's inline cost for `push`, against the -O2 threshold of 225:
+`Buf[int]` 80 -> 45, `Buf[&T]` 235 -> 195, and a 40-byte struct with one
+counted field 260 -> 220. So a push of a counted value is now absorbed
+by its caller at each of those element types, where the threshold used to
+turn it into a call and a frame.
+
+Measured at -O2 on 40 million push-and-pop rounds, best of five:
+
+  Buf[int]                       0.0257s -> 0.0177s   1.45x
+  Buf[&Node]                     0.0809s -> 0.0526s   1.54x
+  Buf[V], 40 bytes, one count    0.1280s -> 0.0691s   1.85x
+
+Tests: `InliningAttrTests` now asks of the counted case what it only
+asked of `int` -- that `push` is gone from its caller and the growth is
+not -- and that the absorbed store carries no `llvm.trap`, which is what
+says the `>=` fact reached the optimizer. Three `@test`s in
+`library/sysl/buf/tests.sysl` cover the two arms: a run of pushes across
+two doublings coming back in order, a counted element pushed exactly at
+capacity and read back after the growth that made room for it, and a push
+into capacity that was already there.
+
 ## 0.0.123 — 2026-09-22
 
 **Feature:** two function/member attributes about a definition, `@noinline` and `@cold`. `@noinline` lowers to LLVM's bare `noinline`, `@cold` to bare `cold`, on the `define` line — what lets a library keep a rare path out of a hot one, since a `private` function with a single call site is otherwise folded back into its caller by the inliner. The two are separate axes and compose (LLVM's own division), both may stand above a function or a member, both reach every instantiation of a generic, and `@ghost` beside either is refused. AstCodec version 55 -> 56: the marks travel in an artifact, since a generic's definition is monomorphized in the consumer.
