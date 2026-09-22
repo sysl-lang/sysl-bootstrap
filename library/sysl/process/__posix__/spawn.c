@@ -17,10 +17,53 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+/* How long a child that has been asked to stop is given before it is made to.
+ *
+ * Deliberately short. A child that means to tidy up on `SIGTERM` has already had the whole of its
+ * timeout to finish, and one that ignores the signal is not going to honour a longer wait either --
+ * the caller asked for a bound, and the grace is part of it rather than an extension to it.
+ */
+#define SYSL_PROC_GRACE_MS 200
+
+/* The longest a bounded wait sleeps between asking whether the child has ended.
+ *
+ * It starts at a millisecond and doubles up to this, so a child that ends at once is noticed at
+ * once and one that runs for an hour is not asked about a thousand times a second.
+ */
+#define SYSL_PROC_NAP_MAX_MS 20
+
+/* The monotonic clock in milliseconds, which is what a deadline is measured against.
+ *
+ * Monotonic rather than the wall clock, because a deadline compared against a clock somebody can
+ * set backwards is a deadline that can be moved after the fact -- an NTP step during a long child
+ * would either cut its timeout short or extend it indefinitely.
+ */
+static long long now_ms(void) {
+    struct timespec ts = {0, 0};
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Sleeps for `ms`, or for however much of it a signal leaves.
+ *
+ * What is left of an interrupted sleep is not carried over: the cost of cutting one short is
+ * looking at the child a little early, and the deadline is checked against the clock rather than
+ * against a count of naps, so nothing drifts.
+ */
+static void nap(long long ms) {
+    struct timespec want = { (time_t) (ms / 1000), (long) (ms % 1000) * 1000000L };
+
+    nanosleep(&want, NULL);
+}
 
 /* One of the child's streams pointed at a file the parent named. Answers an `errno`, or zero.
  *
@@ -74,9 +117,78 @@ static int child_setup(const char *const *names, const char *const *values,
     return redirect(err_path, STDERR_FILENO);
 }
 
+/* Whether the child has ended, reaping it if it has.
+ *
+ * Answers 1 for ended, 0 for still running, and -1 for a failure whose `errno` is left in `*err`.
+ * `EINTR` is retried rather than reported, for the reason the blocking wait below retries it: a
+ * signal arriving here is not the child's doing and must not turn it into a failure.
+ */
+static int reaped(pid_t pid, int *status, int *err) {
+    for (;;) {
+        pid_t ended = waitpid(pid, status, WNOHANG);
+
+        if (ended == pid) return 1;
+
+        if (ended == 0) return 0;
+
+        if (errno == EINTR) continue;
+
+        *err = errno;
+        return -1;
+    }
+}
+
+/* Wait for the child for as long as it takes. Answers 0, or an `errno`. */
+static int wait_out(pid_t pid, int *status) {
+    while (waitpid(pid, status, 0) < 0) {
+        if (errno != EINTR) return errno;
+    }
+
+    return 0;
+}
+
+/* Wait for the child until `deadline`. Answers 1 if it ended in time, 0 if the deadline arrived
+ * first, and -1 for a failure whose `errno` is left in `*err`.
+ *
+ * **Polling rather than waiting for `SIGCHLD`, because the alternatives all change state that
+ * belongs to the whole program.** A handler, a blocked signal or a `sigtimedwait` is process-wide:
+ * installing one here would be a library deciding what a caller's own signal handling looks like,
+ * and restoring it afterwards still races with anything else running at the time. `sigtimedwait` is
+ * not on macOS in any case. A `WNOHANG` loop asks the kernel a question and leaves nothing behind,
+ * and what it costs is a wake-up every few milliseconds while a child runs.
+ */
+static int wait_until(pid_t pid, int *status, long long deadline, int *err) {
+    long long step = 1;
+
+    for (;;) {
+        int ended = reaped(pid, status, err);
+
+        if (ended != 0) return ended;
+
+        long long left = deadline - now_ms();
+
+        if (left <= 0) return 0;
+
+        nap(step < left ? step : left);
+
+        if (step < SYSL_PROC_NAP_MAX_MS) step *= 2;
+    }
+}
+
 /* Start `program`, wait for it, and say how it ended.
  *
  * Returns 0 having set `*code` and `*sig`, or an `errno` if the child could not be started at all.
+ *
+ * `timeout_ms` bounds the whole of the child's life, and zero or less means it is unbounded. On a
+ * deadline that arrives first the child is sent `SIGTERM`, given `SYSL_PROC_GRACE_MS` to go, then
+ * sent `SIGKILL` -- and `*timed_out` is set, because the exit status of a child that was killed
+ * because it ran out of time says nothing a caller wants to hear.
+ *
+ * **The signal goes to the child and not to its process group**, which is the same restraint the
+ * module keeps everywhere else: putting the child in a group of its own would take it out of the
+ * terminal's foreground group, so a person's own interrupt would stop reaching it. What that costs
+ * is that a child which forked grandchildren of its own leaves them behind -- for which the answer
+ * is to run the program rather than a shell that runs it, which is what this module does anyway.
  *
  * **The pipe is how a failed `execvp` is told from a program that ran and exited 127**, which is
  * the distinction a caller most wants and the one `system(3)` cannot make. It is close-on-exec, so
@@ -88,7 +200,9 @@ static int child_setup(const char *const *names, const char *const *values,
 int sysl_proc_run(const char *program, char *const *argv,
                   const char *const *env_names, const char *const *env_values,
                   const char *dir, const char *out_path, const char *err_path,
-                  int *code, int *sig) {
+                  int timeout_ms, int *code, int *sig, int *timed_out) {
+    *timed_out = 0;
+
     /* **Everything this program has written, written, before anything else can write.**
      *
      * A C library buffers standard output, and it buffers it *fully* rather than by line whenever
@@ -121,6 +235,10 @@ int sysl_proc_run(const char *program, char *const *argv,
     }
 
     pid_t pid = fork();
+
+    /* The clock starts here, so the timeout covers the child's whole life rather than only the
+     * part of it after the exec. */
+    long long started_at = now_ms();
 
     if (pid < 0) {
         int e = errno;
@@ -157,11 +275,38 @@ int sysl_proc_run(const char *program, char *const *argv,
 
     int status = 0;
 
-    /* `waitpid` is restarted rather than abandoned on `EINTR`: a signal arriving here would
-     * otherwise turn a perfectly ordinary child into a failure, and leave it to be reaped by
-     * nobody. */
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) return errno;
+    if (timeout_ms <= 0) {
+        int e = wait_out(pid, &status);
+
+        if (e != 0) return e;
+    } else {
+        int wait_errno = 0;
+        int in_time = wait_until(pid, &status, started_at + timeout_ms, &wait_errno);
+
+        if (in_time < 0) return wait_errno;
+
+        if (in_time == 0) {
+            /* Asked first and made second. A child that stops on being asked gets to run whatever
+             * it does on the way out -- flush what it was writing, remove what it was building --
+             * and one that does not is still gone when this returns. */
+            kill(pid, SIGTERM);
+
+            in_time = wait_until(pid, &status, now_ms() + SYSL_PROC_GRACE_MS, &wait_errno);
+
+            if (in_time < 0) return wait_errno;
+
+            if (in_time == 0) {
+                kill(pid, SIGKILL);
+
+                /* `SIGKILL` cannot be caught or ignored, so this waits for something that is
+                 * already on its way rather than for the child's cooperation. */
+                int e = wait_out(pid, &status);
+
+                if (e != 0) return e;
+            }
+
+            *timed_out = 1;
+        }
     }
 
     if (got == (ssize_t) sizeof child_errno && child_errno != 0) return child_errno;

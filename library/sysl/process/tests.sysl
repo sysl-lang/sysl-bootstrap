@@ -3,6 +3,8 @@ module sysl.process
 @tests
 
 import sysl.fs.IoError
+import sysl.posix.time.monotonic
+import sysl.time.whole_millis
 
 // What starting another program promises, asserted in sysl rather than beside it in Scala.
 //
@@ -149,6 +151,7 @@ ok_is_exited_zero()
     assert(Status.Exited(0).ok())
     assert(!Status.Exited(1).ok())
     assert(!Status.Signalled(9).ok(), "a signal is never a success, whatever its number")
+    assert(!Status.TimedOut.ok(), "and a child that was stopped never finished")
 
 // **An exit status and a signal are different answers.** A shell folds them together as `128 + n`,
 // which makes a program killed by `SIGKILL` indistinguishable from one that chose to exit 137.
@@ -157,11 +160,22 @@ signal_is_not_a_status()
     assert(Status.Exited(9) != Status.Signalled(9))
     assert(Status.Exited(137) != Status.Signalled(9))
 
+// **A child that ran out of time was killed by a signal, and saying so would lose the one thing
+// the caller knows**: which of the two it is deciding between is whether to report a crash or to
+// wait longer next time.
+@test("running out of time is not the same answer as being killed")
+timed_out_is_not_a_signal()
+    assert(Status.TimedOut != Status.Signalled(9))
+    assert(Status.TimedOut != Status.Signalled(15))
+    assert(Status.TimedOut != Status.Exited(0))
+    assert(Status.TimedOut == Status.TimedOut)
+
 @test("a status says which it is")
 a_status_says_which()
     assert_eq(s"${Status.Exited(0)}", "exited")
     assert_eq(s"${Status.Exited(2)}", "exited 2")
     assert_eq(s"${Status.Signalled(9)}", "killed by signal 9")
+    assert_eq(s"${Status.TimedOut}", "timed out")
 
 // ## What it wrote to the OTHER stream
 //
@@ -213,3 +227,79 @@ stderr_does_not_collide_with_stdout()
 
     assert_eq(out.text, "aaa\n")
     assert_eq(out.err.unwrap(), "bbb\n")
+
+// ## Running out of time
+//
+// **The claim is that a call which waits can be told to stop waiting**, and nothing else in this
+// file asserts it: every other child here ends on its own. The ones below are asked to take far
+// longer than the bound they are given, so each of these tests is a measurement -- how long the
+// call took against how long the child wanted -- rather than an assertion that it came back at all.
+
+@test("a child that outstays its timeout is stopped and says so")
+outstaying_the_timeout_is_reported()
+    val t0 = monotonic()
+    val s = run("sleep", ["5"], "", [], 200).unwrap()
+    val took = whole_millis(monotonic() - t0)
+
+    assert_eq(s, Status.TimedOut)
+    assert(!s.ok(), "a child that was stopped never finished, so it is not a success")
+    assert(took < 3000, s"waited ${took}ms, which is the child's five seconds rather than the bound")
+end outstaying_the_timeout_is_reported
+
+// **Asked first and made second**, which is the whole of why there are two signals: a child that
+// stops on `SIGTERM` gets to tidy up, and one that ignores it is still gone when the call returns.
+// This one ignores it -- a disposition of "ignore" survives an `exec`, which is what lets the child
+// be a single process rather than a shell holding one -- so the only way the call can come back
+// before the child's own three seconds is the `SIGKILL` behind the grace.
+@test("a child that ignores being asked to stop is made to")
+ignoring_the_ask_is_still_stopped()
+    val t0 = monotonic()
+    val s = run("sh", ["-c", "trap '' TERM; exec sleep 3"], "", [], 200).unwrap()
+    val took = whole_millis(monotonic() - t0)
+
+    assert_eq(s, Status.TimedOut)
+    assert(took < 2000, s"waited ${took}ms, so the child was never made to stop")
+end ignoring_the_ask_is_still_stopped
+
+// A bound is a bound rather than a deadline for the call: a child that finishes inside it is
+// reported exactly as it would have been without one, failure included.
+@test("a child that finishes inside its timeout is unaffected")
+finishing_in_time_is_unaffected()
+    assert_eq(run("true", [], "", [], 5000).unwrap(), Status.Exited(0))
+    assert_eq(run("false", [], "", [], 5000).unwrap(), Status.Exited(1))
+
+// Zero is the default, so this is what every other test in this file is relying on: a child that
+// takes a whole second is waited for, and a bound of any size would have cut it short.
+@test("a timeout of zero is no bound at all")
+zero_is_no_bound()
+    val t0 = monotonic()
+    val s = run("sleep", ["1"], "", [], 0).unwrap()
+    val took = whole_millis(monotonic() - t0)
+
+    assert_eq(s, Status.Exited(0))
+    assert(took >= 900, s"came back after ${took}ms, so something bounded a call that asked for none")
+end zero_is_no_bound
+
+// **What a child wrote before it ran out of time is usually what says where it stopped**, so the
+// files are read whatever the status is rather than only when the child succeeded.
+//
+// The shell `exec`s what it waits on, here and above, so that the child is one process and not two.
+// A shell that stayed would leave its own child behind holding the streams this test collects, and
+// the timeout has no claim on a grandchild: the signals go to what was started, which is the same
+// restraint that keeps this module out of process groups.
+@test("what a child wrote before it ran out of time still comes back")
+capture_keeps_what_was_written()
+    val out = capture("sh", ["-c", "echo half; exec sleep 5"], "", [], false, 300).unwrap()
+
+    assert_eq(out.status, Status.TimedOut)
+    assert_eq(out.text, "half\n")
+
+// The error half is about starting a child, and a bound on one that never started is not an answer
+// to anything -- so a timeout must not turn a missing program into a status.
+@test("a timeout does not change what a program that cannot start reports")
+timeout_does_not_disturb_a_start_failure()
+    val r = run("sysl-no-such-program-anywhere-on-this-machine", [], "", [], 1000)
+
+    assert(r.is_err(), "a program that is not there cannot run out of time")
+    assert_eq(r.unwrap_err(), IoError.NotFound)
+end timeout_does_not_disturb_a_start_failure
