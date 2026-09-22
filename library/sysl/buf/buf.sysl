@@ -42,11 +42,42 @@ struct Buf[T]
 
         self.elems[i] = v
 
+    /** One element appended, after growing the storage where there is no room left for it.
+     *
+     * **The three parts of the shape below are what let a caller absorb the whole member**, which is
+     * the difference between an append that is a store and an append that is a call and a frame:
+     *
+     *  - the room is asked for with `>=` rather than `==`, so the arm that does not grow is reached
+     *    knowing `count < elems.len` and its store needs no bounds check of its own;
+     *  - the growth *and the store that follows it* sit behind one out-of-line name, so nothing the
+     *    store needs has to survive a call and no callee-saved register is spilled to hold it;
+     *  - the count is raised once, after both arms, so a caller appending in a loop keeps it in a
+     *    register instead of reading it back out of the buffer on every turn.
+     */
     push(*self, v: T)
-        if self.count == self.elems.len then self.grow(self.count + 1, v)
+        if self.count >= self.elems.len
+            self.grow_store(v)
+        else
+            self.elems[self.count] = v
+
+        self.count += 1
+
+    /** Storage grown by one element's worth, with that element written into the slot the count
+     * names -- the rare half of `push`, behind a name of its own.
+     *
+     * **The store is repeated here rather than left to `push` because an element that has to survive
+     * the growth call is an element the caller has to spill.** Written as the shared tail of both
+     * arms, it costs every append a frame big enough to hold the value across a call that is almost
+     * never made. What deliberately does *not* move here is the count: `push` raises it for both
+     * arms, and a count raised in here would be a count its caller had to read back.
+     */
+    @noinline
+    @cold
+    private grow_store(*self, v: T)
+        self.grow(self.count + 1, v)
 
         self.elems[self.count] = v
-        self.count += 1
+    end grow_store
 
     /** Storage replaced by storage that holds at least `need` elements, with everything already
      * there copied across. The growth is geometric -- the capacity doubles until it fits, rather

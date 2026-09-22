@@ -271,8 +271,14 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
    * append is a call, a frame, and the callee-saved registers spilled around it. Split, what is left
    * is a compare, a store and a bump, and the caller takes all three.
    *
-   * The assertions are on clang's output rather than on the emitted text, because both halves of the
-   * claim are the optimizer's answers: that `push` is gone from its caller, and that `grow` is not.
+   * **What is behind the out-of-line name is the growth *and the store that follows it*,** which is
+   * what the second case below is about. An element written only after the growth returns is an
+   * element the caller has to keep across that call, so the frame it saves for one is a frame every
+   * append pays for; written on the rare side as well, nothing outlives the call and the element
+   * type stops deciding whether a caller can hold a push at all.
+   *
+   * The assertions are on clang's output rather than on the emitted text, because every half of the
+   * claim is the optimizer's answer: that `push` is gone from its caller, and that the growth is not.
    */
   "a buffer's push is absorbed by its caller and its growth is not" - {
 
@@ -287,9 +293,35 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
 
       // The other half, and what keeps the first from passing vacuously: the growth `push` guards
       // is in the caller as a call, which is only true if `push` itself was absorbed.
-      calls(body, "Buf.grow.int") shouldBe true
+      calls(body, "Buf.grow_store.int") shouldBe true
 
+      defines(out, "Buf.grow_store.int") shouldBe true
+      attributesOn(out, "Buf.grow_store.int") should include("noinline")
+
+      // The allocation and the copy are a further call in behind that one, rather than a copy of
+      // themselves at each element type's rare arm.
       defines(out, "Buf.grow.int") shouldBe true
+    }
+
+    /** The case the element type used to decide, and the one a program that pushes values around
+     * actually runs: a struct carrying a reference.
+     *
+     * A push of one is a store, a share taken of what is stored, and a share given back by whatever
+     * the slot held before — and with the element also having to survive the growth call, that was
+     * over the cost of anything a caller would absorb, so every append of a counted value was a call
+     * and a frame while an append of an `int` was a store.
+     */
+    "and for an element carrying a count, which is the case that pays for a release" in {
+      val out  = optimizedIr(countedBuffer)
+      val body = functionBody(out, "demo$gather")
+
+      calls(body, "Buf.push.demo$Cell") shouldBe false
+      calls(body, "Buf.grow_store.demo$Cell") shouldBe true
+
+      // And the store the caller absorbed carries no check of its own. Room is asked for with `>=`,
+      // so the arm that does not grow is reached knowing the count is below the length — there is
+      // nothing left for a bounds check to decide, and a trap in here would say the fact was lost.
+      body should not include "@llvm.trap"
     }
   }
 
@@ -304,8 +336,11 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
    */
   "the reaper's drain is not copied into the code that releases" - {
 
+    // Asked of the caller, because that is where a push over a counted slot ends up: the release it
+    // carries is what the drain would otherwise be copied into, and a caller holding a copy of the
+    // drain is a caller that could not have held the push.
     "so a push over a counted slot reaches it by a call" in {
-      val body = functionBody(optimizedIr(countedBuffer), "Buf.push.demo$Cell")
+      val body = functionBody(optimizedIr(countedBuffer), "demo$gather")
 
       body should include("void @arc.reap(")
       body should not include "arc.reaper"

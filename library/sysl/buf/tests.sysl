@@ -107,6 +107,77 @@ growth_is_one_rule()
     assert_slice_eq(far.view(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
 end growth_is_one_rule
 
+// `push` has two arms, and they write the element through different code: the one that finds no room
+// grows and stores out of line, the one that finds room stores where it stands. A run long enough to
+// double twice goes through the first three times and through the second everywhere else, so the
+// order it all comes back in is what says each arm wrote the element it was handed into the slot the
+// count named -- and that the count was raised once either way.
+@test("a run of pushes across two doublings keeps every element and its order")
+push_across_doublings()
+    var b: Buf[usize] = buf()
+    var i = 0usize
+
+    while i < 20
+        b.push(i * 3)
+        i += 1
+
+    assert_eq(b.len(), 20)
+    assert_eq(b.cap(), 32)
+
+    i = 0
+
+    while i < 20
+        assert_eq(b[i], i * 3)
+        i += 1
+end push_across_doublings
+
+// The same crossing with an element that owns storage, which is where the shares are easy to get
+// wrong: growing repeats the new element into every slot it makes, copies the live prefix over the
+// low ones, and then writes that element again over the slot the count names. A share too few there
+// frees a string under the buffer and a share too many leaks one, so everything is read back after
+// the growth rather than only counted.
+@test("a counted element pushed at capacity survives the growth that made room for it")
+pushing_counted_at_capacity()
+    var b: Buf[string] = buf()
+    var i = 0usize
+
+    while i < 8
+        b.push("alpha")
+        i += 1
+
+    assert_eq(b.cap(), 8)
+
+    b.push("beta")
+
+    assert_eq(b.len(), 9)
+    assert_eq(b.cap(), 16)
+    assert_eq(b[8], "beta")
+
+    i = 0
+
+    while i < 8
+        assert_eq(b[i], "alpha")
+        i += 1
+end pushing_counted_at_capacity
+
+// The other arm on its own: a buffer given room up front takes its first elements without growing at
+// all, so the capacity it was asked for is still the capacity afterwards.
+@test("a push into room that is already there leaves the capacity alone")
+push_into_spare_capacity()
+    var b: Buf[int] = buf_with_capacity(4, 0)
+
+    assert_eq(b.len(), 0)
+    assert_eq(b.cap(), 4)
+
+    b.push(7)
+    b.push(9)
+
+    assert_eq(b.len(), 2)
+    assert_eq(b.cap(), 4)
+    assert_eq(b[0], 7)
+    assert_eq(b[1], 9)
+end push_into_spare_capacity
+
 // -- shrinking ------------------------------------------------------------------------------------
 
 @test("pop answers with the last element and shortens")
