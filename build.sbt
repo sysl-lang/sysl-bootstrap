@@ -3,7 +3,7 @@ import xerial.sbt.Sonatype.sonatypeCentralHost
 ThisBuild / licenses               := Seq("ISC" -> url("https://opensource.org/licenses/ISC"))
 ThisBuild / versionScheme          := Some("semver-spec")
 ThisBuild / evictionErrorLevel     := Level.Warn
-ThisBuild / scalaVersion           := "3.8.4"
+ThisBuild / scalaVersion           := "3.9.0"
 ThisBuild / organization           := "sh.sysl"
 ThisBuild / organizationName       := "sysl-lang"
 ThisBuild / organizationHomepage   := Some(url("https://github.com/sysl-lang"))
@@ -182,23 +182,23 @@ lazy val sysl = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     libraryDependencies += "org.scalatest" %%% "scalatest" % "3.2.20" % "test",
     libraryDependencies ++= Seq(
       "com.github.scopt"         %%% "scopt"                    % "4.1.0",
-      "org.scala-lang.modules"   %%% "scala-parser-combinators" % "2.4.0",
+      "org.scala-lang.modules"   %%% "scala-parser-combinators" % "2.5.0",
       // Off-side-rule lexer base — what emits the indent and dedent tokens the layout rules in
       // `SyslLexical` are built on.
       "io.github.edadma"         %%% "indentation"              % "0.0.10",
       // Cross-platform I/O boundary: the compiler cross-publishes to JVM, JS and Native, so every
       // file and environment read goes through these rather than through `java.io`.
-      "io.github.edadma"         %%% "path"                     % "0.0.8",
+      "io.github.edadma"         %%% "path"                     % "0.0.9",
       "io.github.edadma"         %%% "cross_platform"           % "0.1.9",
       // The project config's format — `package.hocon`, which `PackageConfig` reads.
       "io.github.edadma"         %%% "hocon"                    % "0.1.2",
       // What `weave` renders a literate source with. The prose of a '.lsysl' file is Markdown
       // already, and `indentedCodeLanguage` is what carries the one thing the format gives up: a
       // program marked by an indent and nothing else reaches the highlighter knowing its language.
-      "io.github.edadma"         %%% "markdown"                 % "0.4.7",
+      "io.github.edadma"         %%% "markdown"                 % "0.4.9",
       // Turns the TextMate grammar into the spans the woven document's stylesheet colours, so a
       // reader needs no JavaScript for the code.
-      "io.github.edadma"         %%% "highlighter"              % "0.0.11",
+      "io.github.edadma"         %%% "highlighter"              % "0.0.13",
 //      "com.lihaoyi" %%% "pprint" % "0.9.6" % "test",
     ),
     publishMavenStyle      := true,
@@ -295,7 +295,7 @@ lazy val syslDoc = crossProject(JVMPlatform, NativePlatform)
       // release with the frontmatter already being written, so `sysl doc --site` rendered dead links
       // and nothing said so. `SlugConformanceTests` is what notices now, and it only notices because
       // it renders through this jar.
-      "io.github.edadma" %%% "juicer-core" % "0.4.2",
+      "io.github.edadma" %%% "juicer-core" % "0.4.6",
     ),
     // Not published. It is a binary somebody installs, exactly as the compiler is, and a coordinate
     // for it would be one nothing should depend on.
