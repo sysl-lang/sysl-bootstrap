@@ -109,18 +109,24 @@ class TestAttributeTests extends AnyFreeSpec with CodegenSupport with RunSupport
     // list grows as the set does — `@pure` and `@ghost` joined it with `17` — so what is asserted is
     // that every member is named, one at a time, rather than one sentence that goes stale each time
     // an annotation is added.
-    // `@packed` stood here until it became one of the annotations the language has, which is the
-    // hazard of writing this test against a word somebody might one day implement. `@inline` is
-    // chosen for being a thing other languages have and this one deliberately does not.
+    // `@packed` stood here until it became one of the annotations the language has, and `@inline`
+    // after it until the same thing happened — which is the hazard of writing this test against a
+    // word naming something the language might one day want. `@serializable` is chosen for naming a
+    // *facility* sysl has no notion of rather than an optimization it might grow: there is no
+    // reflection here for it to be about, so it is not a word waiting to be implemented.
     "an unknown word after '@' says what the annotations are" in {
-      val message = err("""@inline
+      val message = err("""@serializable
                           |t() = 0
                           |""".stripMargin)
 
-      message should include("'inline' is not an annotation a declaration takes")
+      message should include("'serializable' is not an annotation a declaration takes")
 
       for known <- List("@test", "@tailrec", "@pure", "@ghost", "@packed", "@align") do
         message should include(known)
+
+      // The three about a definition joined with `@inline`, and the last of them is the reason this
+      // case had to be rewritten: the word it used to be written against became one of them.
+      for known <- List("@noinline", "@inline", "@cold") do message should include(known)
 
       // The hooks joined the set with the runner's own scaffolding, and are named for the reason
       // every other member is: a reader who wrote `@before` has the right idea and the wrong word.

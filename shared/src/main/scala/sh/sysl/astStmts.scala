@@ -519,6 +519,10 @@ case class MethodDecl(
     noinline: Boolean = false,
     /** `@cold` — see `FuncDecl.cold`. */
     cold: Boolean = false,
+    /** `@inline` — see `FuncDecl.inline`. A generic member's mark belongs to the declaration, so
+      * every instantiation the program asks for is offered to its callers on the same terms.
+      */
+    inline: Boolean = false,
 ) extends Positioned {
 
   /** The mode this member takes its receiver in, or `None` for an associated function — which is the
@@ -639,7 +643,7 @@ case class FuncDecl(
       * splitting the rare path out was for.
       */
     noinline: Boolean = false,
-    /** `@cold` — the definition is reached rarely (`reference/attributes.md § @noinline and @cold`).
+    /** `@cold` — the definition is reached rarely (`reference/attributes.md § @noinline, @inline and @cold`).
       * It lowers to LLVM's bare `cold` function attribute.
       *
       * It is a separate axis from `noinline` and composes with it, which is LLVM's division rather
@@ -648,6 +652,21 @@ case class FuncDecl(
       * from the hot ones, and still leaves the call eligible for inlining.
       */
     cold: Boolean = false,
+    /** `@inline` — the definition is worth absorbing into its callers
+      * (`reference/attributes.md § @noinline, @inline and @cold`). It lowers to LLVM's bare
+      * `inlinehint` function attribute.
+      *
+      * It is a **hint and not an instruction**, which is the whole of what it promises: the inliner
+      * raises the budget it is willing to spend on this callee and decides as it decides. That is
+      * what a library needs of it — a member written to be absorbed, like a sequence's append, sits
+      * a few units either side of the default budget depending on how large the element type is, so
+      * without the raise the element type decides whether an append is a store or a call.
+      *
+      * It is the opposite of `noinline` and is refused beside it. It is *not* the opposite of
+      * `cold`: the two are different axes and compose, since a definition can be worth absorbing and
+      * still be reached rarely.
+      */
+    inline: Boolean = false,
 ) extends Stmt
 
 /** What `@export` says about the function it is written above (`reference/ffi.md § @export`).
@@ -835,18 +854,23 @@ enum Attr(val word: String) {
     */
   case Needs(caps: List[String]) extends Attr("needs")
 
-  /** `@noinline` and `@cold` — what the optimizer is told about the definition under them
-    * (`reference/attributes.md § @noinline and @cold`).
+  /** `@noinline`, `@inline` and `@cold` — what the optimizer is told about the definition under them
+    * (`reference/attributes.md § @noinline, @inline and @cold`).
     *
-    * **They are two axes and compose**, which is LLVM's division and not one chosen here. `noinline`
-    * forbids inlining; `cold` says the definition is reached rarely, which moves its blocks away
-    * from the hot ones and stops anything being spent on them, while still leaving the call
-    * eligible to be inlined. A rare slow path wants both — kept out of line, and known to be rare.
+    * **Two of the three are one axis and the third is another**, which is LLVM's division and not
+    * one chosen here. `noinline` forbids inlining and `inline` asks for it, so they contradict and
+    * are refused together; `cold` says the definition is reached rarely, which moves its blocks away
+    * from the hot ones and stops anything being spent on them, while still leaving the call eligible
+    * to be inlined. A rare slow path wants `noinline` and `cold` — kept out of line, and known to be
+    * rare — and a rarely reached member written to be absorbed wants `inline` and `cold`, which LLVM
+    * spells `inlinehint cold` and accepts.
     *
-    * Neither takes an argument: there is nothing to configure about a call that stays a call, and
-    * "how cold" is not a thing a program has a number for.
+    * None of the three takes an argument: there is nothing to configure about a call that stays a
+    * call, `inline` raises a budget rather than naming one, and "how cold" is not a thing a program
+    * has a number for.
     */
   case NoInline extends Attr("noinline")
+  case Inline   extends Attr("inline")
   case Cold     extends Attr("cold")
 }
 

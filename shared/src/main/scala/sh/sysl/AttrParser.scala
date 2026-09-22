@@ -17,7 +17,7 @@ trait AttrParser extends ExprParser {
   protected lazy val attribute: PackratParser[Attr] =
     testAttr ^^ Attr.Test.apply | hookAttr | tailrecAttr | pureAttr | ghostAttr | readsAttr | writesAttr |
       crossingAttr | needsAttr | packedAttr | alignAttr | threadLocalAttr | exportAttr |
-      sectionAttr | noinlineAttr | coldAttr | borrowsHere | unknownAttr | hashAttr
+      sectionAttr | noinlineAttr | inlineAttr | coldAttr | borrowsHere | unknownAttr | hashAttr
 
   /** What a member block reads where a member was wanted, for the three blocks that do not keep the
    * annotations: a trait's body, an `impl`'s, and a setter's line.
@@ -84,6 +84,7 @@ trait AttrParser extends ExprParser {
       case "@" ~ Some("reads")    => readsAttr
       case "@" ~ Some("writes")   => writesAttr
       case "@" ~ Some("noinline") => noinlineAttr
+      case "@" ~ Some("inline")   => inlineAttr
       case "@" ~ Some("cold")     => coldAttr
       case "@" ~ Some("assert") =>
         err("'@assert' stands where a declaration stands, and a type's body holds its members — " +
@@ -91,8 +92,9 @@ trait AttrParser extends ExprParser {
           "what it is about")
       case sigil ~ _ =>
         err("the only annotations a member may carry are the ones about a parameter — '@crossing', " +
-          "'@borrows', '@reads' and '@writes' — and the two about the function it lowers to, " +
-          "'@noinline' and '@cold'. What the rest say is about a free function or about a type: what " +
+          "'@borrows', '@reads' and '@writes' — and the three about the function it lowers to, " +
+          "'@noinline', '@inline' and '@cold'. What the rest say is about a free function or about " +
+          "a type: what " +
           "'sysl test' calls, what recurses, what a symbol names, how fields are laid out. A member " +
           "is neither, so it goes above a free function instead ('06')" +
           (if sigil == "#" then ". An annotation is written '@' in any case — '#' opens a directive, " +
@@ -100,7 +102,7 @@ trait AttrParser extends ExprParser {
            else ""))
     }
 
-  /** The six folded onto the member they were written above. It is `attributed`'s counterpart and
+  /** The seven folded onto the member they were written above. It is `attributed`'s counterpart and
    * is deliberately not `attributed` itself: the fold there is total over `Attr`, so a new
    * attribute makes it fail to compile rather than be silently dropped, and that property is worth
    * keeping in both places.
@@ -112,6 +114,7 @@ trait AttrParser extends ExprParser {
       case (d, Attr.Reads(ns))    => d.copy(reads = Some(ns))
       case (d, Attr.Writes(ns))   => d.copy(writes = Some(ns))
       case (d, Attr.NoInline)     => d.copy(noinline = true)
+      case (d, Attr.Inline)       => d.copy(inline = true)
       case (d, Attr.Cold)         => d.copy(cold = true)
       case (d, _)                 => d
     }.setPos(m.pos)
@@ -298,18 +301,28 @@ trait AttrParser extends ExprParser {
     op("@") ~> attrWord("ghost") ^^ (_ => Attr.Ghost)
 
   /** `@noinline` — the definition survives as a call however small it is
-   * (`reference/attributes.md § @noinline and @cold`).
+   * (`reference/attributes.md § @noinline, @inline and @cold`).
    */
   protected lazy val noinlineAttr: PackratParser[Attr] =
     op("@") ~> attrWord("noinline") ~> noInliningArgs("noinline",
       "whether a call stays a call is the whole of what it says") ^^ (_ => Attr.NoInline)
 
-  /** `@cold` — the definition is reached rarely (`reference/attributes.md § @noinline and @cold`). */
+  /** `@inline` — the definition is worth absorbing into its callers
+   * (`reference/attributes.md § @noinline, @inline and @cold`).
+   */
+  protected lazy val inlineAttr: PackratParser[Attr] =
+    op("@") ~> attrWord("inline") ~> noInliningArgs("inline",
+      "it raises what the inliner will spend on this definition rather than naming a number") ^^
+      (_ => Attr.Inline)
+
+  /** `@cold` — the definition is reached rarely
+   * (`reference/attributes.md § @noinline, @inline and @cold`).
+   */
   protected lazy val coldAttr: PackratParser[Attr] =
     op("@") ~> attrWord("cold") ~> noInliningArgs("cold",
       "how rare a rare path is is not a number a program has") ^^ (_ => Attr.Cold)
 
-  /** An argument list after `@noinline` or `@cold`, which is a sentence rather than a parse failure
+  /** An argument list after one of the three inlining marks, which is a sentence rather than a parse failure
    * for the reason a hook's is: the word has been read, so there is nothing else the line could have
    * been, and leaving the `(` unread sends the statement rule on to refuse the ordinary declaration
    * below.
@@ -432,7 +445,7 @@ trait AttrParser extends ExprParser {
     op("@") ~> ident >> (n =>
       err(s"'$n' is not an annotation a declaration takes — '@test', '@setup', '@teardown', " +
         "'@setup_all', '@teardown_all', '@tailrec', '@pure', " +
-        "'@ghost', '@export', '@noinline', '@cold', '@reads(...)', '@writes(...)' and " +
+        "'@ghost', '@export', '@noinline', '@inline', '@cold', '@reads(...)', '@writes(...)' and " +
         "'@crossing(...)' mark a function, " +
         "'@packed' and " +
         "'@align(n)' mark a struct's layout, '@export(\"...\")' names a struct in a generated C " +
@@ -511,6 +524,7 @@ trait AttrParser extends ExprParser {
       case (d, Attr.Crossing(ns)) => d.copy(crossing = ns)
       case (d, Attr.Needs(cs))    => d.copy(needs = cs)
       case (d, Attr.NoInline)     => d.copy(noinline = true)
+      case (d, Attr.Inline)       => d.copy(inline = true)
       case (d, Attr.Cold)         => d.copy(cold = true)
       // `@borrows` never reaches here — `borrowsHere` refuses it at statement position, where a free
       // function's annotations are read. Listed rather than left out so that this fold stays total

@@ -602,6 +602,7 @@ object AstPrinterTests {
       |        needs: []
       |        noinline: false
       |        cold: false
+      |        inline: false
       |    - FuncDecl
       |        name: "larger"
       |        tparams: ["T"]
@@ -669,6 +670,7 @@ object AstPrinterTests {
       |        needs: []
       |        noinline: false
       |        cold: false
+      |        inline: false
       |    - FuncDecl
       |        name: "add"
       |        tparams: []
@@ -730,6 +732,7 @@ object AstPrinterTests {
       |        needs: []
       |        noinline: false
       |        cold: false
+      |        inline: false
       |  module: ModuleName
       |    parts: ["demo"]
       |  capabilities: []

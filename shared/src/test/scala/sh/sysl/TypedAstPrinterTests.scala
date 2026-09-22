@@ -418,6 +418,7 @@ object TypedAstPrinterTests {
       |        section: None
       |        noinline: false
       |        cold: false
+      |        inline: false
       |    - TFunc
       |        name: "f"
       |        params: 
@@ -489,6 +490,7 @@ object TypedAstPrinterTests {
       |        section: None
       |        noinline: false
       |        cold: false
+      |        inline: false
       |  main: []
       |  entry: None
       |  precompiled: []

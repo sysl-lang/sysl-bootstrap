@@ -2,20 +2,21 @@ package sh.sysl
 
 import org.scalatest.freespec.AnyFreeSpec
 
-/** `@noinline` and `@cold` — what a definition tells the optimizer about itself
- * (`reference/attributes.md § @noinline and @cold`).
+/** `@noinline`, `@inline` and `@cold` — what a definition tells the optimizer about itself
+ * (`reference/attributes.md § @noinline, @inline and @cold`).
  *
- * **The point of the pair is a library keeping a rare path out of a hot one, and it is not something
- * the emitted text can show.** A `private` function lowers to `internal`, so with a single call site
- * the inliner folds it back into its caller and the caller is then too large to inline into *its*
- * callers — which is the opposite of what splitting the rare path out was for. So the seam this
- * suite asserts at is the optimizer's output rather than the compiler's: that the definition and the
- * call are still there after `-O2`, against a control that shows the unmarked one is folded away.
+ * **The point of the group is a library deciding which of its members a caller absorbs, and it is
+ * not something the emitted text can show.** A `private` function lowers to `internal`, so with a
+ * single call site the inliner folds it back into its caller and the caller is then too large to
+ * inline into *its* callers — which is the opposite of what splitting the rare path out was for. So
+ * the seam this suite asserts at is the optimizer's output rather than the compiler's: that the
+ * definition and the call are still there after `-O2`, against a control that shows the unmarked one
+ * is folded away.
  *
- * The two are separate axes and compose, which is LLVM's division rather than one chosen here:
- * `noinline` forbids inlining outright, while `cold` states a frequency and leaves the call
- * eligible. `InliningAttrErrorTests` is the other half — every way of writing one that means
- * nothing.
+ * `noinline` and `inline` are one axis and contradict; `cold` is another and composes with either.
+ * `noinline` forbids inlining outright, `inline` raises what the inliner will spend on the callee,
+ * and `cold` states a frequency and leaves the call eligible whichever of the two stands beside it.
+ * `InliningAttrErrorTests` is the other half — every way of writing one that means nothing.
  */
 class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
 
@@ -29,6 +30,25 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
     "'@cold' on a function" in {
       defineLine(ir("@cold\nrare(n: i32) -> i32 = n + 1\n\nprint(rare(1))\n"), "@rare") should
         include("cold")
+    }
+
+    // LLVM's name for the hint is not the word the language uses, which is the one place in the
+    // group where the two spellings differ: `@inline` is a request and `inlinehint` is what LLVM
+    // calls a request, while `alwaysinline` — which LLVM also has — is an instruction the language
+    // does not offer.
+    "'@inline' on a function, which LLVM spells 'inlinehint'" in {
+      val line = defineLine(ir("@inline\nsmall(n: i32) -> i32 = n + 1\n\nprint(small(1))\n"), "@small")
+
+      line should include("inlinehint")
+      line should not include "alwaysinline"
+    }
+
+    // The composition the pair below is the whole reason `@inline` is a separate axis from `@cold`:
+    // a member can be worth absorbing and still be reached rarely, and LLVM accepts the two
+    // keywords side by side.
+    "'@inline' and '@cold' together, which LLVM accepts" in {
+      defineLine(ir("@inline\n@cold\nrare(n: i32) -> i32 = n + 1\n\nprint(rare(1))\n"), "@rare") should
+        include("inlinehint cold")
     }
 
     // Both, because they are two axes rather than a stronger and a weaker form of one: a rare slow
@@ -71,6 +91,26 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
       all(lines) should include("noinline cold")
     }
 
+    "and '@inline' on a generic method, at each instantiation" in {
+      val out = ir(
+        """struct Box[T]
+          |    value: T
+          |
+          |    @inline
+          |    read(self) -> T = self.value
+          |
+          |var a = Box(1i32)
+          |var b = Box(2i64)
+          |print(a.read(), b.read())
+          |""".stripMargin,
+      )
+
+      val lines = out.linesIterator.filter(l => l.startsWith("define") && l.contains("Box.read")).toList
+
+      lines.length shouldBe 2
+      all(lines) should include("inlinehint")
+    }
+
     "and on a generic free function" in {
       val out = ir(
         """@noinline
@@ -88,9 +128,11 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
 
     // Nothing is written where nothing was asked for, which is the assertion that keeps the two
     // above from passing on a `define` line that says `noinline` about everything.
-    "and nothing at all where neither was written" in {
-      defineLine(ir("slow(n: i32) -> i32 = n + 1\n\nprint(slow(1))\n"), "@slow") should
-        not include "noinline"
+    "and nothing at all where none was written" in {
+      val line = defineLine(ir("slow(n: i32) -> i32 = n + 1\n\nprint(slow(1))\n"), "@slow")
+
+      line should not include "noinline"
+      line should not include "inlinehint"
     }
   }
 
@@ -199,6 +241,31 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
            |print(1)
            |""".stripMargin) should include("define")
     }
+
+    // `@inline` stands beside the same two for the same reasons: a self-call becoming a jump is a
+    // different call from the one a hint is about, and who calls a test says nothing about how.
+    "and '@inline' beside either of them" in {
+      defineLine(
+        ir("""@tailrec
+             |@inline
+             |count(n: i32, acc: i32) -> i32 =
+             |    if n == 0i32
+             |        return acc
+             |    return count(n - 1i32, acc + 1i32)
+             |
+             |print(count(3i32, 0i32))
+             |""".stripMargin),
+        "@count",
+      ) should include("inlinehint")
+
+      ir("""@test("it holds")
+           |@inline
+           |holds() =
+           |    assert(1 == 1)
+           |
+           |print(1)
+           |""".stripMargin) should include("define")
+    }
   }
 
   /** A hot loop over a `Buf[int]`, reading the elements back so that nothing in it is dead. */
@@ -246,6 +313,49 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
       |
       |    while i < n
       |        b.push(Cell(i, node))
+      |        i += 1
+      |
+      |    b.len()
+      |""".stripMargin
+
+  /** A `Buf` of a **wider** element — nine words, one of them a reference — which is the shape that
+   * decided whether `push` carried `@inline` at all.
+   *
+   * **The member's cost grows with the element type and the budget a caller may spend on it does
+   * not**, so somewhere along a struct's field list an append stops being a store and becomes a call
+   * and a frame. This element is one field past that line at the default budget and inside it at the
+   * raised one, which is the whole of what the mark on `push` buys. It was found by running the same
+   * sweep of element shapes with the mark and without it rather than reasoned to: the two agreed
+   * everywhere else, and the reference is what makes the line fall this early — an element of the
+   * same width carrying none is absorbed either way.
+   */
+  private val wideBuffer =
+    """module demo
+      |
+      |import sysl.buf.*
+      |
+      |struct Node
+      |    x: int
+      |
+      |struct Reading
+      |    at: i64
+      |    seq: i64
+      |    lo: i64
+      |    hi: i64
+      |    sum: i64
+      |    count: i64
+      |    flags: i64
+      |    mask: i64
+      |    source: &Node
+      |
+      |@export
+      |collect(n: i64) -> usize
+      |    var source: &Node = Node(7)
+      |    var b: Buf[Reading] = buf()
+      |    var i = 0i64
+      |
+      |    while i < n
+      |        b.push(Reading(i, i+1i64, i+2i64, i+3i64, i+4i64, i+5i64, i+6i64, i+7i64, source))
       |        i += 1
       |
       |    b.len()
@@ -322,6 +432,34 @@ class InliningAttrTests extends AnyFreeSpec with CodegenSupport {
       // so the arm that does not grow is reached knowing the count is below the length — there is
       // nothing left for a bounds check to decide, and a trap in here would say the fact was lost.
       body should not include "@llvm.trap"
+    }
+
+    /** The case `@inline` was added for, and the one the mark on `push` is paying for.
+     *
+     * **A member written to be absorbed sits a few units either side of the default budget, and
+     * which side is decided by the element type rather than by the member.** The `Cell` above is
+     * inside it; a nine-word element carrying one reference is outside, so the same `push` — the
+     * same source, the same shape, the same intent — stopped being a store and became a call and a
+     * frame because a struct grew fields. The mark raises what the inliner will spend on `push`,
+     * and this element is the evidence that the raise reaches a real shape rather than only the
+     * `define` line: it is a call without the mark and a store with it.
+     *
+     * **This is the assertion that fails on a tree where `push` is unmarked**, which is what makes
+     * it a test of the feature rather than of clang.
+     */
+    "and for a wider element, which the default budget refuses" in {
+      val out  = optimizedIr(wideBuffer)
+      val body = functionBody(out, "demo$collect")
+
+      calls(body, "Buf.push.demo$Reading") shouldBe false
+
+      // The other half, and what keeps the first from passing vacuously: the growth is still the
+      // call it is marked to be, so what was absorbed is the append and not the whole member.
+      calls(body, "Buf.grow_store.demo$Reading") shouldBe true
+
+      // And the marks reached this instantiation rather than only the declaration, which is what a
+      // mark on a generic member has to do to be worth anything.
+      attributesOn(out, "Buf.grow_store.demo$Reading") should include("noinline")
     }
   }
 

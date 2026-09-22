@@ -53,7 +53,16 @@ struct Buf[T]
      *    store needs has to survive a call and no callee-saved register is spilled to hold it;
      *  - the count is raised once, after both arms, so a caller appending in a loop keeps it in a
      *    register instead of reading it back out of the buffer on every turn.
+     *
+     * **`@inline` raises the element type at which an append stops being a store.** Shaped as above
+     * the member still costs a little more for every word of the element and a good deal more for
+     * every counted field it carries, so a small element leaves it just inside the budget a caller
+     * may spend and a larger one just outside -- and the same `push`, at the same call site, becomes
+     * a call and a frame because a struct grew a field. The mark raises what the inliner will spend
+     * here, which moves that boundary out rather than away: an element of nine words carrying one
+     * reference is a store with the mark and a call without it.
      */
+    @inline
     push(*self, v: T)
         if self.count >= self.elems.len
             self.grow_store(v)
