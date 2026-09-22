@@ -34,6 +34,12 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
   // source file, so this is whole-program where `promoted` is per body.
   promotedTemps = promotions.temporaries
 
+  /** Every function whose address this program takes, which is a call site that discharges no
+   * caller's obligation (`CallOwnership.addressed`). Whole-program and computed once: the answer is
+   * about the tree rather than about the body being emitted.
+   */
+  private lazy val addressTaken: Set[String] = CallOwnership.addressed(program)
+
   // --- module --------------------------------------------------------------------------
 
   /** **The module, as data.** `gen` below is this written down.
@@ -627,9 +633,10 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
                ir.FnType(i32, List(ir.Param(i32, name = Some(Val.Reg("argc"))),
                                    ir.Param(LType.Ptr, name = Some(Val.Reg("argv"))))))
 
-  /** A function owns its parameters and returns its result with a count already taken, so a caller
-   * can hand over a temporary and a callee can store one without either having to know what the
-   * other did with it.
+  /** A function returns its result with a count already taken, and reads its by-value parameters
+   * through the count its **caller** guarantees for the length of the call (`CallOwnership`) — so a
+   * caller can hand over a temporary and a callee can store one without either having to know what
+   * the other did with it.
    */
   private def genFunction(f: TFunc): ir.Func = {
     startFunction()
@@ -642,10 +649,10 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     selfParams = f.params
     selfVariant = f.variant
 
-    // A reader that can release nothing reads its parameters through the share its caller is
-    // already holding for the length of the call, so it takes none of its own and gives none back
-    // (`BorrowedParams`). The slot is still written, because the body addresses it like any other.
-    val borrowed = BorrowedParams.borrows(f)
+    // Which parameters this function keeps a count of its own for, and which it reads through the
+    // one its caller is holding for the length of the call (`CallOwnership`). The slot is written
+    // either way, because the body addresses it like any other local.
+    val owns = CallOwnership.owning(f, addressTaken(f.name))
 
     // A zero-sized parameter is not an argument: there is nothing to receive and nothing to keep,
     // so it takes no slot and the emitted signature below does not mention it.
@@ -655,11 +662,11 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       // bytes and the count it takes is taken at the slot rather than off a value it never had.
       if layout.indirect(ty) then
         emitMemcpy(Val.Reg(s"$name.addr"), Val.Reg(s"$name.param"), layout.size(ty), layout.align(ty))
-        if !borrowed then retainAt(ty, Val.Reg(s"$name.addr"))
+        if owns(name) then retainAt(ty, Val.Reg(s"$name.addr"))
       else
         emit(Inst.Store(ty.lty, Val.Reg(s"$name.param"), Val.Reg(s"$name.addr"), Access.Plain))
-        if !borrowed then retainValue(ty, Val.Reg(s"$name.param"))
-      if !borrowed then ownSlot(name, ty)
+        if owns(name) then retainValue(ty, Val.Reg(s"$name.param"))
+      if owns(name) then ownSlot(name, ty)
 
     // Where the function calls itself as the last thing it does, that call is a jump to here rather
     // than a second frame (`TailCalls`). The target sits *after* the parameter slots are written and

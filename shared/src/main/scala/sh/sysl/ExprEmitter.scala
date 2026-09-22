@@ -777,7 +777,7 @@ trait ExprEmitter extends ArithEmitter {
     // follows in the same block is unreachable and `emit` drops it, which is exactly why a
     // diverging arm needs no special handling anywhere else.
     case TCall(name, args, ty, _) =>
-      val staged = args.map(argValue)
+      val staged = args.map(argValue(_, inert(name)))
 
       // `reference/verification.md § variant on a function`: a call the compiler can see is a call
       // to the same body checks that the measure has gone down. It sits before the call rather than

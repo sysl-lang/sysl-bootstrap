@@ -36,7 +36,21 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
    * parameter to receive it. That keeps the two sides of the call agreeing with `genFunction`,
    * which drops the same parameters from the signature.
    */
-  protected def argList(args: List[TExpr]): List[Arg] = formatArgs(args.map(argValue))
+  protected def argList(args: List[TExpr]): List[Arg] = formatArgs(args.map(argValue(_)))
+
+  /** The functions whose bodies can release nothing at all (`BorrowedParams`), so a caller handing
+   * one of them a **place** needs no count of its own for the length of the call.
+   *
+   * This is the one place the callee-side rule is still asked about at a call site, and what it buys
+   * is that a leaf accessor reading `f(s.v)` stays as free as it has always been.
+   */
+  private lazy val inertCallees: Set[String] =
+    program.funcs.filter(BorrowedParams.borrows).map(_.name).toSet
+
+  /** Whether a call to this name asks nothing of its caller — the callee cannot reach a release, so
+   * whatever holds the argument's count goes on holding it.
+   */
+  protected def inert(name: String): Boolean = inertCallees(name)
 
   /** One argument, evaluated, in the form the callee receives it — or `None` where it is zero-sized
    * and there is nothing to hand over.
@@ -46,17 +60,46 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
    * entry either way, so the copy the by-value convention promises still happens; it just happens
    * once, in memory, instead of as a multi-kilobyte value crossing the call.
    *
+   * **This is where the caller discharges its side of the convention** (`CallOwnership`): the callee
+   * reads the value through a count somebody is holding for the length of the call, and where that
+   * somebody is not already this frame — a field, a global, a local whose address got out — a count
+   * is taken here.
+   *
+   * What it is taken *at* is the only difference between the two forms, and both are the same idea:
+   * hand the callee a **snapshot**, because the storage the argument came out of is storage the call
+   * is free to overwrite. A small one's loaded value already is one, so the count goes on it and
+   * comes back with the statement's other temporaries. A large one never becomes a register at all,
+   * so the snapshot is a slot of this frame's, written with counts taken and released where the
+   * scope holding it ends — and the callee's entry copy then reads from there rather than from the
+   * caller's own field.
+   *
    * The value is kept beside its type rather than formatted straight away because a self-call needs
    * the values themselves: `reference/verification.md § variant on a function`'s measure is
    * evaluated over the arguments, and reaching them by evaluating the arguments a second time would
    * run whatever they do twice.
    */
-  protected def argValue(a: TExpr): Option[(Type, Either[ir.Val, ir.Val])] =
-    if layout.indirect(a.ty) then Some((a.ty, Left(address(a))))
+  protected def argValue(a: TExpr, calleeInert: Boolean = false)
+      : Option[(Type, Either[ir.Val, ir.Val])] = {
+    val guarantee = containsRef(a.ty) && !calleeInert &&
+      !CallOwnership.held(a, callerExposed ++ promoted)
+
+    if layout.indirect(a.ty) then
+      if guarantee then
+        val slot = emitAlloca(freshReg(), a.ty.lty)
+
+        genOwnedInto(slot, a)
+        ownAt(slot, a.ty)
+        Some((a.ty, Left(slot)))
+      else Some((a.ty, Left(address(a))))
     else
       val v = genExpr(a)
 
+      if guarantee then
+        retainValue(a.ty, v)
+        ownTemp(v, a.ty)
+
       Option.unless(Type.zeroSized(a.ty))((a.ty, Right(v)))
+  }
 
   protected def formatArgs(vals: List[Option[(Type, Either[ir.Val, ir.Val])]]): List[Arg] =
     vals.flatten.map {
@@ -153,7 +196,7 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
         case TCallPtr(fn, as, _, ty) => (syslResult(ty), genExpr(fn), as)
         case other                   => sys.error(s"'become' reached codegen with ${other.getClass.getSimpleName}")
 
-    val staged = formatArgs(args.map(argValue))
+    val staged = formatArgs(args.map(argValue(_)))
 
     releaseAll()
 
@@ -321,7 +364,7 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
         // This is the case the whole mechanism is for: `val k = kernel()` writes the callee's work
         // straight into `k`'s slot, and no `%struct.Kernel` is ever an LLVM value.
         case TCall(name, args, ty, _) if !foreigns.contains(name) =>
-          val staged = args.map(argValue)
+          val staged = args.map(argValue(_, inert(name)))
 
           if checksVariant(name) then genVariantAtCall(staged)
           val (what, callee) = calleeParts(name, ty)

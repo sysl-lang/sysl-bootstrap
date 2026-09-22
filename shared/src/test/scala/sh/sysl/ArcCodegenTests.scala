@@ -70,17 +70,18 @@ class ArcCodegenTests extends AnyFreeSpec with CodegenSupport {
     out should include regex store
   }
 
-  // A count of its own is what a function takes when it *can* release something, which is every
-  // function but the leaf reader `BorrowedParams` describes — that one reads through the caller's
-  // count instead, and `BorrowedParamTests` is where the difference is asserted. The result's count
-  // is taken either way, because what comes back is the caller's to hold.
-  "a function that can release owns its parameters and hands back its result with a count taken" in {
+  // A by-value parameter is read through the count its caller is holding for the length of the call
+  // (`CallOwnership`), so nothing is taken at entry — and here the argument is a local whose address
+  // the caller never let out, so nothing is taken at the call site either and the whole handover is
+  // free. What comes **back** is a different question and is unchanged: a result arrives with a
+  // count taken, because it is the caller's to hold.
+  "a parameter costs nothing to hand over, and a result still comes back with a count taken" in {
     val src = point + "keep(p: &Point) -> &Point\n    print(p.x)\n    p\n" +
       "var q: &Point = Point(1, 2)\nvar r = keep(q)"
     val out = ir(src)
 
-    out should include("call void @arc.retain(ptr %p.param)")
-    out should include regex raw"call void @arc\.release\(ptr %t\d+\)\n  ret ptr %t\d+"
+    out should not include "call void @arc.retain(ptr %p.param)"
+    out should include regex raw"call void @arc\.retain\(ptr %t\d+\)\n  ret ptr %t\d+"
   }
 
   "a destructor lets go of what the payload held, and leaves the storage to whoever is last" in {

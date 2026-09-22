@@ -2,15 +2,26 @@ package sh.sysl
 
 import org.scalatest.freespec.AnyFreeSpec
 
-/** Reading a by-value parameter through the caller's count instead of taking one.
+/** A body that can release nothing at all, which is the strongest thing a **callee** can know about
+ * its own parameters.
  *
- * `BorrowedParams` drops the retain at entry and the release at each return where the body can
- * release nothing at all. The whole risk is in the word *nothing*, so the negatives here matter more
- * than the positives: each is a body that can reach a release, and each asserts the count is still
- * taken. A wrong answer to any of them is a use-after-free rather than a slow program, which is why
- * the shape is checked in the emitted text and the consequence is checked by running.
+ * `BorrowedParams` answers that question, and two places ask it: a function it is true of takes no
+ * count at entry whatever else is true of it, and a *caller* handing one of them a place needs no
+ * count of its own either (`CallEmitter.inert`). Which parameters a callee keeps a count for in
+ * general is `CallOwnership`'s question, and `CallOwnershipTests` is where that is asserted — what
+ * is here is this rule, and the cases that used to be decided by it alone.
+ *
+ * The whole risk is in the word *nothing*, so the shape is checked in the emitted text and the
+ * consequence — the object is still whole inside the callee and let go exactly once after it — is
+ * checked by running.
  */
 class BorrowedParamTests extends AnyFreeSpec with CodegenSupport with RunSupport {
+
+  /** The retain a callee emits for a by-value parameter at entry, which is what every assertion
+   * below is about. A match on `arc.copy.Holder` alone also finds the one an ordinary assignment
+   * emits, so a test written that way passes for the wrong reason.
+   */
+  private val entryRetain = "@arc.copy.Holder(%struct.Holder %h.param)"
 
   /** A payload whose destructor says so, which is how a run test sees a count reach zero. */
   private val node =
@@ -149,11 +160,12 @@ class BorrowedParamTests extends AnyFreeSpec with CodegenSupport with RunSupport
     out should include("define internal void @sysl.buf$past_end(")
   }
 
-  "a reader that writes to module storage keeps its count" - {
+  // The hazard a count exists for at all: the only share of what the parameter refers to is the one
+  // the assignment inside gives back, so reading `h` after it with nobody holding anything would be
+  // reading freed storage. Under `CallOwnership` the count is the **caller's** — `g` is module
+  // storage, which the call can write — and the callee still takes none.
+  "a reader that writes to module storage is guaranteed by its caller instead" - {
 
-    // The hazard the retain exists for: the only share of what the parameter refers to is the one
-    // the assignment below gives back, so a borrowed `h` would be reading freed storage on the very
-    // next line.
     val src = node +
       """var g: Holder = Holder(Node(1))
         |clobber(h: Holder) -> int
@@ -161,8 +173,8 @@ class BorrowedParamTests extends AnyFreeSpec with CodegenSupport with RunSupport
         |    h.r.v
         |print(clobber(g))""".stripMargin
 
-    "so the count is taken at entry" in {
-      body(ir(src), "clobber") should include("arc.copy.Holder")
+    "so nothing is taken at entry" in {
+      body(ir(src), "clobber") should not include entryRetain
     }
 
     "and what it read is the object it was given" in {
@@ -170,19 +182,7 @@ class BorrowedParamTests extends AnyFreeSpec with CodegenSupport with RunSupport
     }
   }
 
-  "a reader that calls anything at all keeps its count" in {
-    val src = node +
-      """side() = print("side")
-        |peek(h: Holder) -> int
-        |    side()
-        |    h.r.v
-        |var n: &Node = Node(1)
-        |print(peek(Holder(n)))""".stripMargin
-
-    body(ir(src), "peek") should include("arc.copy.Holder")
-  }
-
-  "a reader that reassigns its own parameter keeps its count" in {
+  "a reader that reassigns its own parameter keeps its count, because the assignment gives one back" in {
     val src = node +
       """peek(h: Holder) -> int
         |    h = Holder(Node(2))
@@ -190,10 +190,57 @@ class BorrowedParamTests extends AnyFreeSpec with CodegenSupport with RunSupport
         |var n: &Node = Node(1)
         |print(peek(Holder(n)))""".stripMargin
 
-    body(ir(src), "peek") should include("arc.copy.Holder")
+    body(ir(src), "peek") should include(entryRetain)
   }
 
-  "a reader that writes through a pointer keeps its count" in {
+  // Each of these three used to be a reason for the callee to take a count, and none of them is one
+  // any more: a call, a capture and a contract clause are all things that happen *inside* a call the
+  // caller is already guaranteeing. What each still owes is the run, which is what would see a
+  // count go missing.
+  "a body that calls, captures or promises takes no count of its own" - {
+
+    "a reader that calls something" in {
+      val src = node +
+        """side() = print("side")
+          |peek(h: Holder) -> int
+          |    side()
+          |    h.r.v
+          |var n: &Node = Node(1)
+          |print(peek(Holder(n)))""".stripMargin
+
+      body(ir(src), "peek") should not include entryRetain
+      run(src) shouldBe "side\n1\ndropped 1\n"
+    }
+
+    "a reader that captures its parameter in a closure" in {
+      val src = node +
+        """peek(h: Holder) -> int
+          |    var f = () -> h.r.v
+          |    f()
+          |var n: &Node = Node(1)
+          |print(peek(Holder(n)))""".stripMargin
+
+      body(ir(src), "peek") should not include entryRetain
+      run(src) shouldBe "1\ndropped 1\n"
+    }
+
+    "a reader with a contract" in {
+      val src = node +
+        """peek(h: Holder) -> int
+          |    require h.r.v > 0
+          |    h.r.v
+          |var n: &Node = Node(1)
+          |print(peek(Holder(n)))""".stripMargin
+
+      body(ir(src), "peek") should not include entryRetain
+      run(src) shouldBe "1\ndropped 1\n"
+    }
+  }
+
+  // `*out` aliases the very global the argument was loaded from, so the write inside is what frees
+  // it. The count the caller takes for the loaded value is what makes the read afterwards legal, and
+  // the run is the half that would crash if it were missing.
+  "a reader that writes through a pointer at what it was passed" in {
     val src = node +
       """swap(h: Holder, out: *Holder) -> int
         |    *out = Holder(Node(2))
@@ -201,28 +248,7 @@ class BorrowedParamTests extends AnyFreeSpec with CodegenSupport with RunSupport
         |var g: Holder = Holder(Node(1))
         |print(swap(g, &g))""".stripMargin
 
-    body(ir(src), "swap") should include("arc.copy.Holder")
-  }
-
-  "a reader that captures its parameter in a closure keeps its count" in {
-    val src = node +
-      """peek(h: Holder) -> int
-        |    var f = () -> h.r.v
-        |    f()
-        |var n: &Node = Node(1)
-        |print(peek(Holder(n)))""".stripMargin
-
-    body(ir(src), "peek") should include("arc.copy.Holder")
-  }
-
-  "a reader with a contract keeps its count" in {
-    val src = node +
-      """peek(h: Holder) -> int
-        |    require h.r.v > 0
-        |    h.r.v
-        |var n: &Node = Node(1)
-        |print(peek(Holder(n)))""".stripMargin
-
-    body(ir(src), "peek") should include("arc.copy.Holder")
+    body(ir(src), "swap") should not include entryRetain
+    run(src) should include("1\n")
   }
 }
