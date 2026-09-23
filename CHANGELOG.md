@@ -7,6 +7,28 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.129 — 2026-09-23
+
+### Codegen
+
+- A statement `match` that names every variant of an enum now lowers its switch with an
+  `unreachable` default (`genTagSwitch`), instead of a range check guarding the merge. LLVM drops
+  the check entirely once it knows every case is covered.
+
+Measured on slate: **−8.6%** geometric mean over its benchmark set (options **−18.6%**, methods
+**−17.5%**, dispatch **−17.2%**).
+
+### Library
+
+- `sysl.text.str_view(b: []u8) -> string` — a string that **views** a writable byte slice in place,
+  without copying. It shares the slice's owner, so a write made through the slice after the view is
+  taken is seen by the string; it sits in the same unsafe tier as `str_cast` by name, and the caller
+  guarantees the bytes are valid UTF-8 and are not written to while the string lives. A slice of a
+  frame-owned array is promoted to the heap when it outlives the frame that made it. The raw-tier
+  form underneath is `str_alias`.
+
+Measured on slate's string append: **758 ms → 34 ms**.
+
 ## 0.0.128 — 2026-09-23
 
 ### Build optimization, exposed from LLVM
