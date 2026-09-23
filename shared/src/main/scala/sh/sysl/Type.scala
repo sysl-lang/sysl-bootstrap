@@ -1018,7 +1018,7 @@ object Type extends TypeQueries {
     case c: Constrained => Modules.show(c.name)
     case other          => friendly.getOrElse(other, canonicalName(other))
 
-  /** [[show]] for a sentence that supplies its own article — "the ${showBare(t)}".
+  /** [[show]] for a sentence that supplies its own article — "the \${showBare(t)}".
    *
    * The one description [[show]] gives that is a **phrase rather than a name** is a closure's, and
    * it carries an article because everywhere else in a message it stands alone: *"the default for
