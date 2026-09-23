@@ -7,6 +7,124 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.126 — 2026-09-23
+
+`become f(...)` (guaranteed tail calls) has existed since 0.0.86 -- no change here; mentioned because a consumer profile mistook it for a gap.
+
+---
+
+Fix vendor computing a non-reproducible tree hash from a relative project root
+
+`sysl vendor .` reported every freshly-fetched dependency as not hashing to
+what sysl.sum records, while `sysl vendor <absolute path>` reproduced the
+recorded hashes exactly. `projectRoot` returned a directory argument
+literally, so a project reached as `.` stayed `.` all the way into
+Fetch.cacheRoot and the vendor/ directory it derives. Hashing.treeHash strips
+the project root back off the paths a directory walk returns by a literal
+string prefix, and a walk's own paths come back absolute regardless of what
+was asked for -- so a relative root left every file's path unstripped in the
+listing that gets hashed, and the digest depended on the string typed rather
+than on the tree's contents.
+
+projectRoot now canonicalizes to an absolute, normalized path via
+Project.absolute before anything hashes or lists under it, so vendor, deps,
+add and any other command that resolves a root share the fix from one place.
+
+Verified end to end against slate: `sysl vendor .` from slate's own project
+directory, previously refusing brotli 0.1.1 and gc 0.2.4 as mismatched, now
+vendors all 17 dependencies with zero mismatches.
+
+---
+
+A string literal is held by nobody, so the caller takes no count for it
+
+Its owner word is a null constant, so a retain is an arc.retain_maybe(null)
+that does nothing and pulls the ARC runtime into a program whose only
+reference is the text inside a print. PrebuiltStdTests caught it: a
+hello-world compiled against the prebuilt standard module went from one
+definition of its own to eight.
+
+---
+
+Caller-decided borrowing of by-value parameters
+
+A by-value argument is now handed over under a guarantee from the caller
+that it stays alive for the length of the call, and the callee reads its
+parameters through that guarantee instead of taking a count of its own.
+The decision moves to the side that can make it: a temporary or a local
+whose address never got out is already held by the calling frame, and only
+a place the call may itself overwrite -- a field, an element, a global, an
+exposed local -- costs a retain before the call and a release after it.
+
+The rule it replaces could only ask what the callee's body did, so any
+body that wrote memory had to retain, because a caller is free to pass a
+place and nothing in the callee distinguishes one from a local. That is
+why 'zap(s.v, s)' writing 's.v = other' and then reading 'v' was a
+use-after-free the old rule had to pay for everywhere to avoid.
+
+A callee still takes a count where it is about to give one back: a
+parameter it assigns to, every parameter of a function with a tail
+self-call, and every parameter of a function something outside the program
+may call. A body that can release nothing at all keeps the borrow in every
+case, and a caller passing a place to one of those skips its retain too.
+
+On a program reaching 41 library functions, 23 of the 25 parameters that
+used to be retained at entry no longer are, and 31 of 37 counted by-value
+handovers cost nothing at either end. The push/pop probe runs in 1.161 s
+against 1.537 s, a 24% saving.
+
+CallOwnership holds the convention; BorrowedParams stays as the stronger
+callee-side fact both sides now consult.
+
+---
+
+Contracts reach the optimizer
+
+A callee's `ensure` is now repeated at each call site as an `llvm.assume`
+-- the caller's arguments in place of the parameters, the returned
+register in place of `result` -- so what a function promised is available
+where the caller's own code can be folded against it. The bounds test on
+the store after a `Buf`'s `grow` folds away, which is the case it was
+built for; `sysl.buf`'s `grow` gains the contract that carries it.
+
+A clause is repeated only where it can be read twice: it is lowered and
+the instructions are inspected, and anything that calls, allocates,
+branches or traps is taken back out, leaving the call site as it was.
+`old(e)` is never repeated, since its snapshot is a slot in the callee's
+frame, and an argument the call itself can change -- a global, or a local
+whose address that call was handed -- is not substituted. A `@ghost`
+clause is neither checked nor assumed, by the same test rather than by a
+second one that could drift from it.
+
+Nothing is assumed at a function's own entry: a `require` traps before
+the body runs, so its branch dominates the subscript it covers and the
+optimizer already reads it as a fact.
+
+---
+
+Upgrade Scala, sbt, plugins and dependencies to latest final releases
+
+Scala 3.8.4 -> 3.9.0
+sbt 1.12.11 -> 1.13.0 (sbt 2.0.9 is the true latest, but no cross-build
+  plugin here -- sbt-scalajs, sbt-scala-native, sbt-pgp, sbt-sonatype,
+  sbt-site-paradox -- publishes for sbt 2.0 yet, so this stays on the
+  latest 1.x line)
+sbt-scalajs-crossproject 1.3.2 -> 1.4.0
+sbt-scala-native-crossproject 1.3.2 -> 1.4.0
+sbt-pgp 2.3.1 -> 2.3.2
+sbt-site-paradox 1.7.0 -> 1.8.0
+scala-parser-combinators 2.4.0 -> 2.5.0
+io.github.edadma path 0.0.8 -> 0.0.9
+io.github.edadma markdown 0.4.7 -> 0.4.9
+io.github.edadma highlighter 0.0.11 -> 0.0.13
+io.github.edadma juicer-core 0.4.2 -> 0.4.6
+
+Unchanged because already at the latest final release: sbt-scalajs
+1.22.0, sbt-scala-native 0.5.12, sbt-sonatype 3.12.2, scalatest 3.2.20
+(3.3.0 line is alpha/SNAP only), scopt 4.1.0 (4.1.1 line is milestone
+only), scalajs-stubs 1.1.0, indentation 0.0.10, cross_platform 0.1.9,
+hocon 0.1.2.
+
 ## 0.0.125 — 2026-09-22
 
 Add @inline, the mark that says a definition is worth absorbing
