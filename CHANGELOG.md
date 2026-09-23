@@ -7,6 +7,29 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.127 — 2026-09-23
+
+Lower a match over an enum's tag to one switch, not a chain of comparisons
+
+A match emitted one icmp and one branch per arm, so the arm an input
+selected was reached by a run of comparisons as long as that arm's
+position in the source. Nothing in the language says that, and for a
+match over a tag it is not even true: the tag names the arm outright.
+It was left to the optimizer to notice, by folding the chain back into a
+switch -- and that fold has a budget, so what it does not reach stays
+comparisons and an arm written late enough pays for being written late.
+A hundred and ten dataless arms already left one arm outside the table;
+an interpreter whose arms carry real work left sixty-eight outside it and
+a second jump table behind an extra unpredictable branch.
+
+A match whose arms are decided by the tag alone now emits one switch
+carrying every arm, whatever order they are written in. The form is
+recognised rather than assumed: every arm must be unguarded and test a
+variant's tag and nothing else, so that no arm can fail after the switch
+has branched to it. A guard, a refutable payload pattern, or two arms
+claiming one tag all keep the chain, which is what provides the
+fall-through those need.
+
 ## 0.0.126 — 2026-09-23
 
 `become f(...)` (guaranteed tail calls) has existed since 0.0.86 -- no change here; mentioned because a consumer profile mistook it for a gap.
