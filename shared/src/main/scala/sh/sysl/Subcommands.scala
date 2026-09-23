@@ -162,10 +162,10 @@ private def buildForC(cfg: Config, compiled: Compiled, target: Target, named: Op
 
   val outcome =
     for
-      _ <- Toolchain.compileObject(compiled.ir, code, target, cfg.optimization, cfg.cc)
+      _ <- Toolchain.compileObject(compiled.ir, code, target, cfg.optimization, cfg.cc, cfg.pipeline)
       _ <- objects.foldLeft[Either[String, Unit]](Right(()))((so_far, entry) =>
              so_far.flatMap(_ => Toolchain.compileC(entry._1.name, entry._2, target, cfg.optimization,
-               paths, cfg.verbose)))
+               paths, cfg.verbose, pipeline = cfg.pipeline)))
       _ <- Toolchain.archive(code :: objects.map(_._2), out, ar)
     yield ()
 
@@ -376,14 +376,14 @@ private def buildLibrary(cfg: Config, sources: List[Source], target: Target, std
 
       val outcome =
         for
-          _ <- Toolchain.compileObject(ir, code, target, cfg.optimization, cfg.cc)
+          _ <- Toolchain.compileObject(ir, code, target, cfg.optimization, cfg.cc, cfg.pipeline)
           _ <- Toolchain.compileObject(LibraryArtifact.metadataIr(meta, target), metadata, target,
-                                       cfg.optimization, cfg.cc)
+                                       cfg.optimization, cfg.cc, cfg.pipeline)
           // Each C file becomes its own member, so the linker pulls in a shim the same way it pulls
           // in anything else: because something left its symbol undefined.
           _ <- objects.foldLeft[Either[String, Unit]](Right(()))((so_far, entry) =>
                  so_far.flatMap(_ => Toolchain.compileC(entry._1.name, entry._2, target, cfg.optimization,
-                   paths)))
+                   paths, pipeline = cfg.pipeline)))
           _ <- Toolchain.archive(code :: metadata :: objects.map(_._2), out, ar)
         yield ()
 

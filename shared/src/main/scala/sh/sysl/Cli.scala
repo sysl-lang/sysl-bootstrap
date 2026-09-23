@@ -179,6 +179,23 @@ case class Config(
       * manifest's or the default where it was not.
       */
     optimize: Option[String] = None,
+    /** `--lto` — whether this invocation asks for link-time optimization, and in which mode.
+      *
+      * An `Option` for `optimize`'s reason exactly: a manifest may state one too (`PackageConfig.lto`)
+      * and a flag typed for one invocation has to beat a key written for all of them.
+      */
+    lto: Option[String] = None,
+    /** `--profile-generate <dir>` — build an instrumented program that writes its counters into
+      * `<dir>`, which is the first step of a profile-guided build (`Pipeline`).
+      *
+      * Not an `Option` folded in from a manifest, because there is no manifest key to fold: a
+      * profile describes one measurement on one machine.
+      */
+    profileGenerate: Option[String] = None,
+    /** `--profile-use <file>` — build against the indexed profile `llvm-profdata merge` wrote from
+      * the counters a `--profile-generate` build left behind.
+      */
+    profileUse: Option[String] = None,
     /** `build-c --header` — where the generated C header goes, when somewhere other than beside the
       * archive (`reference/ffi.md § @export`).
       */
@@ -230,6 +247,19 @@ case class Config(
    * used rather than over the flag.
    */
   def withOptimization(manifest: Option[String]): Config = copy(optimize = optimize.orElse(manifest))
+
+  /** What every clang this build drives is told **beyond the level** (`Pipeline`).
+   *
+   * Read rather than stored, for `optimization`'s reason: a build that asks before the root
+   * manifest has been folded in gets what the command line said, which is what it would have got
+   * had there been no manifest — early rather than stale.
+   */
+  def pipeline: Pipeline = Pipeline(lto, profileGenerate, profileUse)
+
+  /** The same config with the root manifest's `lto` folded in, where the command line named none —
+   * `withOptimization`'s twin, with the same `orElse` and the same precedence (`PackageConfig.lto`).
+   */
+  def withLto(manifest: Option[String]): Config = copy(lto = lto.orElse(manifest))
 }
 
 /** The option grammar, held apart from the entry point so that a test can ask what an argument list
@@ -521,7 +551,33 @@ private[sysl] val parser = {
           s"project's 'optimization' key where it has one and ${Toolchain.defaultOptimization} " +
           s"otherwise, and '0' is the mode a miscompile was once found in. '-O2' is written the " +
           s"way clang writes it"),
-      checkConfig(c => if c.command.isEmpty then failure("a subcommand is required") else success),
+      opt[String]("lto")
+        .action((m, c) => c.copy(lto = Some(m)))
+        .validate(m =>
+          if Toolchain.ltoModes.contains(m) then success
+          else failure(s"'--lto $m' names no kind of link-time optimization clang has — it is " +
+            s"${Toolchain.ltoModes.mkString(" or ")}"))
+        .text(s"optimize across every object at the link, which is the only thing that lets a call " +
+          s"into a package's C be inlined: '${Toolchain.ltoModes.mkString("' or '")}'. The " +
+          s"project's 'lto' key where it has one, and off otherwise"),
+      opt[String]("profile-generate")
+        .action((d, c) => c.copy(profileGenerate = Some(d)))
+        .text("build an instrumented program that writes a counter file into this directory each " +
+          "time it runs — the first step of a profile-guided build, whose second is 'llvm-profdata " +
+          "merge' and whose third is --profile-use"),
+      opt[String]("profile-use")
+        .action((f, c) => c.copy(profileUse = Some(f)))
+        .text("build against the profile 'llvm-profdata merge' wrote from a --profile-generate " +
+          "run, so that the optimizer lays the program out around what it actually did"),
+      checkConfig(c =>
+        if c.command.isEmpty then failure("a subcommand is required")
+        // Clang takes both and instruments the build, which is the opposite of what the second flag
+        // asked for and says nothing about it — so the contradiction is refused where it was typed.
+        else if c.profileGenerate.isDefined && c.profileUse.isDefined then
+          failure("--profile-generate and --profile-use are the two ends of one workflow and " +
+            "cannot be asked for at once: generate a profile, merge it with 'llvm-profdata', then " +
+            "build against it")
+        else success),
     )
   }
 }

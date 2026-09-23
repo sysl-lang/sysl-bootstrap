@@ -172,7 +172,7 @@ private[sysl] def execute(asked: Config): Int = {
   // program is compiled, including the parts it has nothing to do with. This is the same ruling
   // `targets.default` gets one step below, and it is silent for the same reason — a package that
   // states its own build level has said nothing wrong, it is simply not the one being built.
-  cfg = cfg.withOptimization(project.optimization)
+  cfg = cfg.withOptimization(project.optimization).withLto(project.lto)
 
   // **Above the target, and above every other question a compilation settles.** A graph is a
   // property of the manifests rather than of the machine, so a project that cannot be built here can
@@ -629,7 +629,7 @@ private[sysl] def execute(asked: Config): Int = {
   def nativeSources(): Either[String, NativeSources.Built] =
     if links(cfg.command) then
       NativeSources.build(NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree, target.os),
-        target, cfg.optimization, paths, cfg.verbose)
+        target, cfg.optimization, paths, cfg.verbose, cfg.pipeline)
     else Right(NativeSources.none)
 
   // **What `sysl run` built last time**, keyed over everything that can reach the bytes (`RunCache`).
@@ -650,6 +650,12 @@ private[sysl] def execute(asked: Config): Int = {
       target.name,
       s"${allocator.alloc}/${allocator.free}",
       cfg.optimization,
+      // **And everything asked of the optimizer beyond the level** (`Pipeline.key`). A cached
+      // binary is replayed without reaching clang at all, so a run that added `--lto=thin` to an
+      // otherwise unchanged tree would be handed back the ordinary link's output and told it was
+      // the one it asked for — the same stale answer `SYSL_EXTRA_CFLAGS` was giving before card
+      // `0415`, and invisible in exactly the same way.
+      cfg.pipeline.key,
       // The standard module's own identity: the archive's bytes where one was read, and the
       // library's fingerprint where it was compiled from source. `Std.fingerprint` is not enough on
       // its own, because `--std-lib` may name an artifact built from a different tree entirely.
@@ -794,7 +800,7 @@ private[sysl] def execute(asked: Config): Int = {
               "or say where the binary goes with '-o <path>'")
       else
         Toolchain.build(compiled.ir, exe, target, archives, cfg.optimization, compiled.links, native.objects,
-          paths, cfg.verbose) match
+          paths, cfg.verbose, cfg.pipeline) match
           case Left(err) => fail(err)
           case Right(_)  => Console.err.println(s"wrote $exe"); 0
 
@@ -806,7 +812,7 @@ private[sysl] def execute(asked: Config): Int = {
       val exe     = keeping.getOrElse(createTempFile("sysl-", ""))
 
       Toolchain.build(compiled.ir, exe, target, archives, cfg.optimization, compiled.links, native.objects,
-        paths, cfg.verbose) match
+        paths, cfg.verbose, cfg.pipeline) match
         case Left(err) => Project.discard(exe); fail(err)
         case Right(_) =>
           // `runProgram` and not `exec`, and the difference is the whole of what this command is

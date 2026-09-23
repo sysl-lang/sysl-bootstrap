@@ -139,6 +139,20 @@ case class PackageConfig(
       * the one thing this does that `--optimize` does not (`Toolchain.levels` argues the asymmetry).
       */
     optimization: Option[String] = None,
+    /** The `lto` key — whether this project's builds ask for link-time optimization, and in which
+      * mode (`reference/packages.md § Link-time optimization`, `Toolchain.ltoModes`).
+      *
+      * **The ROOT project's only, for the reason `optimization` gives and one more.** LTO is not a
+      * property of a translation unit that can be decided per package: it is a property of the
+      * *link*, which happens once for the whole program, so a dependency that asked for it would be
+      * asking on behalf of code it never sees. A package that binds a C library and would benefit
+      * from the seam being crossable says so in its documentation, and the program that links it
+      * decides.
+      *
+      * Refused here when it names neither mode, rather than passed on to clang, exactly as a level
+      * is and for the same reason: a manifest is read by builds nobody is watching.
+      */
+    lto: Option[String] = None,
     sysl: Option[Version] = None,
     /** Keys this compiler did not recognize, as sentences to print — one per key, in the order the
       * file writes them (`unknownKeys`).
@@ -332,6 +346,7 @@ object PackageConfig {
         alloc   <- readAllocator(root)
         defs    <- readDefines(root)
         level   <- readOptimization(root)
+        lto     <- readLto(root)
       yield PackageConfig(
         name = pkg.flatMap(string(_, "name")),
         version = pkg.flatMap(string(_, "version")),
@@ -348,6 +363,7 @@ object PackageConfig {
         allocator = alloc,
         defines = defs,
         optimization = level,
+        lto = lto,
         warnings = unknownKeys(root, TopLevelKeys, "") :::
           pkg.toList.flatMap(unknownKeys(_, PackageKeys, "package.")),
       )
@@ -437,6 +453,37 @@ object PackageConfig {
   private def notALevel(value: String): String =
     s"$FileName: 'optimization = \"$value\"' names no level clang has — it is one of " +
       s"${Toolchain.levels.mkString(", ")}"
+
+  /** `lto` — whether this project's builds ask the linker to optimize across every object, and in
+   * which mode (`PackageConfig.lto`, `Toolchain.ltoModes`).
+   *
+   * **A boolean is taken as well as a mode**, and only because `lto = true` is what somebody writes
+   * who has not read which modes there are. It means `thin`, which is the one a project that has not
+   * thought about it wants: near-ordinary link times for most of the benefit. `lto = false` is
+   * taken too and means the same as saying nothing, so a project can turn it off in a fork of its
+   * own manifest without deleting the line.
+   *
+   * Refused when it names something else, for `readOptimization`'s reason: this file is read by
+   * builds nobody is watching, and a mode clang does not have would arrive from inside clang with
+   * nothing naming the manifest.
+   */
+  private def readLto(root: ConfigObject): Either[String, Option[String]] =
+    root.fields.get("lto") match
+      case None                                 => Right(None)
+      case Some(ConfigBoolean(true))            => Right(Some("thin"))
+      case Some(ConfigBoolean(false))           => Right(None)
+      case Some(ConfigString(v)) if isLtoMode(v) => Right(Some(v))
+      case Some(ConfigString(v))                => Left(notAnLtoMode(v))
+      case Some(_) =>
+        Left(s"$FileName: 'lto' says whether this project is linked with link-time optimization, " +
+          s"so it is ${Toolchain.ltoModes.mkString(" or ")} — written as a string, or 'true' for " +
+          "thin, and not a block or a list")
+
+  private def isLtoMode(value: String): Boolean = Toolchain.ltoModes.contains(value)
+
+  private def notAnLtoMode(value: String): String =
+    s"$FileName: 'lto = \"$value\"' names no kind of link-time optimization clang has — it is " +
+      s"${Toolchain.ltoModes.mkString(" or ")}, or 'true' for thin"
 
   private def checkName(name: Option[String]): Either[String, Unit] = name match
     case None => Right(())
@@ -954,7 +1001,7 @@ object PackageConfig {
    */
   private val TopLevelKeys =
     Set("package", "targets", "capabilities", "requires", "dependencies", "dev_dependencies",
-        "features", "allocator", "defines", "optimization")
+        "features", "allocator", "defines", "optimization", "lto")
 
   private val PackageKeys = Set("name", "version", "sysl")
 

@@ -115,7 +115,7 @@ object TestRunner {
     // the one build that did not, so a suite was the one place a reader could not ask what clang was
     // handed — and a suite is where a question about the link is most likely to start.
     Toolchain.build(built.ir, exe, target, archives, cfg.optimization, built.links, objects, paths,
-                    cfg.verbose) match
+                    cfg.verbose, cfg.pipeline) match
       case Left(err) => Project.discard(exe); fail(err)
       case Right(_) =>
         // **The sidecar is written after the binary exists**, so a hit that finds both finds a pair

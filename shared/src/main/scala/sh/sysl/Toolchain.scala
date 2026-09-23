@@ -325,6 +325,29 @@ object Toolchain {
    */
   val levels = List("0", "1", "2", "3", "s", "z")
 
+  /** How a build may ask for **link-time optimization**, which is what `--lto` and a manifest's
+    * `lto` key take (`Pipeline`).
+    *
+    * ==Why sysl has anything to say about it when it emits one module already==
+    *
+    * A whole sysl program is lowered into **one** LLVM module, so the inlining that LTO exists to
+    * give a C project across its translation units is already available to sysl's own code at `-O2`
+    * — measured on slate, whose 541,000-line module is the whole interpreter. What is *not* in that
+    * module is everything reached over the FFI: the C a package vendors, the `__posix__` shims
+    * beside the standard library, and whatever a `@link` names. Those are separate objects compiled
+    * by a separate clang, and LTO is the only thing that lets a call into one of them be inlined.
+    *
+    * So this is not a second way of asking for what `-O` already does. It is the flag that decides
+    * whether the seam between sysl and its C is an optimization barrier.
+    *
+    * **Two modes and no more**, for the reason `levels` gives about a manifest: `thin` keeps a
+    * per-module summary and links at something close to an ordinary link's cost, and `full` merges
+    * every module into one and pays for it. `-flto` on its own is clang's spelling of `full`, and is
+    * deliberately not offered — a key read by a consumer who did not write it is better for saying
+    * which one it meant.
+    */
+  val ltoModes = List("thin", "full")
+
   /** The flag a level is passed as. A level is whatever was written — `0`, `2`, `s`, `z`, `fast` are
    * all clang's — and one clang does not have is clang's to complain about, since it is the
    * authority on its own levels and would say so better than a list here could.
@@ -773,12 +796,13 @@ object Toolchain {
   def build(ir: String, exe: String, target: Target = Target.default,
             archives: List[String] = Nil, level: String = defaultOptimization,
             links: List[String] = Nil, objects: List[String] = Nil,
-            paths: SearchPaths = SearchPaths.none, verbose: Boolean = false): Either[String, Unit] = {
+            paths: SearchPaths = SearchPaths.none, verbose: Boolean = false,
+            pipeline: Pipeline = Pipeline.none): Either[String, Unit] = {
     findClang(target, paths.cc).flatMap { cc =>
       val ll = createTempFile("sysl-", ".ll")
       writeFile(ll, sanitized(ir))
 
-      val command = linkCommand(ll, archives, exe, target, level, links, objects, paths, cc)
+      val command = linkCommand(ll, archives, exe, target, level, links, objects, paths, cc, pipeline)
 
       if verbose then trace(s"link: ${command.mkString(" ")}")
 
@@ -813,8 +837,10 @@ object Toolchain {
                                 level: String = defaultOptimization,
                                 links: List[String] = Nil, objects: List[String] = Nil,
                                 paths: SearchPaths = SearchPaths.none,
-                                cc: String = "clang"): List[String] =
-    List(cc, s"--target=${target.triple}", "-Wno-override-module", flag(level)) ::: extraFlags :::
+                                cc: String = "clang",
+                                pipeline: Pipeline = Pipeline.none): List[String] =
+    List(cc, s"--target=${target.triple}", "-Wno-override-module", flag(level)) :::
+      pipeline.flags ::: extraFlags :::
       machineFlags(target) ::: linkerFlags(target) ::: deadStrip(target) :::
       paths.linkFlags ::: rpathFlags(target, paths) ::: List(ll) ::: objects ::: archives :::
       libraryFlags(links, target) ::: paths.probedLinkFlags ::: List("-o", exe)
@@ -1037,13 +1063,14 @@ object Toolchain {
    */
   def compileObject(ir: String, obj: String, target: Target = Target.default,
                     level: String = defaultOptimization,
-                    named: Option[String] = None): Either[String, Unit] = {
+                    named: Option[String] = None,
+                    pipeline: Pipeline = Pipeline.none): Either[String, Unit] = {
     findClang(target, named).flatMap { cc =>
       val ll = createTempFile("sysl-", ".ll")
       writeFile(ll, sanitized(ir))
 
       val result = exec(Seq(cc, s"--target=${target.triple}", "-Wno-override-module", flag(level)) ++
-        extraFlags ++ machineFlags(target) ++
+        pipeline.flags ++ extraFlags ++ machineFlags(target) ++
         Seq("-ffunction-sections", "-fdata-sections", "-c", ll, "-o", obj))
       deleteFile(ll)
 
@@ -1106,10 +1133,11 @@ object Toolchain {
   def compileC(source: String, obj: String, target: Target = Target.default,
                level: String = defaultOptimization,
                paths: SearchPaths = SearchPaths.none, verbose: Boolean = false,
-               named: Option[String] = None): Either[String, Unit] = {
+               named: Option[String] = None,
+               pipeline: Pipeline = Pipeline.none): Either[String, Unit] = {
     findClang(target, named orElse paths.cc).flatMap { cc =>
-      val command = Seq(cc, s"--target=${target.triple}", flag(level)) ++ extraFlags ++
-        machineFlags(target) ++
+      val command = Seq(cc, s"--target=${target.triple}", flag(level)) ++ pipeline.flags ++
+        extraFlags ++ machineFlags(target) ++
         Option.when(target.shortEnums)("-fshort-enums") ++
         Option.when(target.positionIndependent)("-fPIC") ++ paths.defineFlagsFor(source) ++
         paths.includeFlags ++
