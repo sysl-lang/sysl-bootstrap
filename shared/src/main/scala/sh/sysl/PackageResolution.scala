@@ -289,13 +289,28 @@ private def writeSums(root: String, sums: Sums): Unit =
  * `reference/modules.md` settles that the driver is *given* a root rather than discovering one, so
  * this never searches upward — a build that walked up would depend on directories above the one
  * named.
+ *
+ * **Always returned absolute**, via `Project.absolute`, even when `file` was typed relative (`.`,
+ * `sub/prog.sysl`). Every cache and hash path a command touches — `Fetch.cacheRoot`, the `vendor/`
+ * directory it derives, `sysl.sum`, and `Hashing.treeHash` on whatever lands under either — is built
+ * by joining onto this root, and `Hashing.relative` strips it back off by a literal string prefix. A
+ * relative root joined onto a listing that does not echo the same relative prefix back (as a
+ * directory walk need not) leaves that strip a no-op, so the *unstripped* path goes into the hash and
+ * the digest depends on the string the caller happened to type rather than on the tree's contents —
+ * reproducible from an absolute root, silently not from `.` (`sysl vendor .` vs. `sysl vendor
+ * /abs/path` computing different tree hashes for an identical fetch). Normalizing once, here, is what
+ * every caller of this function shares rather than each having to remember to.
  */
-private def projectRoot(file: String): String =
-  if isDirectory(file) then file
-  else
-    val slash = math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'))
+private[sysl] def projectRoot(file: String): String = {
+  val literal =
+    if isDirectory(file) then file
+    else
+      val slash = math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'))
 
-    if slash >= 0 then file.substring(0, slash) else "."
+      if slash >= 0 then file.substring(0, slash) else "."
+
+  Project.absolute(literal)
+}
 
 /** The package an **example** belongs to: the root two levels above a program that sits in a
  * package's `examples/` directory, or nothing (`reference/packages.md § A package may carry

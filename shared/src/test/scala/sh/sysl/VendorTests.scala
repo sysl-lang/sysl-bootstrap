@@ -60,4 +60,52 @@ class VendorTests extends AnyFreeSpec with Matchers {
 
     Fetch.cacheRoot(root).getOrElse("") should not include Project.VendorDir
   }
+
+  /** A relative spelling of `target`, reached by climbing from the real working directory with
+    * `..` and back down — the same *kind* of literal, non-absolute argument `sysl vendor .` types
+    * from inside a project, without requiring this suite to change the JVM's own working directory
+    * (there is no such call in `cross_platform`, and none is added for a test).
+    */
+  private def relativeTo(target: String): String = {
+    val cwd    = getCurrentDirectory.stripPrefix("/").split("/").filter(_.nonEmpty).toList
+    val to     = target.stripPrefix("/").split("/").filter(_.nonEmpty).toList
+    val common = cwd.zip(to).takeWhile(_ == _).length
+
+    (List.fill(cwd.length - common)("..") ::: to.drop(common)).mkString("/")
+  }
+
+  // Found on slate 2026-09-22: `sysl vendor .` reported freshly-fetched packages as not hashing to
+  // what `sysl.sum` recorded, while `sysl vendor <absolute path>` reproduced the recorded hashes
+  // exactly. `projectRoot` returned a directory argument literally, so a project reached as `.`
+  // stayed `.` all the way into `Fetch.cacheRoot` and the `vendor/` it derives — and a `.`-rooted
+  // path handed to `Hashing.treeHash` cannot strip itself back off the absolute paths a directory
+  // walk returns, so the listing that gets hashed holds unstripped absolute paths, which differ by
+  // machine and by working directory even for byte-identical content.
+  "a project root reached by a relative path resolves to the same absolute root as its absolute spelling" in {
+    val root = vendored()
+    val rel  = relativeTo(root)
+
+    rel should not startWith "/"
+    projectRoot(rel) shouldBe projectRoot(root)
+    projectRoot(rel) should startWith("/")
+  }
+
+  "and a fetched package hashes the same whether the project it was fetched for was named relatively or absolutely" in {
+    val root = createTempDirectory("sysl-vendor-relroot-")
+    val rel  = relativeTo(root)
+
+    // The shape `Fetch.clone` computes a hash over: `<projectRoot>/vendor/<coordinate>/@v<version>.partial`,
+    // built here directly rather than through a real `git clone` so the test needs no network.
+    def partialUnder(base: String): String =
+      s"$base/${Project.VendorDir}/github.com/sysl-lang/demo/@v1.0.0.partial"
+
+    val pkg = partialUnder(root)
+    createDirectories(s"$pkg/sh/sysl/demo")
+    writeFile(s"$pkg/sh/sysl/demo/demo.sysl", "module sh.sysl.demo\n\nfour() -> int = 4\n")
+
+    val fromAbsoluteRoot = Hashing.treeHash(partialUnder(projectRoot(root)))
+    val fromRelativeRoot = Hashing.treeHash(partialUnder(projectRoot(rel)))
+
+    fromRelativeRoot shouldBe fromAbsoluteRoot
+  }
 }
