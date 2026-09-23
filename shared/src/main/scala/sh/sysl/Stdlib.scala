@@ -125,19 +125,24 @@ object Stdlib {
    * touch `Std.sources` first, where it would arrive as an exception.
    */
   def resolve(choice: Choice, target: Target, allocator: Allocator = Allocator.c,
-              cc: Option[String] = None): Either[String, Resolved] =
+              cc: Option[String] = None, level: String = Toolchain.defaultOptimization,
+              pipeline: Pipeline = Pipeline.none): Either[String, Resolved] =
     Std.root.flatMap: _ =>
       choice match
         case Choice.FromSource      => Right(Resolved(fromSource(target, cc), Set.empty, None))
         case Choice.Artifact(named) => load(named, target, allocator)
         case Choice.Default(search) =>
-          val path = search.getOrElse(LibraryArtifact.stdDefault(target, allocator))
+          // **The level and the pipeline are in the default path**, so a build at another level or
+          // with LTO resolves — and, the first time, builds — an archive of its own rather than
+          // linking one compiled for somebody else's flags (`LibraryArtifact.codegen`).
+          val path = search.getOrElse(LibraryArtifact.stdDefault(target, allocator, level = level,
+                                                                 pipeline = pipeline))
 
           resolved.synchronized {
             resolved.get((path, target, allocator)) match
               case Some(answer) => answer
               case None         =>
-                val answer = found(path, target, allocator, cc)
+                val answer = found(path, target, allocator, cc, level, pipeline)
 
                 resolved.clear()
                 resolved((path, target, allocator)) = answer
@@ -210,7 +215,7 @@ object Stdlib {
    * missing NDK produces, since a toolchain fault there already looks like a broken library.
    */
   private def found(path: String, target: Target, allocator: Allocator,
-                    cc: Option[String]): Either[String, Resolved] = {
+                    cc: Option[String], level: String, pipeline: Pipeline): Either[String, Resolved] = {
     val already = if isFile(path) then load(path, target, allocator) else Left(s"$path does not exist")
 
     already match
@@ -218,7 +223,7 @@ object Stdlib {
       case Left(why) =>
         Console.err.println(s"building the standard module at $path ($why)")
 
-        writeArtifact(path, target, allocator = allocator, cc = cc) match
+        writeArtifact(path, target, allocator = allocator, cc = cc, level = level, pipeline = pipeline) match
           case Right(_)  => load(path, target, allocator)
           case Left(err) => Left(rebuildFailure(err, Toolchain.findClang(target, cc)))
   }
@@ -390,7 +395,8 @@ object Stdlib {
    */
   def writeArtifact(out: String, target: Target, ar: Option[String] = None,
                     allocator: Allocator = Allocator.c,
-                    cc: Option[String] = None): Either[String, Unit] =
+                    cc: Option[String] = None, level: String = Toolchain.defaultOptimization,
+                    pipeline: Pipeline = Pipeline.none): Either[String, Unit] =
     for
       archiver <- Toolchain.findAr(ar)
       built    <- LibraryArtifact.build(Std.sources(target.os), target, LibraryArtifact.std,
@@ -423,14 +429,22 @@ object Stdlib {
 
                     val outcome =
                       for
-                        _ <- Toolchain.compileObject(built._1, code, target, named = cc)
+                        // **The code at the build's own level, with its own pipeline** — under LTO
+                        // that makes it bitcode, which the link then optimizes together with the
+                        // program instead of taking as a finished object.
+                        _ <- Toolchain.compileObject(built._1, code, target, level, cc, pipeline)
+                        // **The metadata is never bitcode.** It is read back by finding its marker in
+                        // the member's bytes (`LibraryArtifact.metadataOf`), and a bitstream does not
+                        // keep a string constant's bytes contiguous — so it is an ordinary object
+                        // whatever the code beside it is.
                         _ <- Toolchain.compileObject(LibraryArtifact.metadataIr(built._2, target), metadata,
                                                      target, named = cc)
                         // Each C file is its own member, so the linker pulls a shim in the way it
                         // pulls anything else in: because something left its symbol undefined.
                         _ <- objects.foldLeft[Either[String, Unit]](Right(()))((so_far, entry) =>
                                so_far.flatMap(_ =>
-                                 Toolchain.compileC(entry._1.name, entry._2, target, named = cc)))
+                                 Toolchain.compileC(entry._1.name, entry._2, target, level,
+                                                    named = cc, pipeline = pipeline)))
                         _ <- Toolchain.archive(code :: metadata :: objects.map(_._2), pending, archiver)
                         _ <- publish(pending, out)
                       yield ()

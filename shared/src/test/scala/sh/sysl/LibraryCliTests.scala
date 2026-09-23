@@ -501,15 +501,81 @@ class LibraryCliTests extends LibraryCliSupport {
         libc should not be rtos
       }
 
-      "and names all four in one path, in that order" in {
-        // Pinned whole rather than by four `include`s, because what matters is that they are one
+      // **The archive is object code, and the level is what object code is made at.** Before the
+      // key named it, the first build on a machine decided every later one's standard module: an
+      // `-O3` build linked the `-O1` archive the default build had left, and said nothing.
+      "and by the optimization level, so a build at another level links a library made at it" in {
+        assume(cacheDirectory.isDefined, "this machine has no cache directory")
+
+        val levels = Toolchain.levels.map(l => LibraryArtifact.stdDefault(Target.default, level = l))
+
+        levels.distinct should have size Toolchain.levels.size
+        LibraryArtifact.stdDefault(Target.default, level = "3") should include("-O3/")
+        // The default level is the default argument, so a caller that names none and a build that
+        // resolved the default level agree on one archive rather than building two.
+        LibraryArtifact.stdDefault(Target.default) shouldBe
+          LibraryArtifact.stdDefault(Target.default, level = Toolchain.defaultOptimization)
+      }
+
+      // **Under LTO the archive's code is bitcode, and without it an object** — two different files
+      // that link to two different programs, so one key between them is a build that silently
+      // takes no part in the optimization it asked for.
+      "and by the link-time optimization mode, so an LTO build links a library that can take part" in {
+        assume(cacheDirectory.isDefined, "this machine has no cache directory")
+
+        val plain = LibraryArtifact.stdDefault(Target.default, level = "2")
+        val modes = Toolchain.ltoModes.map(m =>
+          LibraryArtifact.stdDefault(Target.default, level = "2", pipeline = Pipeline(lto = Some(m))))
+
+        (plain :: modes).distinct should have size (1 + Toolchain.ltoModes.size)
+        modes.head should include("-O2-lto-thin/")
+      }
+
+      // A profile is merged over the old one at the same path as a matter of course, so the key has
+      // to follow what the file says rather than where it is.
+      "and by what a profile says, not where it is, so a re-merged profile rebuilds the library" in {
+        assume(cacheDirectory.isDefined, "this machine has no cache directory")
+
+        val file = createTempFile("sysl-profile-", ".profdata")
+
+        try
+          def keyed: String =
+            LibraryArtifact.stdDefault(Target.default, level = "2", pipeline = Pipeline(profileUse = Some(file)))
+
+          writeFile(file, "one measurement")
+          val first = keyed
+
+          keyed shouldBe first
+          writeFile(file, "another measurement")
+          keyed should not be first
+          first should include("-O2-puse-")
+        finally deleteFile(file)
+      }
+
+      "and by where an instrumented build writes its counters" in {
+        assume(cacheDirectory.isDefined, "this machine has no cache directory")
+
+        def keyed(dir: String): String =
+          LibraryArtifact.stdDefault(Target.default, pipeline = Pipeline(profileGenerate = Some(dir)))
+
+        keyed("/tmp/one") should not be keyed("/tmp/two")
+        keyed("/tmp/one") should not be LibraryArtifact.stdDefault(Target.default)
+        keyed("/tmp/one") should include("-pgen-")
+      }
+
+      "and names all of them in one path, in that order" in {
+        // Pinned whole rather than by `include`s, because what matters is that they are one
         // directory: a layout putting them in separate segments would satisfy every assertion above
         // and give each release its own tree of every library it ever saw.
         assume(cacheDirectory.isDefined, "this machine has no cache directory")
 
         LibraryArtifact.stdDefault(Target.default) shouldBe
           s"${cacheDirectory.get}/sysl/${BuildInfo.version}-${Std.fingerprint(Target.default.os)}-${Target.default.name}" +
-            s"-${Allocator.c.alloc}-${Allocator.c.free}/std${LibraryArtifact.extension}"
+            s"-${Allocator.c.alloc}-${Allocator.c.free}-O${Toolchain.defaultOptimization}/std${LibraryArtifact.extension}"
+
+        LibraryArtifact.stdDefault(Target.default, level = "3", pipeline = Pipeline(lto = Some("thin"))) shouldBe
+          s"${cacheDirectory.get}/sysl/${BuildInfo.version}-${Std.fingerprint(Target.default.os)}-${Target.default.name}" +
+            s"-${Allocator.c.alloc}-${Allocator.c.free}-O3-lto-thin/std${LibraryArtifact.extension}"
       }
 
       "and it sits under the cache directory rather than in the project" in {

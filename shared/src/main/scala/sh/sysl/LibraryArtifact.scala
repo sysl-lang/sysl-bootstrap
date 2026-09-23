@@ -1,6 +1,6 @@
 package sh.sysl
 
-import io.github.edadma.cross_platform.cacheDirectory
+import io.github.edadma.cross_platform.{cacheDirectory, isFile, readBytes}
 
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -247,13 +247,60 @@ object LibraryArtifact {
    * were one call before, so `build-lib` in a checkout with an installed sysl wrote the checkout's
    * library under the installed library's key — the one thing a fingerprint in a cache key exists to
    * stop.
+   *
+   * **And HOW it was compiled — the level and whatever `Pipeline` asked of LLVM (`codegen`).** The
+   * archive is object code, and object code is what `-O` and `-flto` change: before the key named
+   * them, every build linked whichever archive the first build on the machine had made, which was
+   * the default level's, so a `-O3` build and an LTO build both linked an `-O1` standard module
+   * that took no part in link-time optimization — and said nothing, since the link succeeded.
    */
   def stdDefault(target: Target, allocator: Allocator = Allocator.c,
-                 fingerprint: Option[String] = None): String =
+                 fingerprint: Option[String] = None,
+                 level: String = Toolchain.defaultOptimization,
+                 pipeline: Pipeline = Pipeline.none): String =
     cacheDirectory
       .map(c => s"$c/sysl/${BuildInfo.version}-${fingerprint.getOrElse(Std.fingerprint(target.os))}" +
-        s"-${target.name}-${allocator.alloc}-${allocator.free}/std$extension")
+        s"-${target.name}-${allocator.alloc}-${allocator.free}-${codegen(level, pipeline)}/std$extension")
       .getOrElse(stdLocal)
+
+  /** The part of the standard module's key that says how its object code was made: the level, then
+   * each lever `pipeline` pulls — `O2`, `O3-lto-thin`, `O2-lto-thin-puse-<hash>`.
+   *
+   * **A profile is keyed by what it SAYS, not by where it is.** `--profile-use` names a file, and
+   * the ordinary way of working is to merge a new profile over the old one at the same path — so a
+   * key over the path would hand the second build an archive optimized for the first profile. The
+   * file's bytes are hashed instead, which is a read of one file per build against a rebuild of the
+   * whole standard module. A file that is not there hashes as its path alone; clang then refuses it,
+   * in its own words, when the archive is built.
+   *
+   * `--profile-generate` is keyed by its directory, because the directory is what the instrumented
+   * objects are told to write into.
+   */
+  def codegen(level: String, pipeline: Pipeline): String =
+    s"O$level" +
+      pipeline.lto.map(mode => s"-lto-$mode").getOrElse("") +
+      pipeline.profileGenerate.map(dir => s"-pgen-${digest(Project.absolute(dir).getBytes(UTF_8))}")
+        .getOrElse("") +
+      pipeline.profileUse.map { file =>
+        val where = Project.absolute(file)
+        val body  =
+          try if isFile(where) then readBytes(where) else Array.emptyByteArray
+          catch case _: Exception => Array.emptyByteArray
+
+        s"-puse-${digest(where.getBytes(UTF_8) ++ body)}"
+      }.getOrElse("")
+
+  /** FNV-1a over bytes, finished as `fingerprint` finishes — for a key segment rather than a
+   * library, so sixteen hex digits and no framing.
+   */
+  private def digest(bytes: Array[Byte]): String = {
+    var h = 0xcbf29ce484222325L
+
+    for b <- bytes do
+      h = (h ^ (b & 0xffL)) * 0x100000001b3L
+
+    f"${avalanche(h)}%016x"
+  }
 
   /** The project-local artifact path, which is what `stdDefault` was before it moved to the cache and
    * what it falls back to where a machine has no cache directory.

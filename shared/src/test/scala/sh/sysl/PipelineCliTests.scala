@@ -244,6 +244,50 @@ class PipelineCliTests extends AnyFreeSpec with Matchers {
           out.toString shouldBe "42\n"
         finally deleteFile(path)
       }
+
+      // **The standard module is the largest body of code a program links, and it was outside
+      // LTO.** Its archive was always the default level's ordinary object, because the key it was
+      // cached under named neither the level nor the mode — so the flag reached every clang but the
+      // one that had compiled most of what the program runs.
+      "the standard module a build links is one made at its level and under its mode" in {
+        assume(Toolchain.clangAvailable, "clang not available")
+        assume(cacheDirectory.isDefined, "this machine has no cache directory")
+
+        val root   = project("")
+        val prefix = "standard module linked from "
+
+        def linkedStd(cfg: Config => Config): String =
+          building(root, cfg = cfg).linesIterator.collectFirst {
+            case line if line.contains(prefix) => line.substring(line.indexOf(prefix) + prefix.length).trim
+          }.getOrElse(fail("the build did not say which standard module it linked"))
+
+        val plain = linkedStd(identity)
+        val o2    = linkedStd(_.copy(optimize = Some("2")))
+        val thin  = linkedStd(_.copy(optimize = Some("2"), lto = Some("thin")))
+
+        List(plain, o2, thin).distinct should have size 3
+        plain should include(s"-O${Toolchain.defaultOptimization}/")
+        o2 should include("-O2/")
+        thin should include("-O2-lto-thin/")
+      }
+
+      // The same program as the case above it, with the standard module linked rather than left
+      // out — so what is linked under LTO is the bitcode archive, and the run is the proof it links.
+      "and a program linked against that standard module still answers what the program says" in {
+        assume(Toolchain.clangAvailable, "clang not available")
+
+        val path = createTempFile("sysl-pipeline-std-", ".sysl")
+        writeFile(path, "main()\n    print(6 * 7)\n")
+
+        try
+          val out = new java.io.ByteArrayOutputStream
+          val status = Console.withOut(out)(RunCache.disabledFor(
+            driver(Config(command = "run", file = path, optimize = Some("2"), lto = Some("thin")))))
+
+          status shouldBe 0
+          out.toString shouldBe "42\n"
+        finally deleteFile(path)
+      }
     }
 
     // `sysl run` replays a cached binary without reaching clang, so a lever the key does not carry
@@ -334,7 +378,10 @@ class PipelineCliTests extends AnyFreeSpec with Matchers {
         assume(Toolchain.clangAvailable, "clang not available")
 
         val dir   = createTempDirectory("sysl-pipeline-profraw-")
-        val notes = building(project("", carriesC = true), cfg = _.copy(profileGenerate = Some(dir)))
+        // The standard module compiled in, for the reason the round trip below gives: a prebuilt one
+        // is keyed by this fresh directory, and would be a new archive in the cache on every run.
+        val notes = building(project("", carriesC = true),
+                             cfg = _.copy(profileGenerate = Some(dir), noStdLib = true))
         val lines = drivenBy(notes, "compile:") ::: drivenBy(notes, "link:")
 
         withClue(notes) { lines.length should be >= 2 }
@@ -369,9 +416,12 @@ class PipelineCliTests extends AnyFreeSpec with Matchers {
       val root  = project("")
       val exe   = s"$root/trained"
 
-      // 1. Instrumented.
+      // 1. Instrumented. **With the standard module compiled in, here and at step 4**: a prebuilt
+      // one is keyed by the profile directory and by what the profile says (`LibraryArtifact.codegen`),
+      // and both are fresh on every run of this case — so linking one would leave two new archives
+      // in the user's cache each time the suite ran.
       cli(Config(command = "build", file = root, output = Some(exe),
-                 profileGenerate = Some(dir))) shouldBe 0
+                 profileGenerate = Some(dir), noStdLib = true)) shouldBe 0
 
       exec(Seq("nm", exe)).stdout should include("__llvm_profile")
 
@@ -389,7 +439,7 @@ class PipelineCliTests extends AnyFreeSpec with Matchers {
       withClue(merged.stderr) { merged.exitCode shouldBe 0 }
 
       // 4. Built against it — and the optimizer is told where to read it.
-      val notes = building(root, cfg = _.copy(profileUse = Some(profile)))
+      val notes = building(root, cfg = _.copy(profileUse = Some(profile), noStdLib = true))
 
       notes should include(s"-fprofile-use=$profile")
 

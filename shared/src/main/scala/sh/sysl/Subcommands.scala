@@ -340,7 +340,9 @@ private def buildLibrary(cfg: Config, sources: List[Source], target: Target, std
 
       val out =
         cfg.output.getOrElse(
-          if cfg.std then cfg.stdSearch.getOrElse(LibraryArtifact.stdDefault(target, allocator, mine))
+          if cfg.std then
+            cfg.stdSearch.getOrElse(
+              LibraryArtifact.stdDefault(target, allocator, mine, cfg.optimization, cfg.pipeline))
           else defaultOutput(cfg.file, named, LibraryArtifact.extension))
 
       // **And say so where the two disagree**, because the command still did what it was asked and
@@ -377,8 +379,12 @@ private def buildLibrary(cfg: Config, sources: List[Source], target: Target, std
       val outcome =
         for
           _ <- Toolchain.compileObject(ir, code, target, cfg.optimization, cfg.cc, cfg.pipeline)
+          // **Never with the pipeline.** The metadata is read back by finding its marker in the
+          // member's bytes (`LibraryArtifact.metadataOf`), and under LTO clang writes bitcode, whose
+          // bitstream does not keep a string constant's bytes contiguous — a library built with
+          // `--lto` was one no compilation could read. It is data, so nothing is lost.
           _ <- Toolchain.compileObject(LibraryArtifact.metadataIr(meta, target), metadata, target,
-                                       cfg.optimization, cfg.cc, cfg.pipeline)
+                                       cfg.optimization, cfg.cc)
           // Each C file becomes its own member, so the linker pulls in a shim the same way it pulls
           // in anything else: because something left its symbol undefined.
           _ <- objects.foldLeft[Either[String, Unit]](Right(()))((so_far, entry) =>

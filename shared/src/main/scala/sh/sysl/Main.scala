@@ -350,9 +350,10 @@ private[sysl] def execute(asked: Config): Int = {
       s"${PackageConfig.FileName}'s 'allocator' block, or build for a target that has a libc")
 
   // Which standard module this compilation is compiled against — an error if there is none, the same
-  // as any other missing library.
+  // as any other missing library. At this build's level and with its pipeline, because the archive
+  // is object code the link takes as it is (`LibraryArtifact.codegen`).
   val Stdlib.Resolved(std, coreSymbols, coreArchive) =
-    Stdlib.resolve(stdChoice(cfg, target), target, allocator, cfg.cc) match
+    Stdlib.resolve(stdChoice(cfg, target), target, allocator, cfg.cc, cfg.optimization, cfg.pipeline) match
     case Left(err) => return fail(err)
     case Right(c)  => c
 

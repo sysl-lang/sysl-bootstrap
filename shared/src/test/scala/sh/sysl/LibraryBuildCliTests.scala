@@ -70,6 +70,20 @@ class LibraryBuildCliTests extends LibraryCliSupport {
       LibraryArtifact.metadataOf(out, readBytes(out)) should matchPattern { case Right(_) => }
     }
 
+    // **The metadata is found by its marker in the member's bytes**, and under LTO clang writes
+    // bitcode, whose bitstream does not keep a string constant's bytes where a byte search finds
+    // them. So the metadata member is an ordinary object whatever the code beside it is, and a
+    // library built for an LTO project is still one the compiler can read.
+    "builds under LTO into an artifact whose metadata still reads back" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      val out = createTempFile("sysl-cli-lto-", LibraryArtifact.extension)
+
+      succeeds(Config(command = "build-lib", file = libraryRoot(), output = Some(out), lto = Some("thin")))
+
+      LibraryArtifact.metadataOf(out, readBytes(out)) should matchPattern { case Right(_) => }
+    }
+
     "refuses an archiver it cannot run rather than searching for another" in {
       // Someone who wrote down which archiver to use is owed the error. Falling back would build the
       // library with a different tool than the one asked for and say nothing about it — and the whole

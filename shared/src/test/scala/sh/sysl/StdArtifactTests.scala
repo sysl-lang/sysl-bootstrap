@@ -49,6 +49,15 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
   private def decoded: Stdlib       = read._1
   private def precompiled: Set[String] = read._2
 
+  /** Whether an archive member is LLVM bitcode rather than an object: the raw bitstream's `BC\xC0\xDE`,
+   * or the wrapper header Darwin's toolchain puts in front of it (`0x0B17C0DE`, little-endian).
+   */
+  private def isBitcode(body: Array[Byte]): Boolean =
+    body.length >= 4 && {
+      val magic = body.take(4).map(_ & 0xff).toList
+      magic == List(0x42, 0x43, 0xc0, 0xde) ||magic == List(0xde, 0xc0, 0x17, 0x0b)
+    }
+
   /** One program compiled against one std, through the entry point the driver itself uses — so the
    * two sides below differ in the standard module and in nothing else.
    *
@@ -1051,6 +1060,60 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       back.map(_._1.modules) shouldBe Right(decoded.modules)
 
       deleteFile(out)
+    }
+
+    // **The build's own flags reach the archive's code.** Before they did, every artifact was the
+    // default level's ordinary object whatever the build had asked for — so an LTO build linked a
+    // standard module that took no part in link-time optimization, and nothing failed.
+    "compiled under LTO, its code is bitcode and it still reads back as the standard module" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+      assume(Toolchain.findAr(None).isRight, "llvm-ar not available")
+
+      val out = s"${createTempDirectory("sysl-write-lto-")}/std${LibraryArtifact.extension}"
+
+      Stdlib.writeArtifact(out, Target.default, level = "2", pipeline = Pipeline(lto = Some("thin"))) shouldBe
+        Right(())
+
+      val members = Ar.members(readBytes(out)).fold(e => fail(e), identity)
+      val code    = members.find(_.name == LibraryArtifact.codeMember).getOrElse(fail("no code member"))
+
+      withClue("the code member should be LLVM bitcode") { isBitcode(code.body) shouldBe true }
+
+      // The metadata is found by its marker in the member's bytes, which a bitstream would scatter —
+      // so it stays an ordinary object, and the artifact is still one this compiler reads.
+      val back =
+        for
+          m <- LibraryArtifact.metadataOf(out, readBytes(out))
+          r <- Stdlib.read(out, m, Target.default)
+        yield r
+
+      back.map(_._2) shouldBe Right(precompiled)
+
+      deleteFile(out)
+    }
+
+    "and without LTO its code is an ordinary object, at the level it was asked for" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+      assume(Toolchain.findAr(None).isRight, "llvm-ar not available")
+
+      def code(level: String): Array[Byte] = {
+        val out = s"${createTempDirectory("sysl-write-level-")}/std${LibraryArtifact.extension}"
+
+        Stdlib.writeArtifact(out, Target.default, level = level) shouldBe Right(())
+
+        val body = Ar.members(readBytes(out)).fold(e => fail(e), identity)
+          .find(_.name == LibraryArtifact.codeMember).getOrElse(fail("no code member")).body
+
+        deleteFile(out)
+        body
+      }
+
+      val o0 = code("0")
+      val o3 = code("3")
+
+      isBitcode(o0) shouldBe false
+      // Two levels, two different objects: the level reached clang rather than stopping at the key.
+      o0.sameElements(o3) shouldBe false
     }
 
     // **The library's own C has to be in it**, and this is the road nothing covered: `build-lib
