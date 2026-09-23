@@ -306,6 +306,97 @@ lossy_and_strict_agree()
     assert(from_utf8(bad[0..<2]).is_err())
     assert_eq(from_utf8_lossy(bad[0..<2]), "a\u{FFFD}")
 
+// -- a string made in place over bytes ------------------------------------------------------------
+
+// `str_view` is the one conversion that does not copy, so a write through the slice after it is seen
+// by the string -- which is the whole of what it is for, and what `from_utf8_unchecked` beside it
+// does not do.
+@test("str_view sees a write made through the slice after it")
+str_view_sees_writes()
+    var store: []u8 = [0; 8]
+    store[0] = 104
+    store[1] = 105
+
+    val viewed = str_view(store[0..<2])
+    val copied = from_utf8_unchecked(store[0..<2])
+
+    store[1] = 97
+    assert_eq(viewed, "ha")
+    assert_eq(copied, "hi")
+
+// The string's length is the slice's, fixed where it is made, so writing past the end of the view --
+// which is how a buffer grows in place -- leaves the string as it was.
+@test("str_view is as long as the slice it was made from")
+str_view_length_is_fixed()
+    var store: []u8 = [0; 8]
+    store[0] = 111
+    store[1] = 107
+
+    val s = str_view(store[0..<2])
+
+    store[2] = 33
+    assert_eq(s.len, 2)
+    assert_eq(s, "ok")
+    assert_eq(str_view(store[0..<3]), "ok!")
+
+private str_view_of_a_buffer() -> string
+    var store: []u8 = [0; 4]
+    store[0] = 111
+    store[1] = 107
+    str_view(store[0..<2])
+
+private str_view_of_a_frame_array() -> string
+    var a: [2]u8 = [111, 107]
+    str_view(a[0..<2])
+
+// The string holds a share of the slice's owner, so the buffer outlives the function that made it
+// and every other holder. Allocating the same size again afterwards is what would land on its bytes
+// had the share not been taken.
+@test("a str_view keeps its bytes alive after the slice is gone")
+str_view_keeps_the_owner()
+    val s = str_view_of_a_buffer()
+    val t = str_view_of_a_frame_array()
+
+    for i in 0..<1000
+        var churn: []u8 = [120; 4]
+        churn[0] = u8(i % 100)
+
+    assert_eq(s, "ok")
+    assert_eq(t, "ok")
+
+// Every route through a view shares the one owner: a substring of the string, and a string made from
+// a slice of a slice, see the same bytes the first view does.
+@test("a view of a slice of a view sees the same bytes")
+str_view_of_views()
+    var store: []u8 = [0; 6]
+    for i in 0..<6
+        store[i] = u8(97 + i)
+
+    val whole = str_view(store[0..<6])
+    val inner = whole[1..<4]
+    var narrow = store[2..<6]
+    val deep = str_view(narrow[1..<3])
+
+    assert_eq(inner, "bcd")
+    assert_eq(deep, "de")
+
+    store[3] = 90
+    assert_eq(whole, "abcZef")
+    assert_eq(inner, "bcZ")
+    assert_eq(deep, "Ze")
+
+@test("making and dropping views in a loop neither leaks nor frees twice")
+str_view_in_a_loop()
+    var total: usize = 0
+
+    for i in 0..<20000
+        var store: []u8 = [0; 4]
+        store[0] = 97
+        val s = str_view(store[0..<1])
+        total += s.len
+
+    assert_eq(total, 20000)
+
 // -- walking bytes that may not be text -----------------------------------------------------------
 
 // `chars_of` is public and takes any run of bytes, so the walk cannot assume what `from_utf8` would

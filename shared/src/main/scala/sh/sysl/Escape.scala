@@ -185,6 +185,11 @@ private class Escape(program: TProgram) {
    * `sysl.str.from_bytes`, which allocates), a literal is static, and nothing else makes one. So a
    * string outlives every frame by construction and there is nothing in it for a frame to own.
    *
+   * **`str_alias` is the one form that makes a string over storage it did not allocate, and it keeps
+   * the answer true by being an escape site itself** (`escaping` below): whatever frame storage its
+   * bytes view is promoted where the string is made, so the string it yields views nothing a frame
+   * owns, and a parameter handed to it is one its function keeps.
+   *
    * What the answer `true` did was make a **call returning a string** inherit its arguments' views,
    * since a call views whatever it was passed. `hex_string(sha3_256(msg))` is exactly that shape —
    * a temporary array into a `[]const u8` parameter, from a function answering a `string` — so the
@@ -503,6 +508,10 @@ private class Escape(program: TProgram) {
     private def escaping(e: TExpr): Unit = {
       e match
         case TBox(v, _) => if viewsFrame(v) then gets_out(v, "is put on the heap")
+
+        // A string outlives every frame (`carriesView`), so bytes made into one in place have left
+        // the frame at the point they became one, whatever happens to the string afterwards.
+        case TStrView(v) => if viewsFrame(v) then gets_out(v, "is made into a string, which outlives the frame")
 
         case TStore(place, v, _) =>
           place match

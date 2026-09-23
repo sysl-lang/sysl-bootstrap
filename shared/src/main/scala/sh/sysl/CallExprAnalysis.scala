@@ -32,6 +32,7 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
     case Call(Ident("str"), args)                           => strCall(args)
     case Call(Ident("format"), List(argExpr, StrLit(spec))) => formatCall(argExpr, spec)
     case Call(Ident("str_cast"), args)                      => strCast(args)
+    case Call(Ident("str_alias"), args)                     => strAlias(args)
     case Call(Ident("va_start"), args)                      => vaStart(args)
     case Call(Ident("va_end"), args)                        => vaEnd(args)
     case Call(Ident("va_arg"), args)                        => vaArg(args, expected)

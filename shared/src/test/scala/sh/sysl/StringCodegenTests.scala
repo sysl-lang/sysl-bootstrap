@@ -221,4 +221,63 @@ class StringCodegenTests extends AnyFreeSpec with CodegenSupport {
 
     out.sliding("declare i32 @snprintf".length).count(_ == "declare i32 @snprintf") shouldBe 1
   }
+
+  "viewing bytes as a string in place" - {
+    // `str_cast` copies (`TFromBytes` → `sysl.str.from_bytes`); its in-place sibling is the three
+    // words it was given, so nothing is called and nothing allocated where it is made.
+    "the raw form emits no copy and no allocation" in {
+      val out = mainOf(ir("""var store: []u8 = [0; 16]
+                            |val s = str_alias(store[0..<10])
+                            |print(s.len)""".stripMargin))
+
+      out should not include "@sysl.str.from_bytes"
+      out.linesIterator.count(_.contains("@malloc")) shouldBe
+        mainOf(ir("""var store: []u8 = [0; 16]
+                    |val s = store[0..<10]
+                    |print(s.len)""".stripMargin)).linesIterator.count(_.contains("@malloc"))
+    }
+
+    "while the copying form next to it does call the copy" in {
+      mainOf(ir("""var store: []u8 = [0; 16]
+                  |val s = str_cast(store[0..<10])
+                  |print(s.len)""".stripMargin)) should include("@sysl.str.from_bytes")
+    }
+
+    "and the library's spelling, sysl.text.str_view, has no copy in its body" in {
+      val out = ir("""import sysl.text.str_view
+                     |var store: []u8 = [0; 16]
+                     |val s = str_view(store[0..<10])
+                     |print(s.len)""".stripMargin)
+      val key  = Library.key("str_view")
+      val body = out.linesIterator.dropWhile(l => !(l.startsWith("define") && l.contains(key)))
+        .takeWhile(_ != "}").toList
+
+      withClue(out)(body should not be empty)
+      body.mkString("\n") should not include "@sysl.str.from_bytes"
+    }
+
+    "a value that is not bytes is refused, by the raw form and by the library's" in {
+      err("""print(str_alias(5))""") should include("'str_alias' takes a []u8, but the value has type int")
+      err("""import sysl.text.str_view
+            |print(str_view(5))""".stripMargin) should include("int")
+    }
+
+    "a string is refused rather than passed through" in {
+      err("""print(str_alias("hi"))""") should include(
+        "'str_alias' makes a string out of bytes, and this value is already a string")
+    }
+
+    // The library's form asks for bytes it could be written through, which is the case it exists
+    // for; a read-only view is `from_utf8_unchecked`'s, or needs no conversion at all.
+    "the library's form takes a writable slice, so a read-only one is refused" in {
+      err("""import sysl.text.str_view
+            |print(str_view("hi".bytes))""".stripMargin) should include("views elements it may not write")
+    }
+
+    "the raw form takes exactly one value" in {
+      err("""var b: []u8 = [0; 4]
+            |print(str_alias(b, b))""".stripMargin) should include(
+        "'str_alias' takes exactly one value, the bytes to view as a string")
+    }
+  }
 }

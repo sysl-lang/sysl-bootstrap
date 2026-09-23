@@ -402,6 +402,18 @@ case class TStr(arg: TExpr) extends TExpr { def ty: Type = Type.Str }
  */
 case class TFromBytes(arg: TExpr) extends TExpr { def ty: Type = Type.Str }
 
+/** The built-in `str_alias(b)` — the bytes of a `[]u8` as a `string` **in place**: the same three
+ * words, so the string shares the slice's owner exactly as `s[a..b]` shares a string's, and nothing
+ * is allocated or copied. It is `TBytes` read the other way round.
+ *
+ * It is the one route to a `string` whose bytes can change while it lives, which is why it is the
+ * raw tier's and why the library's spelling of it, `sysl.text.str_view`, says what its caller owes:
+ * the bytes are UTF-8, and nothing writes them while the string is alive. What the compiler does
+ * still guarantee is the storage — a view of a frame's array moves that array to the heap, since a
+ * `string` outlives every frame (`Escape`).
+ */
+case class TStrView(arg: TExpr) extends TExpr { def ty: Type = Type.Str }
+
 /** A `[]T` standing where a `[]const T` was asked for — the one direction between the two views
  * that is safe, since giving up the ability to write cannot be observed by anything holding the
  * view it came from.

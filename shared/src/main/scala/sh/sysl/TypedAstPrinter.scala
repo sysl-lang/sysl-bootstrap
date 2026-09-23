@@ -219,6 +219,7 @@ object TypedAstPrinter {
       case n: TSeq              => renderNode(n, indent)
       case n: TStr              => renderNode(n, indent)
       case n: TFromBytes        => renderNode(n, indent)
+      case n: TStrView          => renderNode(n, indent)
       case n: TConstView        => renderNode(n, indent)
       case n: TFormat           => renderNode(n, indent)
       case n: TRender           => renderNode(n, indent)

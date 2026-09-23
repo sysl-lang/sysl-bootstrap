@@ -70,7 +70,7 @@ object BorrowedParams {
 
     case _: TBinary | _: TUnary | _: TIntOp | _: TLogical | _: TCompare | _: TSeq => true
 
-    case _: TField | _: TIndex | _: TLen | _: TBytes | _: TConstView | _: TSlice => true
+    case _: TField | _: TIndex | _: TLen | _: TBytes | _: TConstView | _: TSlice | _: TStrView => true
 
     case _: TIf | _: TMatch | _: TBlockExpr => true
 

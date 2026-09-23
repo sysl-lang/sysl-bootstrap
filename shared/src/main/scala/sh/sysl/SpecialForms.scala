@@ -2,8 +2,8 @@ package sh.sysl
 
 /** The call forms the compiler resolves by name.
  *
- * A call is normally a name looked up among the program's declarations. These nine are not: the
- * analyzer recognizes `print`, `str`, `format`, `str_cast`, `va_start`, `va_end`,
+ * A call is normally a name looked up among the program's declarations. These ten are not: the
+ * analyzer recognizes `print`, `str`, `format`, `str_cast`, `str_alias`, `va_start`, `va_end`,
  * `va_arg`, `va_copy`, and `ptr_cast` before it gets that far. Collecting them in one file is
  * deliberate — it is the whole of what the language knows that a program could not have told it, and
  * the list is meant to shrink.
@@ -36,7 +36,8 @@ package sh.sysl
 object SpecialForms {
 
   val names: Set[String] =
-    Set("print", "str", "format", "str_cast", "va_start", "va_end", "va_arg", "va_copy", "ptr_cast") ++
+    Set("print", "str", "format", "str_cast", "str_alias", "va_start", "va_end", "va_arg", "va_copy",
+      "ptr_cast") ++
       Atomics.names
 }
 
@@ -163,6 +164,34 @@ trait SpecialForms extends Closures {
         err("'str_cast' makes a string out of bytes, and this value is already a string")
       case other =>
         err(s"'str_cast' takes a []u8, but the value has type ${show(other)}")
+  }
+
+  /** `str_alias(b)` — a `[]u8` taken as a `string` without looking at it **and without copying
+   * it**: the string is the slice's three words, sharing its owner the way `s[a..b]` shares a
+   * string's.
+   *
+   * `str_cast` copies because a `[]u8` can be written afterwards; this is the form for the program
+   * that needs the string to see those writes — a buffer grown in place, whose text is read back as
+   * a `string` at every step without paying for a copy of the whole of it each time. What it gives
+   * up is therefore more than `str_cast` does: the caller also owes that nothing writes the viewed
+   * bytes while the string is alive. **A program does not write this either; it writes
+   * `sysl.text.str_view`**, which says so where a reader will look.
+   *
+   * The storage is still the compiler's business. A string outlives every frame, so a view of an
+   * array the frame owns moves that array to the heap (`Escape`), and a view with no counted owner
+   * — a `*T` region — is the programmer's problem exactly as every `*T` is.
+   */
+  protected def strAlias(args: List[Expr]): TExpr = {
+    if args.length != 1 then err("'str_alias' takes exactly one value, the bytes to view as a string")
+    val t = analyzeExpr(args.head)
+
+    Type.underlying(t.ty) match
+      case Type.Slice(Type.Byte, _) => TStrView(t)
+      case Type.Array(_, Type.Byte) => TStrView(coerce(t, Type.Slice(Type.Byte, readOnly = true)))
+      case Type.Str =>
+        err("'str_alias' makes a string out of bytes, and this value is already a string")
+      case other =>
+        err(s"'str_alias' takes a []u8, but the value has type ${show(other)}")
   }
 
   /** `format(value, "%spec")` renders one value through a printf specifier. It is the desugaring of

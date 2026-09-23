@@ -580,4 +580,58 @@ class StringRunTests extends AnyFreeSpec with RunSupport {
       run(src) shouldBe "1960000\n"
     }
   }
+
+  "a string viewed in place over bytes" - {
+    // Optimized, since what could go wrong is the optimizer taking a `string`'s bytes for ones
+    // nothing writes and folding the second read into the first.
+    "sees a write made through the slice after it, optimized" in {
+      val src =
+        """import sysl.text.str_view
+          |var store: []u8 = [0; 1048576]
+          |store[0] = 104
+          |store[1] = 105
+          |val s = str_view(store[0..<2])
+          |print(s)
+          |store[1] = 97
+          |print(s, s.len)
+          |""".stripMargin
+
+      run(src, optimize = "2") shouldBe "hi\nha 2\n"
+    }
+
+    // A string outlives every frame, so a view of an array the frame owns moves the array to the
+    // heap rather than leaving the string pointing at a stack that has been popped.
+    "of an array the frame owns moves the array to the heap" in {
+      val src =
+        """import sysl.text.str_view
+          |made() -> string
+          |    var a: [2]u8 = [111, 107]
+          |    str_view(a[0..<2])
+          |deeper(n: int) -> int
+          |    var pad: [64]u8 = [0; 64]
+          |    if n == 0 then int(pad[0]) else deeper(n - 1) + int(pad[1])
+          |val s = made()
+          |print(deeper(8), s)
+          |""".stripMargin
+
+      run(src) shouldBe "0 ok\n"
+    }
+
+    "of a slice a function was handed moves its caller's array too" in {
+      val src =
+        """import sysl.text.str_view
+          |keep(b: []u8) -> string = str_view(b)
+          |made() -> string
+          |    var a: [2]u8 = [111, 107]
+          |    keep(a[0..<2])
+          |deeper(n: int) -> int
+          |    var pad: [64]u8 = [0; 64]
+          |    if n == 0 then int(pad[0]) else deeper(n - 1) + int(pad[1])
+          |val s = made()
+          |print(deeper(8), s)
+          |""".stripMargin
+
+      run(src) shouldBe "0 ok\n"
+    }
+  }
 }

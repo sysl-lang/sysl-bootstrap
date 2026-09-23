@@ -73,6 +73,25 @@ end from_utf8
  */
 from_utf8_unchecked(b: []const u8) -> string = str_cast(b)
 
+/** The bytes of a writable slice as a `string` **without copying them**: the string is a view that
+ * shares the slice's storage, exactly as `s[a..b]` shares a string's, so a later write through the
+ * slice is seen by the string.
+ *
+ * **It is here for a buffer that grows in place and is read as text at every step** -- an
+ * appending builder whose contents are handed out as a `string` each time, where
+ * `from_utf8_unchecked` would copy the whole of the text on every call. Go's `unsafe.String` is the
+ * same operation.
+ *
+ * **The caller owes two guarantees, not one.** The bytes are valid UTF-8, as for
+ * `from_utf8_unchecked`; and **nothing writes the bytes the string covers while the string is
+ * alive**, since a `string` is taken everywhere to be immutable and a change underneath one breaks
+ * whatever compared, hashed or measured it. Writing *past* the end of the view is fine: the string's
+ * length is the slice's, fixed where it is made. What the compiler still guarantees is the storage.
+ * The string holds a share of the slice's owner, so the bytes live as long as the string does, and a
+ * view of an array the frame owns moves that array to the heap.
+ */
+str_view(b: []u8) -> string = str_alias(b)
+
 /** What one step of the walk found, and how far it reaches.
  *
  * The two failures are separated for the reason `Utf8Error` separates them -- input that merely

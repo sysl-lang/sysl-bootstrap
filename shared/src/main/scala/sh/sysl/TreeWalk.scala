@@ -146,6 +146,7 @@ object TreeWalk {
     // The string it yields owns a copy, so nothing of the argument's storage survives in it — the
     // walk is here for the argument's own sake.
     case TFromBytes(a)              => List(a)
+    case TStrView(a)                => List(a)
     case TConstView(a)              => List(a)
     case TFormat(a, _)              => List(a)
     // A render's result is a fresh string that owns its own bytes, so it views nothing; what

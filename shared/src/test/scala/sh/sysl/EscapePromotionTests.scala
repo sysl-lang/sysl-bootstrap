@@ -381,6 +381,21 @@ class EscapePromotionTests extends AnyFreeSpec with RunSupport with CodegenSuppo
       notes.head should startWith("t.sysl:3:8")
     }
 
+    // A string outlives every frame, so bytes made into one in place have left the frame where
+    // they became one — even though the string itself is never returned or stored anywhere.
+    "a view made into a string in place moves the array, and says why" in {
+      val notes = explain("""first() -> usize
+                            |    var buf: [8]u8
+                            |    val s = str_alias(buf[0..<3])
+                            |    s.len
+                            |end first
+                            |print(first())
+                            |""".stripMargin)
+
+      notes should have length 1
+      notes.head should include("'buf' is promoted to the heap, because this view of it is made into a string")
+    }
+
     "one line per array, in source order" in {
       val notes = explain("""first() -> []u8
                             |    var buf: [8]u8

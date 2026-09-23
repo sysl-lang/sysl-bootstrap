@@ -424,6 +424,11 @@ trait ExprEmitter extends ArithEmitter {
       val r   = freshReg(); emit(Inst.Call(Some(r), Type.Str.lty, Val.Global(fn), List(Arg(LType.Ptr, p), Arg(wordLty, n))))
       ownTemp(r, Type.Str)
 
+    // The raw tier's other direction: the same three words taken as a string, sharing the slice's
+    // owner. Nothing to emit, exactly as for `s.bytes` — a string that is kept takes its own share
+    // of that owner where it is stored, as any view does.
+    case TStrView(arg) => genExpr(arg)
+
     // Rendering into a buffer: a zeroed stack slot becomes the sink, the value writes itself into
     // it, and what landed there is copied into a string the statement owns. The slot is re-zeroed
     // on every arrival rather than once, since an alloca is hoisted to the entry block and a render
