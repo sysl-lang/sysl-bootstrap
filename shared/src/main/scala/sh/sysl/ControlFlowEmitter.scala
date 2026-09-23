@@ -259,8 +259,8 @@ trait ControlFlowEmitter extends PlaceEmitter {
 
   /** One `switch` on the discriminant, and one block per arm. The default edge carries what the
    * chain's fallthrough carried: the catch-all arm where the match has one, and otherwise the same
-   * `unreachable` an exhaustive value match ended in, or the merge for a scalar statement match
-   * that is allowed to simply proceed.
+   * `unreachable` an exhaustive value match ended in — for a statement match too, wherever the
+   * table names every variant (`everyVariant`).
    */
   private def genTagSwitch(d: TagDispatch, sv: Val, ty: Type, slot: Val, endL: String): Unit = {
     val tagVal =
@@ -270,7 +270,7 @@ trait ControlFlowEmitter extends PlaceEmitter {
     val armLs = d.arms.map(_ => freshLabel("match.arm"))
     val noneL =
       if d.catchAll.isDefined then freshLabel("match.arm")
-      else if Type.noValue(ty) then endL
+      else if Type.noValue(ty) && !everyVariant(d) then endL
       else freshLabel("match.none")
 
     val table = d.arms.zip(armLs).flatMap { case ((_, tags), l) => tags.map(t => (BigInt(t), l)) }
@@ -285,9 +285,27 @@ trait ControlFlowEmitter extends PlaceEmitter {
         emitLabel(noneL)
         genArmBody(arm, sv, ty, slot, endL)
       case None =>
-        if !Type.noValue(ty) then
+        if noneL != endL then
           emitLabel(noneL)
           emitTerm(Inst.Unreachable)
+  }
+
+  /** Whether the switch has a case for every variant of its enum, so that its default edge can only
+   * be taken by a value holding no variant at all.
+   *
+   * **That is what makes the default `unreachable` for a statement match too, and not only for one
+   * that yields a value.** A match over an enum is held to exhaustiveness wherever it stands
+   * (`PatternAnalysis`), because falling off the end of one has no defined result even for effect —
+   * so a statement match with no catch-all names every variant, and its default is exactly as
+   * impossible as a value match's, which has always ended in `unreachable`. A branch to the merge
+   * instead tells the optimizer the default is a real edge, and it keeps the jump table's range
+   * check — a compare and a conditional branch in front of every dispatch — for a case no enum
+   * value can reach. The coverage is read off the table here rather than trusted from the analyzer,
+   * so a switch that somehow lacks a variant keeps its fall-through.
+   */
+  private def everyVariant(d: TagDispatch): Boolean = {
+    val covered = d.arms.flatMap(_._2).toSet
+    d.en.variants.nonEmpty && d.en.variants.forall(v => covered(v.tag))
   }
 
   /** An arm's bindings and body, in the block the branch to it has already opened. Only a single
