@@ -133,7 +133,12 @@ object CallOwnership {
     case TCast(o, _)     => held(o, exposed)
     case TErase(o, _, _) => held(o, exposed)
 
-    case _: TIntLit | _: TFloatLit | _: TBoolLit | _: TUnitLit | _: TNullLit | _: TZero => true
+    // A literal owns nothing and outlives everything. A string's is the case worth naming: it is a
+    // view whose owner word is a null constant (`StringEmitter.stringConst`), so there is no count
+    // to lose and taking one would be an `arc.retain_maybe(null)` that does nothing — while pulling
+    // the whole ARC runtime into a program whose only reference is the text inside a `print`.
+    case _: TIntLit | _: TFloatLit | _: TBoolLit | _: TUnitLit | _: TNullLit | _: TZero |
+         _: TStrLit | _: TCStrLit => true
 
     case _ => false
 }
