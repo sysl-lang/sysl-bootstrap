@@ -7,6 +7,34 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.128 — 2026-09-23
+
+### Build optimization, exposed from LLVM
+
+- `-O3` is now an accepted optimization level, alongside `-O0`/`-O1`/`-O2`/`-Os`/`-Oz`.
+- Link-time optimization: `--lto thin` or `--lto full` on the command line, or `lto = "thin"` /
+  `lto = "full"` in `package.hocon`. LTO inlines across the boundary between sysl's own generated
+  code and the C reached over the FFI — a package's vendored C, the standard library's shims, and
+  anything named by `@link` — which is the seam `-O` alone cannot see across.
+- Profile-guided builds: `--profile-generate <dir>` builds an instrumented binary; run it over a
+  training set, merge the counters with `llvm-profdata` (found via
+  `clang -print-prog-name=llvm-profdata`, which matches the compiler's own LLVM rather than
+  whatever is on `PATH`), then rebuild with `--profile-use <file>` against the merged profile.
+- The standard module's prebuilt archive is now compiled at the build's own optimization level and
+  inside LTO, and the on-disk cache is keyed by all three levers together (for example
+  `-O3-lto-thin`) — a build asking for a different level or LTO mode gets its own cached archive
+  rather than linking one built differently from everything beside it.
+- `build-lib --lto` no longer writes a library archive that cannot be read back: the metadata
+  member is kept out of LTO and profile-guided compilation.
+
+Measured on the slate interpreter (alternating best-of-9 against 0.0.127's build): thin LTO alone
+is **−9.7%**, and thin LTO with a trained profile is **−22.2%**.
+
+### Fixed
+
+- A malformed scaladoc reference in `Type.showBare`'s doc comment, which produced a genuine
+  (sysl-owned) warning on every platform's `doc` task.
+
 ## 0.0.127 — 2026-09-23
 
 Lower a match over an enum's tag to one switch, not a chain of comparisons
