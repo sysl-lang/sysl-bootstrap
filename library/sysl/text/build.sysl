@@ -2,6 +2,7 @@ module sysl.text
 
 import sysl.buf.{Buf, buf, buf_with_capacity}
 import sysl.slices.copy
+import sysl.{digits_long, digits_ulong}
 import sysl.sys.sysl_snprintf
 
 /** Text gathered a piece at a time, handed back as one string.
@@ -39,7 +40,7 @@ struct StrBuilder
      * `push(str(n))`, which builds a whole reference-counted `string` -- a heap object with a
      * refcount and a deallocation hook -- and then copies its bytes out and drops it, for a value
      * whose text is never more than a couple of dozen bytes and is wanted only inside this buffer.
-     * A stack array and one `snprintf` is the same rendering with none of that, and it is what
+     * A stack array and `digits_long` is the same rendering with none of that, and it is what
      * `sysl.render`'s `display_int` already does for the sink path.
      *
      * **They take `long` and `ulong` rather than each width**, which is the same bargain the
@@ -53,13 +54,13 @@ struct StrBuilder
      */
     push_int(*self, n: long)
         var tmp: [24]u8
-        var k = sysl_snprintf(&tmp[0], 24, c"%lld", n)
-        self.bytes.extend(tmp[0..<usize(k)])
+        val at = digits_long(n, tmp[0..<24])
+        self.bytes.extend(tmp[at..<24])
 
     push_uint(*self, n: ulong)
         var tmp: [24]u8
-        var k = sysl_snprintf(&tmp[0], 24, c"%llu", n)
-        self.bytes.extend(tmp[0..<usize(k)])
+        val at = digits_ulong(n, tmp[0..<24])
+        self.bytes.extend(tmp[at..<24])
 
     /** `%g`, so that a float gathered into a builder reads the same as the one `str` and `print`
      * would have produced. Agreeing with them matters more here than picking a better rendering:

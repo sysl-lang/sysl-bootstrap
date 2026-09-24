@@ -608,8 +608,8 @@ class DisplayRunTests extends AnyFreeSpec with RunSupport with CodegenSupport {
 
   /** Integers past 64 bits, which reach renderers of their own.
    *
-   * `snprintf` is what the 64-bit pair goes through and C has no conversion wider than `%lld`, so
-   * these work the digits out against a frame-local buffer instead — which is also what keeps them
+   * The 64-bit pair has its own digit loop in `sysl.render`, and C never had a conversion wider than
+   * `%lld`, so these work the digits out against a frame-local buffer too — which is also what keeps them
    * inside `Display`'s allocation-free promise, pinned from the other side in `CapabilityClauseTests`.
    */
   "an integer wider than 64 bits" - {

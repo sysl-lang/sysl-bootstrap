@@ -906,3 +906,117 @@ horspool_agrees_with_a_naive_scan()
     assert(slow_cases > 100, "and the scan below the threshold was never reached either")
     assert(hits > 100, "the needle was never found, so only the absent case was compared")
 end horspool_agrees_with_a_naive_scan
+
+// -- the 64-bit integer renderings ----------------------------------------------------------------
+//
+// `push_int`, `push_uint`, `display_int` and `display_uint` render with a digit loop of their own
+// (`digits_long`, `digits_ulong`) rather than through `snprintf`, and they promise exactly what
+// `%lld` and `%llu` printed: no padding, and a `-` and nothing else for a sign. The cases are the
+// boundaries a digit loop gets wrong -- zero, each change in digit count, the pair loop's odd tail,
+// and the most negative value, whose magnitude a `long` does not hold.
+
+private pushed(n: long) -> string
+    var b = str_builder()
+    b.push_int(n)
+    b.finish()
+
+private pushed_u(n: ulong) -> string
+    var b = str_builder()
+    b.push_uint(n)
+    b.finish()
+
+private displayed(n: long, fmt: FormatSpec) -> string
+    var sink = byte_sink()
+    display_int(n, &sink, fmt)
+    from_utf8(sink.text()).unwrap()
+
+private displayed_u(n: ulong) -> string
+    var sink = byte_sink()
+    display_uint(n, &sink, FormatSpec(0, -1, false))
+    from_utf8(sink.text()).unwrap()
+
+// Both paths, and the blanket `Display` beside them, which is a separate digit loop and so a check
+// that could disagree.
+private renders_as(n: long, want: string)
+    assert_eq(pushed(n), want)
+    assert_eq(displayed(n, FormatSpec(0, -1, false)), want)
+    assert_eq(s"${n}", want)
+
+@test("a long renders at the small boundaries, in both signs")
+long_renders_small()
+    renders_as(0, "0")
+    renders_as(1, "1")
+    renders_as(-1, "-1")
+    renders_as(9, "9")
+    renders_as(-9, "-9")
+    renders_as(10, "10")
+    renders_as(-10, "-10")
+    renders_as(99, "99")
+    renders_as(-99, "-99")
+    renders_as(100, "100")
+    renders_as(-100, "-100")
+    renders_as(101, "101")
+    renders_as(1005, "1005")
+    renders_as(-10203, "-10203")
+end long_renders_small
+
+// Every digit count from one to nineteen, on each side of each boundary: `10^k - 1` is all nines
+// and `10^k` is a one and zeros, so a loop that drops or doubles a digit at a length shows here.
+@test("a long renders on both sides of every power of ten")
+long_renders_every_digit_count()
+    var p: long = 1
+    var nines = ""
+    var ones = "1"
+
+    for _ in 0..<18
+        val below = p * 10 - 1
+        nines = nines + "9"
+        ones = ones + "0"
+        renders_as(below, nines)
+        renders_as(-below, "-" + nines)
+        renders_as(below + 1, ones)
+        renders_as(-(below + 1), "-" + ones)
+        p *= 10
+
+    renders_as(9223372036854775807, "9223372036854775807")
+    renders_as(-9223372036854775807 - 1, "-9223372036854775808")
+    renders_as(-9223372036854775807, "-9223372036854775807")
+end long_renders_every_digit_count
+
+@test("a ulong renders across its whole range, past where a long stops")
+ulong_renders()
+    assert_eq(pushed_u(0), "0")
+    assert_eq(pushed_u(7), "7")
+    assert_eq(pushed_u(10), "10")
+    assert_eq(pushed_u(9223372036854775808u64), "9223372036854775808")
+    assert_eq(pushed_u(9999999999999999999u64), "9999999999999999999")
+    assert_eq(pushed_u(10000000000000000000u64), "10000000000000000000")
+    assert_eq(pushed_u(18446744073709551615u64), "18446744073709551615")
+    assert_eq(displayed_u(18446744073709551615u64), "18446744073709551615")
+    assert_eq(displayed_u(0), "0")
+
+// The specifier is `display_digits`'s job and untouched by the digit loop; asserted so that the
+// sign the loop now writes is still the one `display_digits` finds and keeps ahead of the zeros.
+@test("a formatted long still pads and zero-fills around its sign")
+long_display_honours_the_spec()
+    assert_eq(displayed(-42, FormatSpec(6, -1, false)), "   -42")
+    assert_eq(displayed(-42, FormatSpec(0, 5, false)), "-00042")
+    assert_eq(displayed(42, FormatSpec(5, -1, true)), "42   ")
+
+// Ten thousand values of every magnitude, each rendered and read back: what comes out must parse to
+// what went in, and must agree byte for byte with the blanket `Display`'s independent loop.
+@test("random longs and ulongs render and read back to themselves")
+integers_round_trip()
+    var g = rng(20260923, 7)
+
+    for i in 0..<10000
+        val bits = g.next_u64() >> usize(g.below(64))
+        val u = ulong(bits)
+        val n = if g.boolean() then long(bits >> 1) else -long(bits >> 1) - long(i & 1)
+        val text = pushed(n)
+
+        assert_eq(parse_long(text).unwrap(), n)
+        assert_eq(text, s"${n}")
+        assert_eq(parse_ulong(pushed_u(u)).unwrap(), u)
+        assert_eq(pushed_u(u), s"${u}")
+end integers_round_trip
