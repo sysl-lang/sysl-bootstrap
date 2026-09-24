@@ -7,6 +7,25 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.130 — 2026-09-24
+
+### Library
+
+- 64-bit integer rendering no longer calls `snprintf`. `display_int`/`display_uint`,
+  `printi`/`printu`, and `StrBuilder.push_int`/`push_uint` render through a new digit loop
+  (`digits_long`/`digits_ulong`), about 2.8x faster with byte-identical output. Reals are unaffected
+  and still go through `snprintf`.
+
+### Contracts
+
+- A **generic** struct may declare an `invariant`. It is checked at construction, at every field
+  write, at a whole-struct assignment, and now at the zero value — with its clauses made real at each
+  instantiation's own type arguments. A pure clause is assumed (`llvm.assume`) at the entry of every
+  member. A write through a view's element is no longer re-checked against a clause over the view's
+  length.
+- `Buf` declares `invariant count <= elems.len`, which folds `at`'s two checks into one compare.
+  Measured on slate: geomean **-5.5%**.
+
 ## 0.0.129 — 2026-09-23
 
 ### Codegen
