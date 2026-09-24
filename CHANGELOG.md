@@ -7,6 +7,12 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.134 — 2026-09-24
+
+`link = "static"` (and `--link static`) now means *every library that has a static archive*: a library with no archive — macOS's `/usr/lib` sqlite3, say — is linked dynamically, exactly as a dynamic build links it, and `--verbose` traces which libraries went which way. A library that a `link = [...]` list names explicitly and that has no archive is still refused, as before.
+
+A name in a `link` list that matches no requirement of this build is checked against the build resolved with every feature on. A library that only a feature this build leaves off requires is skipped with a trace, so one manifest serves every feature combination; a misspelt name is still refused, and the message now lists every library the build could link, with its features on or off.
+
 ## 0.0.133 — 2026-09-24
 
 The shortest reading of a `real` (`display_real_shortest`, what a serializer and `str` use for round-trip output) is now Ryu — the digits are found directly from the value's bits rather than by asking `snprintf` for fifteen digits, then seventeen, then re-searching a subnormal — about 25x faster, and off `snprintf` entirely. The digits themselves are unchanged: still the fewest that read back as the same value, by JavaScript's and Python's rule (closest among the shortest, ties to even).
