@@ -872,6 +872,16 @@ enum Attr(val word: String) {
   case NoInline extends Attr("noinline")
   case Inline   extends Attr("inline")
   case Cold     extends Attr("cold")
+
+  /** `@threaded` — the `loop` under it dispatches from the end of every arm of its closing `match`
+    * rather than from its head (`reference/attributes.md § @threaded`).
+    *
+    * It is the one attribute that marks a **statement**, and it never reaches a declaration: the
+    * parser reads it, reads the `loop` it stands above, and sets `Loop.threaded`. It is a case here
+    * so that it is read, repeated and refused alongside every other annotation, which is where a
+    * reader looks for the list.
+    */
+  case Threaded extends Attr("threaded")
 }
 
 /** `extern name(params) -> ret` — a function this program does not define but may call, resolved

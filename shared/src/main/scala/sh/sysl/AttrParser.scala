@@ -17,7 +17,8 @@ trait AttrParser extends ExprParser {
   protected lazy val attribute: PackratParser[Attr] =
     testAttr ^^ Attr.Test.apply | hookAttr | tailrecAttr | pureAttr | ghostAttr | readsAttr | writesAttr |
       crossingAttr | needsAttr | packedAttr | alignAttr | threadLocalAttr | exportAttr |
-      sectionAttr | noinlineAttr | inlineAttr | coldAttr | borrowsHere | unknownAttr | hashAttr
+      sectionAttr | noinlineAttr | inlineAttr | coldAttr | threadedAttr | borrowsHere | unknownAttr |
+      hashAttr
 
   /** What a member block reads where a member was wanted, for the three blocks that do not keep the
    * annotations: a trait's body, an `impl`'s, and a setter's line.
@@ -151,6 +152,13 @@ trait AttrParser extends ExprParser {
    */
   protected lazy val threadLocalAttr: PackratParser[Attr] =
     op("@") ~> attrWord("thread_local") ^^ (_ => Attr.ThreadLocal)
+
+  /** `@threaded` — the `loop` under it dispatches from the end of each arm of its last `match`
+   * (`reference/attributes.md § @threaded`). It takes no argument: what it asks for is a shape of
+   * the emitted code, and there is no degree of it to choose.
+   */
+  protected lazy val threadedAttr: PackratParser[Attr] =
+    op("@") ~> attrWord("threaded") ^^ (_ => Attr.Threaded)
 
   /** `@export` and `@export("mylib_parse")` — the definition is C-callable, under its own name or
    * under the symbol named (`reference/ffi.md § @export`).
@@ -450,7 +458,8 @@ trait AttrParser extends ExprParser {
         "'@packed' and " +
         "'@align(n)' mark a struct's layout, '@export(\"...\")' names a struct in a generated C " +
         "header, '@section(\"...\")' marks either a binding or a " +
-        "function, and '@needs(...)' marks a function or an 'extern'. '@no_<capability>', " +
+        "function, '@needs(...)' marks a function or an 'extern', and '@threaded' marks a " +
+        "'loop'. '@no_<capability>', " +
         "'@requires(...)', '@link(\"...\")' and '@tests' belong in the file's header"))
 
   /** `#test` where `@test` was meant — the sigil a reader arriving from Rust or C reaches for first.
@@ -538,6 +547,9 @@ trait AttrParser extends ExprParser {
       // with its own sentence before any declaration is read. Listed for the same reason as the two
       // lines above it.
       case (d, Attr.ThreadLocal) => d
+      // Nor does `@threaded`, which marks a `loop` — the grammar reads the loop under it before any
+      // declaration is looked for. Listed for the same reason again.
+      case (d, Attr.Threaded) => d
     }
 
   private lazy val testArgs: Parser[TestAttr] =

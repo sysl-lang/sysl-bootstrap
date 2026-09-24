@@ -97,7 +97,7 @@ object BorrowedParams {
     case TMatch(_, arms, _)               => arms.map(a => stmts(a.body))
     case TWhile(_, bs, el, _)           => body(bs) :: el.toList.map(stmts)
     case TDoWhile(bs, _, el, _)         => body(bs) :: el.toList.map(stmts)
-    case TLoop(bs, _)                   => List(body(bs))
+    case TLoop(bs, _, _)                => List(body(bs))
     case TFor(_, _, _, _, _, bs, el, _) => body(bs) :: el.toList.map(stmts)
     case TBlockExpr(b)                    => List(stmts(b))
     case _                                => Nil

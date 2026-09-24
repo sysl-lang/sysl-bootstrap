@@ -157,9 +157,10 @@ trait ControlFlowExprAnalysis extends ExprSupport {
       val telse        = elseOpt.map(analyzeValueBlock(_, expected, discarded))
       checkedLoop(ctx, TDoWhile(tbody, tcond, telse, loopResultType(ctx, telse)))
 
-    case Loop(label, body) =>
+    case Loop(label, body, threaded) =>
       val (tbody, ctx) = analyzeLoopBody(expected, label)(analyzeStmts(body))
-      checkedLoop(ctx, TLoop(tbody, endlessResultType(ctx)))
+      if threaded then checkThreaded(tbody)
+      checkedLoop(ctx, TLoop(tbody, endlessResultType(ctx), threaded))
 
     // The init's binding belongs to the loop and to nothing outside it, so the scope opens before
     // the condition — which reads that binding — and closes after the `else`, which may too.
@@ -649,5 +650,46 @@ trait ControlFlowExprAnalysis extends ExprSupport {
       val want = own.flatten.flatMap(t => settles(t.body)).headOption
 
       arms.zip(own).map((a, t) => t.getOrElse(analyzeArm(scrutTy, a, want, discarded)))
+  }
+
+  /** Holds a `@threaded` loop's body to the shape the emitter lays down again at the foot of every
+   * arm (`ControlFlowEmitter.genThreadedBody`, `reference/attributes.md § @threaded`).
+   *
+   * Each refusal is a reason there would be nothing to replicate, or a thing that cannot be emitted
+   * twice. Nothing is quietly downgraded to an ordinary loop: a program that asked for a dispatch
+   * per arm and silently got one per loop has lost the only thing it wrote the attribute for.
+   */
+  protected def checkThreaded(body: List[TStmt]): Unit = {
+    val m = body.lastOption match
+      case Some(TExprStmt(m: TMatch)) => m
+      case _ =>
+        err("'@threaded' lays the loop's dispatch down again at the end of every arm of the 'match' " +
+          "that closes its body, and this body does not end in a 'match' — put the dispatch last, " +
+          "with whatever reads the next instruction above it")
+
+    TagDispatch.of(m.arms) match
+      case Left(why) =>
+        err("'@threaded' needs the closing 'match' to be one jump on which variant the value holds, " +
+          s"so there is a jump to lay down again — and here $why")
+      case Right(_) =>
+
+    if Type.containsCounted(m.scrutinee.ty) then
+      err(s"'@threaded' copies the value it dispatches on at every jump, and ${show(m.scrutinee.ty)} " +
+        "holds a counted reference, which a copy would have to take a count of on every " +
+        "instruction — dispatch on a value that holds none, such as the tag or an index")
+
+    // The head is emitted once more at the foot of each arm, so nothing in it may name something a
+    // second emission would name again.
+    TreeWalk.forEachStmt(body.init) {
+      case TRefDecl(name, _, _) =>
+        err(s"'@threaded' lays the loop's head down again at the end of every arm, and 'ref $name' in " +
+          "it is a name for one place fixed where it is written — declare it inside the arms that " +
+          "use it, or take the place's value with a 'val'")
+      case TVarDecl(name, _: Type.Array, _, _) =>
+        err(s"'@threaded' lays the loop's head down again at the end of every arm, and the array " +
+          s"'$name' in it is storage that may be given a buffer of its own where it is declared, " +
+          "which one declaration cannot have at every arm — declare it above the loop, or inside " +
+          "the arms that use it")
+    }
   }
 }

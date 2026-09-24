@@ -199,9 +199,9 @@ trait ControlFlowEmitter extends PlaceEmitter {
     val endL = freshLabel("match.end")
     val slot = if Type.noValue(ty) then Val.Nothing else emitAlloca(freshReg(), ty.lty)
 
-    tagSwitch(arms) match
-      case Some(dispatch) => genTagSwitch(dispatch, sv, ty, slot, endL)
-      case None           => genArmChain(arms, sv, ty, slot, endL)
+    TagDispatch.of(arms) match
+      case Right(dispatch) => genTagSwitch(dispatch, sv, ty, slot, endL)
+      case Left(_)         => genArmChain(arms, sv, ty, slot, endL)
 
     emitLabel(endL)
     endsNowhere(ty)
@@ -209,58 +209,10 @@ trait ControlFlowEmitter extends PlaceEmitter {
     else { val r = freshReg(); emit(Inst.Load(r, ty.lty, slot, Access.Plain)); ownTemp(r, ty) }
   }
 
-  /** What a `match` is when the scrutinee's discriminant alone decides the arm: the enum it is read
-   * off, each arm with the tags that select it, and a trailing catch-all where there is one.
-   */
-  private case class TagDispatch(en: Type.Enum, arms: List[(TArm, List[Int])], catchAll: Option[TArm])
-
-  /** Recognises the `match` that lowers to **one** `switch`, and answers `None` for every other
-   * shape — which then goes through `genArmChain` exactly as it always did.
-   *
-   * The chain tests one arm at a time and falls through to the next, so the arm an input selects is
-   * decided by a run of comparisons whose length is the arm's position in the source. Nothing in
-   * the language says that, and for a match over a tag it is not even true — the tag names the arm
-   * outright. It is the optimizer that has to notice, by folding a chain of `icmp`/`br` back into a
-   * `switch`, and a fold has a budget: past a few dozen arms the tail of the chain is left as
-   * comparisons, so an arm written late enough pays an extra unpredictable branch on every
-   * execution. An interpreter's dispatch loop is where that is felt, because there is no cold arm
-   * to put last. Emitting the `switch` outright says what the match means in one instruction,
-   * leaves the table to the back end, and costs the same whatever order the arms are written in.
-   *
-   * **The form is recognised rather than assumed, and the conditions are what make the tag
-   * sufficient.** Every arm must test a variant's tag and nothing else, so that no arm can fail
-   * *after* the switch has branched to it — a refutable payload pattern or a guard can, and those
-   * need the fall-through the chain provides. Two arms claiming one tag would likewise need source
-   * order to break the tie. Any of the three falls back to the chain, which handles them all.
-   */
-  private def tagSwitch(arms: List[TArm]): Option[TagDispatch] = {
-    // `n @ V(x)` decides on the same tag `V(x)` does; the outer name is established by
-    // `patternBind` off the whole value, which the arm's block does after the branch.
-    def variantOf(p: TPattern): Option[TVariantPattern] = p match
-      case v: TVariantPattern if !v.args.exists(refutable) => Some(v)
-      case a: TAtPattern                                   => variantOf(a.inner)
-      case _                                               => None
-
-    if arms.isEmpty || arms.exists(_.guard.isDefined) then None
-    else
-      val catchAll = arms.lastOption.filter(a => a.patterns.lengthIs == 1 && !refutable(a.patterns.head))
-      val tagged   = if catchAll.isDefined then arms.init else arms
-      val found    = tagged.map(_.patterns.map(variantOf))
-
-      if tagged.isEmpty || found.exists(_.exists(_.isEmpty)) then None
-      else
-        val vs   = found.map(_.map(_.get))
-        val ens  = vs.flatten.map(_.enumTy).distinct
-        val tags = vs.flatten.map(_.variant.tag)
-
-        if ens.lengthIs != 1 || tags.distinct.lengthIs != tags.length then None
-        else Some(TagDispatch(ens.head, tagged.zip(vs.map(_.map(_.variant.tag))), catchAll))
-  }
-
   /** One `switch` on the discriminant, and one block per arm. The default edge carries what the
    * chain's fallthrough carried: the catch-all arm where the match has one, and otherwise the same
    * `unreachable` an exhaustive value match ended in — for a statement match too, wherever the
-   * table names every variant (`everyVariant`).
+   * table names every variant (`TagDispatch.everyVariant`).
    */
   private def genTagSwitch(d: TagDispatch, sv: Val, ty: Type, slot: Val, endL: String): Unit = {
     val tagVal =
@@ -270,7 +222,7 @@ trait ControlFlowEmitter extends PlaceEmitter {
     val armLs = d.arms.map(_ => freshLabel("match.arm"))
     val noneL =
       if d.catchAll.isDefined then freshLabel("match.arm")
-      else if Type.noValue(ty) && !everyVariant(d) then endL
+      else if Type.noValue(ty) && !d.everyVariant then endL
       else freshLabel("match.none")
 
     val table = d.arms.zip(armLs).flatMap { case ((_, tags), l) => tags.map(t => (BigInt(t), l)) }
@@ -290,22 +242,102 @@ trait ControlFlowEmitter extends PlaceEmitter {
           emitTerm(Inst.Unreachable)
   }
 
-  /** Whether the switch has a case for every variant of its enum, so that its default edge can only
-   * be taken by a value holding no variant at all.
+  /** A `@threaded` loop's body (`reference/attributes.md § @threaded`): its head, then the closing
+   * `match`'s dispatch — and then, at the end of **every arm**, the head and the dispatch again.
    *
-   * **That is what makes the default `unreachable` for a statement match too, and not only for one
-   * that yields a value.** A match over an enum is held to exhaustiveness wherever it stands
-   * (`PatternAnalysis`), because falling off the end of one has no defined result even for effect —
-   * so a statement match with no catch-all names every variant, and its default is exactly as
-   * impossible as a value match's, which has always ended in `unreachable`. A branch to the merge
-   * instead tells the optimizer the default is a real edge, and it keeps the jump table's range
-   * check — a compare and a conditional branch in front of every dispatch — for a case no enum
-   * value can reach. The coverage is read off the table here rather than trusted from the analyzer,
-   * so a switch that somehow lacks a variant keeps its fall-through.
+   * **What it buys is one indirect branch per arm where there was one per loop.** A match over a tag
+   * is one `switch`, and in a loop every arm branches back to the head and takes that same jump —
+   * so the branch predictor has one slot to learn every pair of consecutive arms in, and an
+   * interpreter's instruction stream is exactly the input that defeats it. Laid down again at the
+   * foot of each arm, the jump the predictor sees is the one *this* arm takes next, which is the
+   * history computed goto gives a C interpreter. The IR says it outright, a `switch` per arm, rather
+   * than hoping the back end's tail duplication reaches past a head of more than a few instructions.
+   *
+   * **Every copy is the same code, laid down against the stacks the body's top had.** The head's
+   * locals are the function's one set of named slots (`emitAlloca` hoists by name), so a copy
+   * writes the very slot the first did, and an arm reads whichever copy ran last — which is the one
+   * that dispatched to it. The ownership and `defer` frames are swapped back to the loop's for the
+   * copy and restored after, so a `break` in the head unwinds from the same depth wherever it was
+   * copied to, and what the body frame recorded is released at every arm's foot exactly as a
+   * `continue` releases it.
+   *
+   * **The scrutinee crosses from the dispatch to the arm through a slot**, since an arm now has as
+   * many dispatches in front of it as there are arms; the optimizer's `mem2reg` puts back the `phi`.
+   * The analyzer holds it to a type that carries no count (`checkThreaded`), which is what lets its
+   * temporaries be let go before the jump rather than at the foot of an arm that never reaches the
+   * statement's end.
+   *
+   * An arm that leaves by `continue` goes back to the head at the top and dispatches from there,
+   * which is correct and simply not threaded; one that leaves by `break` or `return` never reaches
+   * its foot.
    */
-  private def everyVariant(d: TagDispatch): Boolean = {
-    val covered = d.arms.flatMap(_._2).toSet
-    d.en.variants.nonEmpty && d.en.variants.forall(v => covered(v.tag))
+  protected def genThreadedBody(body: List[TStmt]): Unit = {
+    val (head, m) = body.lastOption match
+      case Some(TExprStmt(m: TMatch)) => (body.init, m)
+      case _ => throw IllegalStateException("a @threaded loop reached the emitter without its closing match")
+    val d = TagDispatch.of(m.arms) match
+      case Right(d) => d
+      case Left(_)  => throw IllegalStateException("a @threaded loop's match reached the emitter as a chain")
+
+    val loop   = genLoops.head
+    val atTop  = (owned, deferrals, tempStack)
+    val lty    = m.scrutinee.ty.lty
+    val svSlot = emitAlloca(freshReg(), lty)
+    val armLs  = d.arms.map(_ => freshLabel("threaded.arm"))
+    val noneL  = if d.catchAll.isDefined then freshLabel("threaded.arm") else freshLabel("threaded.none")
+    val table  = d.arms.zip(armLs).flatMap { case ((_, tags), l) => tags.map(t => (BigInt(t), l)) }
+
+    // The scrutinee's own temporaries are let go before the jump: the value itself is copied into
+    // the slot, and the analyzer has made sure it holds nothing a release could take from under it.
+    def dispatch(): Unit = {
+      pushTemps()
+      val sv = genExpr(m.scrutinee)
+      emit(Inst.Store(lty, sv, svSlot, Access.Plain))
+      popTemps()
+      val tagVal =
+        if d.en.simple then sv
+        else { val t = freshReg(); emit(Inst.Extract(t, d.en.lty, sv, List(0))); t }
+      emitTerm(Inst.Switch(d.en.tagLty, tagVal, noneL, table))
+    }
+
+    // The foot of an arm: what a `continue` would release, then the head and the dispatch again.
+    def again(): Unit =
+      if controlReaches then
+        releaseToDepth(loop.ownedDepth, loop.tempDepth)
+        val here = (owned, deferrals, tempStack)
+        owned = atTop._1; deferrals = atTop._2; tempStack = atTop._3
+        pushOwned()
+        head.foreach(genStmt)
+        dispatch()
+        owned = here._1; deferrals = here._2; tempStack = here._3
+
+    def arm(a: TArm): Unit = {
+      val sv = freshReg()
+      emit(Inst.Load(sv, lty, svSlot, Access.Plain))
+      pushOwned()
+      if a.patterns.lengthIs == 1 then patternBind(a.patterns.head, sv)
+      genBlockVoid(a.body)
+      popOwned()
+      again()
+    }
+
+    pushOwned()
+    head.foreach(genStmt)
+    dispatch()
+
+    for ((a, _), l) <- d.arms.zip(armLs) do
+      emitLabel(l)
+      arm(a)
+
+    emitLabel(noneL)
+    d.catchAll match
+      case Some(a)                => arm(a)
+      case None if d.everyVariant => emitTerm(Inst.Unreachable)
+      case None                   => again()
+
+    // Nothing arrives here — every arm ends in a dispatch — so this closes the frame for the
+    // emitter's bookkeeping and emits into a block already terminated.
+    popOwned()
   }
 
   /** An arm's bindings and body, in the block the branch to it has already opened. Only a single
@@ -577,7 +609,7 @@ trait ControlFlowEmitter extends PlaceEmitter {
    * the end label closes as unreachable.
    */
   protected def genLoop(l: TLoop): Val = {
-    val TLoop(body, ty) = l
+    val TLoop(body, ty, threaded) = l
     val bodyL = freshLabel("loop.body")
     val endL  = freshLabel("loop.end")
     val slot  = if Type.noValue(ty) then Val.Nothing else emitAlloca(freshReg(), ty.lty)
@@ -585,9 +617,11 @@ trait ControlFlowEmitter extends PlaceEmitter {
 
     emitTerm(Inst.Br(bodyL))
     emitLabel(bodyL)
-    pushOwned()
-    body.foreach(genStmt)
-    popOwned()
+    if threaded then genThreadedBody(body)
+    else
+      pushOwned()
+      body.foreach(genStmt)
+      popOwned()
     emitTerm(Inst.Br(bodyL))
 
     genLoops = genLoops.tail

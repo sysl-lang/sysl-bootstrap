@@ -62,7 +62,7 @@ object TreeWalk {
     case TMatch(_, arms, _) => arms.map(_.body) ::: children(e).flatMap(blocks)
     case TWhile(_, body, el, _)           => TBlock(body, None, Type.Unit) :: el.toList ::: children(e).flatMap(blocks)
     case TDoWhile(body, _, el, _)         => TBlock(body, None, Type.Unit) :: el.toList ::: children(e).flatMap(blocks)
-    case TLoop(body, _)                   => TBlock(body, None, Type.Unit) :: children(e).flatMap(blocks)
+    case TLoop(body, _, _)                => TBlock(body, None, Type.Unit) :: children(e).flatMap(blocks)
     // The init and the step are statements of the loop's own scope, so they are walked as part of
     // the block its body makes rather than as expressions beside it.
     case TCFor(init, _, step, body, el, _) =>

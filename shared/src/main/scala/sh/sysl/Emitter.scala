@@ -631,6 +631,12 @@ trait Emitter {
   /** Emits a plain instruction, unless the current block is already terminated. */
   protected def emit(inst: ir.Inst): Unit = if !terminated then current += inst
 
+  /** Whether control can reach the point being emitted — false once a terminator has closed the
+   * block, until a label something branches to opens the next. Asked where emitting a whole region
+   * would be wasted rather than wrong, since `emit` already drops what lands in a closed block.
+   */
+  protected def controlReaches: Boolean = !terminated
+
   /** Emits a stack slot into the function's entry block rather than where it is needed.
    * Every name is unique within a function, so hoisting is safe — and it keeps a slot inside
    * a loop from growing the stack on every iteration.
@@ -639,9 +645,21 @@ trait Emitter {
    * wins over the one the type carries. It cannot ask for less: `@align` only ever raises, so the
    * larger of the two is what satisfies both claims, and one written on the declaration is by that
    * rule already at or above the type's.
+   *
+   * **A named slot is laid down once however many times its declaration is emitted.** The one
+   * declaration emitted more than once is a `@threaded` loop's head, copied to the foot of every arm
+   * (`genThreadedBody`), and every copy is meant to write the same slot — the arms read it by name.
+   * A fresh register never repeats, so only a program name is looked for.
    */
   protected def emitAlloca(name: ir.Val, ty: ir.LType, align: Option[Int] = None): ir.Val = {
-    prologue += ir.Inst.Alloca(name, ty, align.orElse(raisedAlign(ty)))
+    val named = name match
+      case ir.Val.Reg(n) => !n.matches("t[0-9]+")
+      case _             => false
+    val laid = named && prologue.exists {
+      case ir.Inst.Alloca(n, _, _) => n == name
+      case _                       => false
+    }
+    if !laid then prologue += ir.Inst.Alloca(name, ty, align.orElse(raisedAlign(ty)))
     name
   }
 

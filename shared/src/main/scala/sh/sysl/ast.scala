@@ -316,8 +316,12 @@ case class DoWhile(label: Option[String], body: List[Stmt], cond: Expr, elseBody
  * the code after it is unreachable. There is no `else`, because `else` runs on normal completion
  * and this loop has none — the value it yields is the value its `break`s carry, and `unit` where
  * they carry none.
+ *
+ * `threaded` is `@threaded` written above it (`reference/attributes.md § @threaded`): the body ends
+ * in a `match` over an enum, and each arm of that match runs the body's head again and dispatches
+ * from where it stands, rather than every arm branching back to one shared dispatch.
  */
-case class Loop(label: Option[String], body: List[Stmt]) extends Expr
+case class Loop(label: Option[String], body: List[Stmt], threaded: Boolean = false) extends Expr
 
 /** `['label] for name in iter body [else elseBody]` — an **expression** with the same
  * `break`/`else` value rules as `while`. `iter` is a range for now (`a..b`, `a..<b`).

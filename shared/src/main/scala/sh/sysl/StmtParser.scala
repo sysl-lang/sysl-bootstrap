@@ -171,6 +171,19 @@ trait StmtParser
       duplicated(as) match
         case Some(dup) =>
           err(s"'@$dup' is written twice above one declaration, and it says nothing the once does not")
+        // `@threaded` marks a `loop`, which is a statement and not a declaration, so it is settled
+        // before any of the rules below asks which kind of declaration is coming. Whether the loop's
+        // body has the shape the attribute needs is the analyzer's question, asked of the typed tree.
+        case None if as.contains(Attr.Threaded) =>
+          if as.lengthIs > 1 then
+            err("'@threaded' marks a 'loop' and every other annotation marks a declaration, so " +
+              "nothing stands beside it — write it alone, on the line above the 'loop'")
+          else
+            loopExpr ^^ {
+              case l: Loop => ExprStmt(l.copy(threaded = true))
+              case other   => ExprStmt(other)
+            } | err("'@threaded' marks a 'loop' — the one whose body ends in a 'match' over an " +
+              "enum, which it dispatches from the end of every arm — and what follows is not a 'loop'")
         // `@test` and the four hooks each say *when* `sysl test` calls the function, and they name
         // four different moments. Two of them above one declaration is not a stricter request; it is
         // two requests, and nothing decides which is honoured.

@@ -664,8 +664,12 @@ case class TDoWhile(body: List[TStmt], cond: TExpr, elseBlock: Option[TBlock], t
 /** `loop body` — the same shape with the condition removed, so the only way out is a `break`.
  * `ty` is the type its `break`s meet at, and `never` where it has none: nothing arrives after a
  * loop that cannot end.
+ *
+ * `threaded` is `@threaded`, and the analyzer has already held the body to the shape it needs: a
+ * last statement that is a `match` dispatching on one enum's tag. The emitter reads it as licence
+ * to lay the body's head and that dispatch down again at the end of every arm.
  */
-case class TLoop(body: List[TStmt], ty: Type) extends TExpr
+case class TLoop(body: List[TStmt], ty: Type, threaded: Boolean = false) extends TExpr
 
 /** `for name in lo..hi [else …]` — the loop variable has the integer type `varTy` of its bounds;
  * `ty` is the loop expression's result type.
