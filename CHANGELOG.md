@@ -7,6 +7,12 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.133 — 2026-09-24
+
+The shortest reading of a `real` (`display_real_shortest`, what a serializer and `str` use for round-trip output) is now Ryu — the digits are found directly from the value's bits rather than by asking `snprintf` for fifteen digits, then seventeen, then re-searching a subnormal — about 25x faster, and off `snprintf` entirely. The digits themselves are unchanged: still the fewest that read back as the same value, by JavaScript's and Python's rule (closest among the shortest, ties to even).
+
+`pkg_config` libraries can now be linked statically. The root manifest takes `link = "static"`, `link = ["libname", ...]` to name specific libraries, or `link = "dynamic"` (the previous default, still the default when the key is absent); `--link static`/`--link dynamic` on `build`, `run` and `test` override the manifest for that invocation. A static archive is named by its full path rather than `-l`, so the linker pulls in exactly the library asked for rather than whatever `.dylib`/`.so` the loader resolves at runtime.
+
 ## 0.0.132 — 2026-09-24
 
 Compiler fix: an array literal with no element type asked of it now settles one from whichever element has a type, and a bare literal beside it adapts — the rule `n + 1` already follows for the two sides of an operator. `val xs = [1usize, 2, 7]` and `[1, 2usize, 7]` are both `[3]usize` (previously refused with "an array literal needs one element type, got usize and int"); a name works as well as a suffix (`[1, k, 3]` for a `usize` `k`), and nested literals settle row by row (`[[1usize, 2], [3, 4]]` is `[2][2]usize`). A bare literal is read at the settled width rather than as an `int` first, so `[1u64, 5000000000]` compiles and `[1u8, 300]` is refused at the `300` with "the literal 300 does not fit byte". Unchanged: two elements that each have a type and disagree are still refused, and an integer literal beside a real is not made a real (`[1.5, 2]` stays refused). Where the position asks for an element type, every element is read at it, as before.
