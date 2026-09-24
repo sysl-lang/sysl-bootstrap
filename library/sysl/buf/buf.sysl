@@ -61,10 +61,19 @@ struct Buf[T]
      *  - the count is raised here rather than inside the growth, so a caller appending in a loop keeps
      *    it in a register instead of reading it back out of the buffer on every turn -- and it is
      *    raised in **each arm**, beside the fact that makes the raise legal: the clause
-     *    `count <= elems.len` is re-checked at the write, and each arm's own fact (the compare that
-     *    chose it, and `grow_store`'s `ensure`) settles that check where it stands. Raised once after
-     *    the arms, the two facts meet in a merge the optimizer does not see through, and every append
-     *    keeps a compare and a trap it has no use for.
+     *    `count <= elems.len` is re-checked at the write, and on the growing arm `grow_store`'s
+     *    `ensure` settles that check where it stands.
+     *
+     * **The arm that does not grow raises the count from the value it compared, and writes it after
+     * the element.** The element store goes through the storage pointer, which the optimizer cannot
+     * tell apart from the buffer's own fields, so a `self.count` read after it is a load -- and that
+     * load lands on the count the previous append has only just stored, read as a pair with
+     * `elems.len` beside it. A load that needs one store's bytes and memory's for the rest waits for
+     * the store to retire rather than taking the value from it, and a run of appends, an interpreter's
+     * operand stack above all, then carries that wait on every one. Held in `n`, the count is never
+     * read back: the store of `n + 1` is the last thing the append does, the next append starts from
+     * it in a register, and what the clause's re-check reads fresh is `elems.len` alone, which nothing
+     * has written. That re-check is left as one compare, which costs a great deal less than the wait.
      *
      * **`@inline` raises the element type at which an append stops being a store.** Shaped as above
      * the member still costs a little more for every word of the element and a good deal more for
@@ -80,8 +89,10 @@ struct Buf[T]
             self.grow_store(v)
             self.count += 1
         else
-            self.elems[self.count] = v
-            self.count += 1
+            val n = self.count
+
+            self.elems[n] = v
+            self.count = n + 1
 
     /** Storage grown by one element's worth, with that element written into the slot the count
      * names -- the rare half of `push`, behind a name of its own.
@@ -93,8 +104,8 @@ struct Buf[T]
      * arms, and a count raised in here would be a count its caller had to read back.
      *
      * **The `ensure` is what keeps that raise free.** Raising the count re-checks the clause, and on
-     * the arm that did not grow the compare that chose it already says there is room; on this arm the
-     * promise is the only thing that can say so, repeated at the call as a fact.
+     * this arm the promise is the only thing that can say there is room, repeated at the call as a
+     * fact.
      */
     @noinline
     @cold

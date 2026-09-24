@@ -128,6 +128,88 @@ class StructInvariantAssumeTests extends AnyFreeSpec with CodegenSupport {
 
       withClue(body)(body should not include "invariant.bad")
     }
+
+    // A truncate through a pointer, which is how an interpreter pops: the entry assume still settles
+    // the re-check, because nothing is written between reading the count and lowering it.
+    "a truncate through a pointer keeps no re-check" in {
+      val out = optimizedIr(
+        """import sysl.buf.{Buf, buf}
+          |
+          |@noinline
+          |drop(b: *Buf[int])
+          |    b.truncate(b.len() - 1)
+          |
+          |var b: Buf[int] = buf()
+          |b.push(1)
+          |drop(&b)
+          |print(b.len())
+          |""".stripMargin)
+      val body = bodyOf(out, "@drop")
+
+      withClue(body)(body should not include "invariant.bad")
+    }
+  }
+
+  // An append into a buffer the optimizer cannot see the whole of — one reached through a pointer, as
+  // an interpreter's operand stack in a heap-allocated machine is. The element store may then write
+  // anywhere as far as the optimizer knows, the buffer's own fields included, so a count read after
+  // it is a load of the count the previous append has only just stored — a load that waits for that
+  // store to retire, on every append. Written `self.elems[self.count] = v; self.count += 1`, that is
+  // what every append did, and an interpreter built on `Buf` ran a fifth slower in its tightest loop.
+  "an append never reads the count back after writing the element" - {
+
+    /** The blocks of `body` that store an `int` element and then load the field at offset 24 of `b`
+     * — the count, in `Buf[int]` and in the control's struct alike.
+     */
+    def readsBack(body: String): List[String] = {
+      val count = """(%[\w.]+) = getelementptr inbounds nuw i8, ptr %b\.param, i64 24""".r
+        .findAllMatchIn(body).map(_.group(1)).toSet
+
+      body.split("\n\n").toList.filter { block =>
+        val lines = block.linesIterator.toList
+
+        lines.dropWhile(!_.trim.startsWith("store i32 ")).exists(l =>
+          count.exists(c => l.contains(s"= load i64, ptr $c,")))
+      }
+    }
+
+    "through a pointer, on the arm that does not grow" in {
+      val body = bodyOf(optimizedIr(
+        """import sysl.buf.{Buf, buf}
+          |
+          |@noinline
+          |append(b: *Buf[int], v: int)
+          |    b.push(v)
+          |    b.push(v + 1)
+          |
+          |var b: Buf[int] = buf()
+          |append(&b, 1)
+          |print(b.len())
+          |""".stripMargin), "@append")
+
+      withClue(body)(readsBack(body) shouldBe empty)
+    }
+
+    // The control: the same layout, with the count raised by a statement that reads it after the
+    // element store — which the test has to see, or its silence above means nothing.
+    "and the read-back is seen where it is written" in {
+      val body = bodyOf(optimizedIr(
+        """struct Seq
+          |    elems: []int
+          |    count: usize
+          |
+          |@noinline
+          |append(b: *Seq, v: int)
+          |    b.elems[b.count] = v
+          |    b.count += 1
+          |
+          |var s = Seq([0, 0, 0], 0usize)
+          |append(&s, 1)
+          |print(s.count)
+          |""".stripMargin), "@append")
+
+      withClue(body)(readsBack(body) should not be empty)
+    }
   }
 
   "a clause that cannot be repeated is not assumed" - {
