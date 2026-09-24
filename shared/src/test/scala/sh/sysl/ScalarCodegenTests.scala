@@ -79,10 +79,14 @@ class ScalarCodegenTests extends AnyFreeSpec with CodegenSupport {
     irMain("var f: f32 = 1.5\nprint(f)") should include regex raw"call void @${keyRe("printr")}\(double %t\d+\)"
   }
 
-  // Signedness picks the renderer, and the renderer picks the conversion it hands `snprintf`.
+  // Signedness picks the renderer and the renderer picks its digit writer; a real still hands
+  // `snprintf` a `%g`.
   "the renderer a value reaches carries the matching conversion" in {
-    ir("var b: byte = 9\nprint(b)") should include("""c"%llu\00"""")
-    ir("var n: long = 9\nprint(n)") should include("""c"%lld\00"""")
+    val unsigned = ir("var b: byte = 9\nprint(b)")
+    val signed   = ir("var n: long = 9\nprint(n)")
+
+    defineOf(unsigned, Library.key("printu")) should include(s"@${Library.key("digits_ulong")}(")
+    defineOf(signed, Library.key("printi")) should include(s"@${Library.key("digits_long")}(")
     ir("var x = 2.5\nprint(x)") should include("""c"%g\00"""")
   }
 

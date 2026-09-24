@@ -42,7 +42,7 @@ class CodegenModuleTests extends AnyFreeSpec with CodegenSupport {
 
       mainOf(out) should include(s"call void @${Library.key("printi")}(i64 %t1)")
       mainOf(out) should include("sext i32 42 to i64")
-      out should include("""c"%lld\00"""")
+      out should include(s"define i64 @${Library.key("digits_long")}(")
     }
 
     "a float is emitted as a hex double and rendered via %g" in {

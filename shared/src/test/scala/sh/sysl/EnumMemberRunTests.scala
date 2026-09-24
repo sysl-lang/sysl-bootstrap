@@ -415,11 +415,13 @@ class EnumMemberRunTests extends AnyFreeSpec with RunSupport {
           .toSet,
       )
 
-      // `printc` arrives because the desugaring reaches it for a `char`, and `encode_utf8` because
-      // `printc` reaches it — one library function calling another is ordinary, and what the exact
-      // set is for is saying that nothing *else* arrived.
+      // `printc` arrives because the desugaring reaches it for a `char`, `encode_utf8` because
+      // `printc` reaches it, and the two digit writers because `printi` reaches them — one library
+      // function calling another is ordinary, and what the exact set is for is saying that nothing
+      // *else* arrived.
       defined shouldBe Right(
-        List("printi", "printc", "putbytes", "encode_utf8").map(n => s"@${Library.key(n)}").toSet + "@main")
+        List("printi", "printc", "putbytes", "encode_utf8", "digits_long", "digits_ulong")
+          .map(n => s"@${Library.key(n)}").toSet + "@main")
     }
 
     // And the other half of that bargain: a member the program *does* reach has to arrive, whether

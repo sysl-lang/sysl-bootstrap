@@ -52,7 +52,8 @@ class ExternCodegenTests extends AnyFreeSpec with CodegenSupport {
       val out = ir("print(1)")
 
       out should not include "@exit"
-      out should include("declare i32 @snprintf(ptr, i64, ptr, ...)") // one that print does reach
+      out should not include "@snprintf" // an integer renders without it now
+      ir("print(1.5)") should include("declare i32 @snprintf(ptr, i64, ptr, ...)") // a real still reaches it
     }
 
     "an extern is declared once however many times it is called" in {
