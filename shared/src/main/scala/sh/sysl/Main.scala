@@ -518,9 +518,30 @@ private[sysl] def execute(asked: Config): Int = {
       val mode  = if links(cfg.command) then cfg.linkMode else LinkMode.Dynamic
       val needs = own ::: fetched.libs ::: fromLibs
 
-      StaticLink.unknown(mode, needs.map(_.module).toSet, cfg.namedIncludes.keySet) match
+      val declared = needs.map(_.module).toSet
+
+      // **A name that matches nothing here may be gated off rather than misspelt**, and only the
+      // build with every feature on can tell the two apart (`linkable`) — so that build is resolved
+      // for a stray name and not otherwise.
+      val could =
+        StaticLink.unmatched(mode, declared) match
+          case Nil => Set.empty[String]
+          case stray :: _ =>
+            linkable(cfg, project, roots) match
+              case Right(names) => names
+              case Left(err) =>
+                return fail(s"'link' names '$stray', and no pkg_config requirement in this build is " +
+                  "called that — whether a package behind a feature this build leaves off requires " +
+                  s"it could not be read: $err")
+
+      StaticLink.unknown(mode, declared, cfg.namedIncludes.keySet, could) match
         case Some(err) => return fail(err)
         case None      => ()
+
+      if cfg.verbose then
+        for name <- StaticLink.gated(mode, declared, could) do
+          trace(s"link: '$name' is required only under a feature this build leaves off, so there " +
+            "is nothing of it to link")
 
       probeLibs(needs, cfg.namedIncludes.keySet, target, cfg.verbose, mode, cfg.linkPaths) match
         case Left(err)     => return fail(err)
@@ -1060,23 +1081,30 @@ private def probeLibs(needs: List[LibNeed], supplied: Set[String], target: Targe
                   }
         // **A library linked from its archive is linked with everything `--static` names**, since
         // an archive carries none of the libraries it links privately (`StaticLink.archives`).
+        // Only a library the reader NAMED must have an archive; `static` over the whole build takes
+        // one where there is one (`LinkMode.Static`).
         static <- if !mode.marks(need.module) then Right(None)
                   else
                     for
                       s     <- PkgConfig.queryStatic(need.module)
-                      found <- StaticLink.archives(need.module, s, linkPaths, isFile)
-                    yield Some((s.static, found))
+                      found <- StaticLink.archives(need.module, s, linkPaths, isFile,
+                                 required = mode.isInstanceOf[LinkMode.Only])
+                    yield Some((s, found))
       yield
-        val ldflags = static.fold(answer.ldflags)(_._1)
+        // No archive for anything the program links directly is a dynamic link, `--libs` and all.
+        val linked  = static.filter(_._2.nonEmpty)
+        val ldflags = linked.fold(answer.ldflags)(_._1.static)
 
         if verbose then
           trace(s"pkg-config ${need.module}: ${(answer.cflags ::: ldflags).mkString(" ")}")
-          for (lib, archive) <- static.toList.flatMap(_._2).sortBy(_._1) do
+          for (lib, archive) <- linked.toList.flatMap(_._2).sortBy(_._1) do
             trace(s"static: -l$lib is $archive")
+          for (s, found) <- static; lib <- StaticLink.kept(s, found) do
+            trace(StaticLink.keptNote(need.module, lib, StaticLink.searched(s, linkPaths)))
 
         so_far.copy(probed = so_far.probed ::: answer.cflags,
                     probedLibs = so_far.probedLibs ::: ldflags,
-                    archives = so_far.archives ++ static.fold(Map.empty[String, String])(_._2))
+                    archives = so_far.archives ++ linked.fold(Map.empty[String, String])(_._2))
     }
 }
 

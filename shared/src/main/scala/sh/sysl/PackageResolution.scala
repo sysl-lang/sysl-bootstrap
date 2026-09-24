@@ -56,6 +56,24 @@ private def dependencies(cfg: Config, project: PackageConfig, roots: List[String
                  else resolveDependencies(cfg, project.copy(dependencies = declared), roots, os)
   yield got.copy(devModules = devModules(got, dev))
 
+/** Every `pkg_config` name the build could link with **every** feature of the root on — what a `link`
+ * list is checked against once a name in it matches nothing in this build (`StaticLink.gated`).
+ *
+ * **The feature table alone cannot answer it**: a feature turns on a dependency, and the libraries
+ * are in *that dependency's* manifest, which a build that leaves the feature off never reads. So the
+ * graph is resolved a second time as `--all-features` would resolve it, which reads them. It is asked
+ * only for a name that matched nothing, so a build whose list is all found pays nothing for it.
+ */
+private def linkable(cfg: Config, project: PackageConfig, roots: List[String])
+    : Either[String, Set[String]] =
+  for
+    fromRoots <- libDependencies(roots)
+    declared   = project.dependencies ::: devDependencies(cfg, project) ::: fromRoots
+    graph     <- if declared.isEmpty then Right(None)
+                 else resolvedGraph(cfg.copy(allFeatures = true), project.copy(dependencies = declared),
+                        roots).map(Some(_))
+  yield project.pkgConfig.keySet ++ graph.toList.flatMap(_.packages).flatMap(_.config.pkgConfig.keys)
+
 /** A project that depends on nothing: no packages, and the features it has enabled of its own.
  *
  * A project with no dependencies resolves nothing, and it still has features — which its own files

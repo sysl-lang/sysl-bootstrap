@@ -27,7 +27,16 @@ enum LinkMode {
   /** Every library dynamically, which is what a build does when nothing says otherwise. */
   case Dynamic
 
-  /** Every library a `pkg_config` requirement names, anywhere in the build, from its archive. */
+  /** Every library a `pkg_config` requirement names, anywhere in the build, from its archive **where
+   * it has one**.
+   *
+   * A library installed with no archive — the system's own `sqlite3` in `/usr/lib` is the usual one —
+   * is linked dynamically, with a trace line saying so, rather than refused: nobody named it, so
+   * nobody asked for it in particular, and "every library that can be" is the only reading of
+   * `static` a build over a dozen libraries can actually satisfy. Naming a library in `Only` is what
+   * says *this one must come from its archive*, and there a missing one is still refused
+   * (`StaticLink.archives`).
+   */
   case Static
 
   /** The libraries these `pkg_config` names answer to from their archives, and the rest as usual.
@@ -118,9 +127,15 @@ object StaticLink {
    * exists to prevent, and nothing on the command line would say so. A library only `--static`
    * added is one of those libraries' own dependencies, which the reader did not name and may well be
    * a system library installed without an archive, so it stays an `-l` where there is none.
+   *
+   * **`required` is whether the reader named this library**, which is `LinkMode.Only` and not
+   * `LinkMode.Static`. Where they did not, a direct library with no archive is linked dynamically like
+   * a private one (`kept` names it for the trace) — and where *none* of the direct libraries has one,
+   * the answer is empty, so the library is linked exactly as a dynamic build would link it rather than
+   * with an archive of some private dependency and the `.dylib` of the library itself.
    */
   def archives(module: String, answer: StaticAnswer, linkPaths: List[String],
-               exists: String => Boolean): Either[String, Map[String, String]] = {
+               exists: String => Boolean, required: Boolean = true): Either[String, Map[String, String]] = {
     val dirs   = searched(answer, linkPaths)
     val direct = libs(answer.direct).toSet
 
@@ -128,34 +143,68 @@ object StaticLink {
       (acc, lib) =>
         acc.flatMap { found =>
           dirs.map(d => s"$d/lib$lib.a").find(exists) match
-            case Some(archive)            => Right(found + (lib -> archive))
-            case None if direct(lib)      => Left(missing(module, lib, dirs))
-            case None                     => Right(found)
+            case Some(archive)                    => Right(found + (lib -> archive))
+            case None if direct(lib) && required  => Left(missing(module, lib, dirs))
+            case None                             => Right(found)
         }
-    }
+    }.map(found => if direct.isEmpty || direct.exists(found.contains) then found else Map.empty)
   }
+
+  /** The libraries `module`'s program links directly that `archives` found no archive for, and which
+   * are therefore linked dynamically — what `LinkMode.Static` traces rather than refuses.
+   */
+  def kept(answer: StaticAnswer, found: Map[String, String]): List[String] =
+    libs(answer.direct).distinct.filterNot(found.contains)
 
   /** The refusal for a library that was asked for statically and has no archive. */
   def missing(module: String, lib: String, dirs: List[String]): String =
-    val where =
-      if dirs.isEmpty then "pkg-config named no directory to look in"
-      else s"looked in ${dirs.mkString(", ")}"
-
-    s"'$module' is to be linked statically, and there is no 'lib$lib.a' to link it from — $where. " +
+    s"'$module' is to be linked statically, and there is no 'lib$lib.a' to link it from — ${where(dirs)}. " +
       s"Install its static archive there, or leave '$module' out of 'link' to link it dynamically"
 
-  /** A `link` list's names that no `pkg_config` requirement in this build answers to.
+  /** The trace line for a library `link = "static"` found no archive of, and linked dynamically. */
+  def keptNote(module: String, lib: String, dirs: List[String]): String =
+    s"static: '$module' has no 'lib$lib.a', so -l$lib is linked dynamically — ${where(dirs)}"
+
+  private def where(dirs: List[String]): String =
+    if dirs.isEmpty then "pkg-config named no directory to look in"
+    else s"looked in ${dirs.mkString(", ")}"
+
+  /** A `link` list's names that no `pkg_config` requirement **in this build** answers to — the ones
+   * that are either misspelt or gated off, and so the only ones worth widening the question for.
+   */
+  def unmatched(mode: LinkMode, declared: Set[String]): List[String] =
+    mode match
+      case LinkMode.Only(names) => names.filterNot(declared.contains)
+      case _                    => Nil
+
+  /** A `link` list's names that a requirement answers to only in a build with more features on —
+   * `could` is every `pkg_config` name the build could reach with **all** of them on.
+   *
+   * Left out, with a trace, rather than refused: the list is written once for every build of the
+   * project, and a build with `--no-default-features` that does not link `lmdb` has nothing to link
+   * statically and nothing wrong with it.
+   */
+  def gated(mode: LinkMode, declared: Set[String], could: Set[String]): List[String] =
+    unmatched(mode, declared).filter(could.contains)
+
+  /** A `link` list's name that no `pkg_config` requirement answers to — in this build, or in the build
+   * with every feature on (`could`).
    *
    * Refused rather than ignored, because a misspelt `libvu` would otherwise build and link libuv
-   * dynamically with nothing to say the key did nothing.
+   * dynamically with nothing to say the key did nothing. The names offered are every one the build
+   * could link, feature on or off, since a reader correcting the spelling of a gated name is looking
+   * for it among them.
    */
-  def unknown(mode: LinkMode, declared: Set[String], supplied: Set[String]): Option[String] =
+  def unknown(mode: LinkMode, declared: Set[String], supplied: Set[String],
+              could: Set[String] = Set.empty): Option[String] =
     mode match
       case LinkMode.Only(names) =>
-        names.find(!declared.contains(_)).map { name =>
+        val known = declared ++ could
+
+        names.find(!known.contains(_)).map { name =>
           s"'link' names '$name', and no pkg_config requirement in this build is called that — the " +
             "names are the ones the manifests write under 'requires.pkg_config'" +
-            (if declared.isEmpty then "" else s", which here are ${declared.toList.sorted.mkString(", ")}")
+            (if known.isEmpty then "" else s", which here are ${known.toList.sorted.mkString(", ")}")
         }.orElse(names.find(supplied.contains).map { name =>
           s"'link' names '$name', which '--include-path $name=<dir>' answered, so pkg-config was not " +
             "asked which archive it is — link it statically by naming the archive's path to the " +

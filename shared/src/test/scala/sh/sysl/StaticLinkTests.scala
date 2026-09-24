@@ -138,6 +138,35 @@ class StaticLinkTests extends AnyFreeSpec with Matchers {
           "it dynamically")
     }
 
+    // `link = "static"`: nobody named this library, so it is linked dynamically and traced.
+    "under 'static', a library with no archive is linked dynamically rather than refused" in {
+      val found = StaticLink.archives("sqlite3", answer, List("/mine"), Set.empty, required = false)
+
+      found shouldBe Right(Map.empty)
+      StaticLink.kept(answer, found.toOption.get) shouldBe List("uv")
+      StaticLink.keptNote("sqlite3", "uv", List("/p/lib", "/mine")) shouldBe
+        "static: 'sqlite3' has no 'libuv.a', so -luv is linked dynamically — looked in /p/lib, /mine"
+    }
+
+    // A private archive alone would link the library's .dylib beside a copy of what it links.
+    "and one with no archive for any direct library takes none of its private ones either" in {
+      StaticLink.archives("libuv", answer, Nil, Set("/p/lib/libz.a"), required = false) shouldBe
+        Right(Map.empty)
+    }
+
+    "while the direct libraries that do have one are still taken from it" in {
+      val two   = StaticAnswer(List("-L/p", "-lssl", "-lcrypto"), List("-L/p", "-lssl", "-lcrypto"), None)
+      val found = StaticLink.archives("libssl", two, Nil, Set("/p/libcrypto.a"), required = false).toOption.get
+
+      found shouldBe Map("crypto" -> "/p/libcrypto.a")
+      StaticLink.kept(two, found) shouldBe List("ssl")
+    }
+
+    "but a library the list NAMES with no archive is refused exactly as before" in {
+      StaticLink.archives("sqlite3", answer, Nil, Set.empty, required = true).left.toOption.get should
+        startWith("'sqlite3' is to be linked statically, and there is no 'libuv.a' to link it from")
+    }
+
     "the rewrite touches only the -l names it has an archive for" in {
       StaticLink.rewrite(List("-L/p", "-luv", "-framework", "Cocoa", "-lSystem"), Map("uv" -> "/p/libuv.a")) shouldBe
         List("-L/p", "/p/libuv.a", "-framework", "Cocoa", "-lSystem")
@@ -174,6 +203,23 @@ class StaticLinkTests extends AnyFreeSpec with Matchers {
     "while 'static' and a declared name are not" in {
       StaticLink.unknown(LinkMode.Static, Set.empty, Set.empty) shouldBe None
       StaticLink.unknown(LinkMode.Only(List("libuv")), Set("libuv"), Set.empty) shouldBe None
+    }
+
+    // `could` is what the build with every feature on requires.
+    "a name only a feature this build leaves off requires is left out, not refused" in {
+      val mode = LinkMode.Only(List("libuv", "lmdb"))
+
+      StaticLink.unmatched(mode, Set("libuv")) shouldBe List("lmdb")
+      StaticLink.unknown(mode, Set("libuv"), Set.empty, could = Set("libuv", "lmdb")) shouldBe None
+      StaticLink.gated(mode, Set("libuv"), Set("libuv", "lmdb")) shouldBe List("lmdb")
+    }
+
+    "and a misspelt one is still refused, naming the gated ones among the rest" in {
+      StaticLink.unknown(LinkMode.Only(List("lmbd")), Set("libuv", "sqlite3"), Set.empty,
+          could = Set("libuv", "lmdb", "sqlite3")) shouldBe
+        Some("'link' names 'lmbd', and no pkg_config requirement in this build is called that — the " +
+          "names are the ones the manifests write under 'requires.pkg_config', which here are libuv, " +
+          "lmdb, sqlite3")
     }
   }
 
@@ -297,6 +343,61 @@ class StaticLinkTests extends AnyFreeSpec with Matchers {
       assume(Toolchain.clangAvailable && archive.isDefined)
 
       refusal(project("""link = ["libvu"]""")) should include("'link' names 'libvu'")
+    }
+  }
+
+  // slate's shape: the library is a dependency's, and the dependency is behind a feature.
+  "a name behind a feature this build leaves off" - {
+
+    def gated(link: String): String = {
+      val dep = createTempDirectory("sysl-static-link-gated-dep-")
+
+      writeFile(s"$dep/${PackageConfig.FileName}",
+        """package { name = "dep", version = "1.0.0" }
+          |requires { os = true, pkg_config { libuv = "libuv — brew install libuv" } }
+          |""".stripMargin)
+      createDirectories(s"$dep/dep")
+      writeFile(s"$dep/dep/dep.sysl",
+        "module dep\n@link(\"uv\")\n\nextern \"uv_version\" version() -> u32\n")
+
+      val root = createTempDirectory("sysl-static-link-gated-")
+
+      writeFile(s"$root/${PackageConfig.FileName}",
+        s"""package { name = "app", version = "0.1.0" }
+           |requires { os = true, heap = true }
+           |dependencies { d { path = "$dep", optional = true } }
+           |features { default = [uv], uv = [d] }
+           |$link
+           |""".stripMargin)
+      writeFile(s"$root/main.sysl", "print(true)\n")
+      root
+    }
+
+    def run(root: String): (Int, String) = {
+      val notes  = new java.io.ByteArrayOutputStream
+      val status = Console.withOut(Discarded)(Console.withErr(notes)(
+        sh.sysl.execute(Config(command = "build", file = root, output = Some(s"$root/out"),
+          verbose = true, noDefaultFeatures = true))))
+
+      (status, notes.toString)
+    }
+
+    "is left out with a trace, and the build links" in {
+      assume(Toolchain.clangAvailable)
+
+      val (status, notes) = run(gated("""link = ["libuv"]"""))
+
+      withClue(notes) { status shouldBe 0 }
+      notes should include("link: 'libuv' is required only under a feature this build leaves off")
+    }
+
+    "while a misspelt one is still refused, naming the gated name among the rest" in {
+      val (status, notes) = run(gated("""link = ["libvu"]"""))
+
+      status should not be 0
+      notes should include("'link' names 'libvu', and no pkg_config requirement in this build is " +
+        "called that — the names are the ones the manifests write under 'requires.pkg_config', " +
+        "which here are libuv")
     }
   }
 }
