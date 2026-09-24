@@ -220,7 +220,7 @@ trait Hoisting extends HoistMembers {
       // and a module member always could be. A local `val` states nothing to anyone and infers like
       // a `var`.
       if v.typ.isEmpty then
-        err(s"a module-level 'val' states its type, so '${v.name}' needs one — 'val ${v.name}: T = …'")
+        recover(())(err(s"a module-level 'val' states its type, so '${v.name}' needs one — 'val ${v.name}: T = …'"))
       valDecls(key) = v.copy(name = key).setPos(v.pos)
       declScope(key) = currentScope
       markTestOnly(key)
@@ -245,9 +245,14 @@ trait Hoisting extends HoistMembers {
       // a module member may be visible outside its file, and what is has to say what it is. It
       // bites harder here, because module storage written with `var` may have no initializer at all
       // for a type to be inferred from.
+      //
+      // Reported and then registered all the same, with no type (`globalType` answers `Unknown`), so
+      // the one line that is wrong is the one line reported: refusing to register it would leave every
+      // use of the name an "undefined name" the program plainly declares. The `val` above is recovered
+      // for the same reason.
       if v.typ.isEmpty then
-        err(s"'${v.name}' is module storage, and module storage states its type — write " +
-          s"'${v.name}: T'")
+        recover(())(err(s"'${v.name}' is module storage, and module storage states its type — write " +
+          s"'${v.name}: T'"))
       staticVarDecls(key) = v.copy(name = key).setPos(v.pos)
       declScope(key) = currentScope
       markTestOnly(key)

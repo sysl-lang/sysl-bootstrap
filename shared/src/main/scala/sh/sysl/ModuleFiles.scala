@@ -133,6 +133,8 @@ trait ModuleFiles
   protected def hasEntryPoint: Boolean
 
   protected def entryFile(files: List[(Program, Scope)]): Option[(Program, Scope)] = {
+    def declaresMain(u: Program) = u.body.exists { case d: FuncDecl => d.name == "main"; case _ => false }
+
     def carries(u: Program, what: Stmt => Boolean) = u.body.exists(s => !Bodies.isDeclaration(s) && what(s))
 
     // Reported against the first thing in `u` that made it a rival, which is the line the reader has
@@ -182,6 +184,18 @@ trait ModuleFiles
       // that one says a file which names a module cannot be a body, this one says a compilation with
       // no beginning has no body for any file to be.
       case Nil if !hasEntryPoint => None
+
+      // **And only where the program has not already written its beginning as a `main`.** The
+      // fallback exists to keep a one-file script's `var n = 1` a local of the script, but a `main` is
+      // the other way of writing where a program starts, and once one is declared there is no body
+      // left for a lone binding to belong to: the `var` is storage the module owns, exactly as a `val`
+      // beside it is, and exactly as it is in a file that names a module. Reading it as a body instead
+      // left the most ordinary program there is — a counter, the functions that bump it, a `main`
+      // calling them — with no spelling that compiled: refused as a second beginning over its own
+      // `main`, with every function reading the counter nested out of `main`'s reach and reported as
+      // undefined, while `static`, the word for asking for the module, was refused for saying nothing
+      // in a file with no body.
+      case Nil if files.exists((u, _) => declaresMain(u)) => None
 
       case Nil =>
         files.filter((u, _) => u.module.isEmpty && carries(u, Bodies.isTopLevelBinding)) match

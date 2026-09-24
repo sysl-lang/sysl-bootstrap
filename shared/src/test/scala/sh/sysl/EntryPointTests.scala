@@ -49,13 +49,93 @@ class EntryPointTests extends AnyFreeSpec with CodegenSupport with RunSupport {
             |""".stripMargin) shouldBe "main 1 3\n"
     }
 
-    // A `var` is not a declaration — it is storage the program fills as it runs — so a file holding
-    // one is the file the program starts in, and a `main` beside it is the second entry point above.
-    "while a var beside it makes its file the one the program starts in" in {
+    // A file whose only running lines are `var`s is a body only for want of anything else to be the
+    // beginning. A declared `main` is that beginning, so the `var` beside it is storage the module
+    // owns — as a `val` beside it is, and as a `var` in a file with a `module` line is. This is the
+    // shape a first benchmark takes: a counter, the functions that bump it, and a `main` calling them.
+    "a var beside it is the module's storage, which the functions and main share" in {
+      run("""var counter: int = 0
+            |
+            |bump() =
+            |    counter += 1
+            |
+            |twice() =
+            |    bump()
+            |    bump()
+            |
+            |main() =
+            |    twice()
+            |    print(counter)
+            |""".stripMargin) shouldBe "2\n"
+    }
+
+    // Read as a body, the same program was refused over its own `main` ("a second"), and every
+    // function touching the counter was nested out of `main`'s reach and reported as an undefined
+    // name. What is wrong with it untyped is the one thing module storage asks, on the `var`'s line,
+    // and nothing is reported after it.
+    "and untyped, it is refused on its own line for the type and for nothing else" in {
+      val e = err("""var counter = 0
+                    |
+                    |bump() =
+                    |    counter += 1
+                    |
+                    |twice() =
+                    |    bump()
+                    |    bump()
+                    |
+                    |main() =
+                    |    twice()
+                    |    print(counter)
+                    |""".stripMargin)
+
+      e should include("'counter' is module storage, and module storage states its type — write 'counter: T'")
+      e should include("<input>:1:1")
+      e should not include "undefined"
+      e should not include "this 'main' is a second"
+      e.linesIterator.count(_.startsWith("error")) shouldBe 1
+    }
+
+    // The same recovery holds wherever module storage is declared untyped: the missing type is the
+    // mistake, and the uses of the name are not.
+    "a file with a module line reports an untyped var once, with no undefined name after it" in {
+      val e = errIn(("app", "app.sysl", """module app
+                                          |
+                                          |var counter = 0
+                                          |
+                                          |val limit = 3
+                                          |
+                                          |main() =
+                                          |    counter += limit
+                                          |    print(counter)
+                                          |""".stripMargin))
+
+      e should include("'counter' is module storage, and module storage states its type")
+      e should include("a module-level 'val' states its type, so 'limit' needs one")
+      e should not include "undefined"
+      e.linesIterator.count(_.startsWith("error")) shouldBe 2
+    }
+
+    // With no `main`, a lone `var` is still what a one-file script's first line has always been.
+    "while with no main a lone var is still the script's local" in {
+      run("""var counter = 0
+            |
+            |bump() =
+            |    counter += 1
+            |
+            |bump()
+            |print(counter)
+            |""".stripMargin) shouldBe "1\n"
+    }
+
+    // A file that runs a real statement is a body however a `main` is written, so its `var` is a local
+    // and the `main` is the second beginning, as ever.
+    "while a statement beside main is still reported on the main" in {
       err("""var count = 0
             |
+            |print(count)
+            |
             |main()
-            |    print(count)
+            |    print("main")
             |""".stripMargin) should include("this 'main' is a second")
     }
 
