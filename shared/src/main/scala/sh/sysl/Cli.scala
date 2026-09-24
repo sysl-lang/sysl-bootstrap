@@ -185,6 +185,11 @@ case class Config(
       * and a flag typed for one invocation has to beat a key written for all of them.
       */
     lto: Option[String] = None,
+    /** `--link` — which `pkg_config` libraries this invocation links from their static archives
+      * (`LinkMode`). An `Option` for `lto`'s reason: the root manifest's `link` key is folded in
+      * where the command line named none (`withLink`).
+      */
+    link: Option[LinkMode] = None,
     /** `--profile-generate <dir>` — build an instrumented program that writes its counters into
       * `<dir>`, which is the first step of a profile-guided build (`Pipeline`).
       *
@@ -260,6 +265,16 @@ case class Config(
    * `withOptimization`'s twin, with the same `orElse` and the same precedence (`PackageConfig.lto`).
    */
   def withLto(manifest: Option[String]): Config = copy(lto = lto.orElse(manifest))
+
+  /** The same config with the root manifest's `link` folded in, where the command line named none —
+   * `withLto`'s twin, with the same precedence (`PackageConfig.link`).
+   */
+  def withLink(manifest: Option[LinkMode]): Config = copy(link = link.orElse(manifest))
+
+  /** How this build links its `pkg_config` libraries: what `--link` said, then the root manifest's
+   * `link`, then dynamically.
+   */
+  def linkMode: LinkMode = link.getOrElse(LinkMode.Dynamic)
 }
 
 /** The option grammar, held apart from the entry point so that a test can ask what an argument list
@@ -560,6 +575,12 @@ private[sysl] val parser = {
         .text(s"optimize across every object at the link, which is the only thing that lets a call " +
           s"into a package's C be inlined: '${Toolchain.ltoModes.mkString("' or '")}'. The " +
           s"project's 'lto' key where it has one, and off otherwise"),
+      opt[String]("link")
+        .action((m, c) => c.copy(link = LinkMode.parse(m).toOption))
+        .validate(m => LinkMode.parse(m).fold(failure, _ => success))
+        .text("link the libraries pkg_config requirements name from their static archives: 'static' " +
+          "for every one, a comma-separated list of their pkg_config names for those, or 'dynamic' " +
+          "for none. The project's 'link' key where it has one, and dynamic otherwise"),
       opt[String]("profile-generate")
         .action((d, c) => c.copy(profileGenerate = Some(d)))
         .text("build an instrumented program that writes a counter file into this directory each " +

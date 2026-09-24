@@ -172,7 +172,7 @@ private[sysl] def execute(asked: Config): Int = {
   // program is compiled, including the parts it has nothing to do with. This is the same ruling
   // `targets.default` gets one step below, and it is silent for the same reason — a package that
   // states its own build level has said nothing wrong, it is simply not the one being built.
-  cfg = cfg.withOptimization(project.optimization).withLto(project.lto)
+  cfg = cfg.withOptimization(project.optimization).withLto(project.lto).withLink(project.link)
 
   // **Above the target, and above every other question a compilation settles.** A graph is a
   // property of the manifests rather than of the machine, so a project that cannot be built here can
@@ -513,7 +513,16 @@ private[sysl] def execute(asked: Config): Int = {
       val own = project.pkgConfig.toList.sortBy(_._1)
         .map((mod, why) => LibNeed("this project", mod, why))
 
-      probeLibs(own ::: fetched.libs ::: fromLibs, cfg.namedIncludes.keySet, target, cfg.verbose) match
+      // **Which of them come from their archives is asked only by a command that links**, since a
+      // missing archive is a reason not to link and says nothing to `emit-llvm`.
+      val mode  = if links(cfg.command) then cfg.linkMode else LinkMode.Dynamic
+      val needs = own ::: fetched.libs ::: fromLibs
+
+      StaticLink.unknown(mode, needs.map(_.module).toSet, cfg.namedIncludes.keySet) match
+        case Some(err) => return fail(err)
+        case None      => ()
+
+      probeLibs(needs, cfg.namedIncludes.keySet, target, cfg.verbose, mode, cfg.linkPaths) match
         case Left(err)     => return fail(err)
         case Right(answer) => answer
     else SearchPaths()
@@ -530,7 +539,7 @@ private[sysl] def execute(asked: Config): Int = {
     case Right(answer) => answer
 
   val paths = SearchPaths(cfg.linkPaths, cfg.includePaths, cfg.defines,
-                          probed.probed, probed.probedLibs, carried, cfg.cc)
+                          probed.probed, probed.probedLibs, carried, cfg.cc, probed.archives)
 
   if cfg.verbose then
     for lib <- cfg.libs do trace(s"library: $lib")
@@ -681,6 +690,10 @@ private[sysl] def execute(asked: Config): Int = {
       // over an unchanged tree was handed back the *uninstrumented* binary the previous ordinary
       // run had left in the slot, and reported green having looked at nothing.
       Toolchain.buildEnvironment.mkString(" "),
+      // **How the libraries are linked** (`LinkMode`) — a binary linked against `libuv.a` and one
+      // against `libuv.dylib` are two programs from one tree. The archives chosen are in `paths`
+      // below as well; this is the choice itself, so the key moves even where nothing was found.
+      cfg.linkMode.spelling,
       paths.toString,
       archives.mkString("\u0000"),
     )))
@@ -1012,9 +1025,17 @@ private def libPkgNeeds(roots: List[String]): Either[String, List[LibNeed]] =
  * *why* it could not be answered, because the two send the reader to different places: a machine with
  * no `pkg-config` is one `brew install pkgconf` away and has nothing to do with the library, where a
  * `pkg-config` that does not know the module means the library itself is not installed.
+ *
+ * ==A library linked from its archive is asked twice more==
+ *
+ * Where `mode` marks the module (`LinkMode`), `--static --libs` replaces `--libs` on the link line and
+ * each of its libraries with an archive is recorded in `SearchPaths.archives`; one the program links
+ * directly with none stops the build here, naming the file and where it was looked for
+ * (`StaticLink.archives`).
  */
 private def probeLibs(needs: List[LibNeed], supplied: Set[String], target: Target,
-                      verbose: Boolean): Either[String, SearchPaths] = {
+                      verbose: Boolean, mode: LinkMode = LinkMode.Dynamic,
+                      linkPaths: List[String] = Nil): Either[String, SearchPaths] = {
   val wanted = needs.filterNot(n => supplied.contains(n.module))
 
   if wanted.isEmpty then Right(SearchPaths())
@@ -1037,12 +1058,25 @@ private def probeLibs(needs: List[LibNeed], supplied: Set[String], target: Targe
                            "install pkgconf', or your system's package of that name — or say where " +
                            s"it is with '--include-path ${need.module}=<dir>' and '--link-path <dir>'")
                   }
+        // **A library linked from its archive is linked with everything `--static` names**, since
+        // an archive carries none of the libraries it links privately (`StaticLink.archives`).
+        static <- if !mode.marks(need.module) then Right(None)
+                  else
+                    for
+                      s     <- PkgConfig.queryStatic(need.module)
+                      found <- StaticLink.archives(need.module, s, linkPaths, isFile)
+                    yield Some((s.static, found))
       yield
+        val ldflags = static.fold(answer.ldflags)(_._1)
+
         if verbose then
-          trace(s"pkg-config ${need.module}: ${(answer.cflags ::: answer.ldflags).mkString(" ")}")
+          trace(s"pkg-config ${need.module}: ${(answer.cflags ::: ldflags).mkString(" ")}")
+          for (lib, archive) <- static.toList.flatMap(_._2).sortBy(_._1) do
+            trace(s"static: -l$lib is $archive")
 
         so_far.copy(probed = so_far.probed ::: answer.cflags,
-                    probedLibs = so_far.probedLibs ::: answer.ldflags)
+                    probedLibs = so_far.probedLibs ::: ldflags,
+                    archives = so_far.archives ++ static.fold(Map.empty[String, String])(_._2))
     }
 }
 

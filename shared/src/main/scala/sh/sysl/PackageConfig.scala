@@ -1,6 +1,6 @@
 package sh.sysl
 
-import io.github.edadma.hocon.{ConfigBoolean, ConfigNumber, ConfigObject, ConfigString, ConfigValue, Hocon, HoconException}
+import io.github.edadma.hocon.{ConfigArray, ConfigBoolean, ConfigNumber, ConfigObject, ConfigString, ConfigValue, Hocon, HoconException}
 
 /** What a target provides, as the project says rather than as the registry knows
  * (`reference/packages.md § What a project is called`).
@@ -153,6 +153,14 @@ case class PackageConfig(
       * is and for the same reason: a manifest is read by builds nobody is watching.
       */
     lto: Option[String] = None,
+    /** The `link` key — which of the libraries `pkg_config` requirements name are linked from their
+      * static archives (`reference/packages.md § Linking a library statically`, `LinkMode`).
+      *
+      * **The ROOT project's only**, for `lto`'s reason: how the program is linked is decided once for
+      * the whole of it, so a dependency that asked would be asking for code it never sees. A package
+      * that would rather be linked statically says so in its documentation.
+      */
+    link: Option[LinkMode] = None,
     sysl: Option[Version] = None,
     /** Keys this compiler did not recognize, as sentences to print — one per key, in the order the
       * file writes them (`unknownKeys`).
@@ -347,6 +355,7 @@ object PackageConfig {
         defs    <- readDefines(root)
         level   <- readOptimization(root)
         lto     <- readLto(root)
+        link    <- readLink(root)
       yield PackageConfig(
         name = pkg.flatMap(string(_, "name")),
         version = pkg.flatMap(string(_, "version")),
@@ -364,6 +373,7 @@ object PackageConfig {
         defines = defs,
         optimization = level,
         lto = lto,
+        link = link,
         warnings = unknownKeys(root, TopLevelKeys, "") :::
           pkg.toList.flatMap(unknownKeys(_, PackageKeys, "package.")),
       )
@@ -484,6 +494,32 @@ object PackageConfig {
   private def notAnLtoMode(value: String): String =
     s"$FileName: 'lto = \"$value\"' names no kind of link-time optimization clang has — it is " +
       s"${Toolchain.ltoModes.mkString(" or ")}, or 'true' for thin"
+
+  /** `link` — `"static"`, `"dynamic"`, or a list of the `pkg_config` names to link statically
+   * (`PackageConfig.link`, `LinkMode`).
+   *
+   * Refused when it is anything else, for `readOptimization`'s reason. Whether a listed name is one
+   * the build actually declares is not known here — the declarations are spread across every package
+   * the build resolves — so that is asked where they are all in hand (`StaticLink.unknown`).
+   */
+  private def readLink(root: ConfigObject): Either[String, Option[LinkMode]] = {
+    val shape = s"$FileName: 'link' says which libraries are linked from their static archives, so " +
+      "it is \"static\", \"dynamic\", or a list of the pkg_config names to link statically"
+
+    root.fields.get("link") match
+      case None                         => Right(None)
+      case Some(ConfigString("static"))  => Right(Some(LinkMode.Static))
+      case Some(ConfigString("dynamic")) => Right(Some(LinkMode.Dynamic))
+      case Some(ConfigString(v))        =>
+        Left(s"$FileName: 'link = \"$v\"' is neither \"static\" nor \"dynamic\" — to link one library " +
+          s"statically, name it in a list: 'link = [\"$v\"]'")
+      case Some(ConfigArray(elements)) =>
+        val names = elements.collect { case ConfigString(n) if n.trim.nonEmpty => n.trim }
+
+        if names.length != elements.length then Left(s"$shape — each one a name, written as a string")
+        else Right(Some(if names.isEmpty then LinkMode.Dynamic else LinkMode.Only(names.toList.distinct)))
+      case Some(_) => Left(shape)
+  }
 
   private def checkName(name: Option[String]): Either[String, Unit] = name match
     case None => Right(())
@@ -1001,7 +1037,7 @@ object PackageConfig {
    */
   private val TopLevelKeys =
     Set("package", "targets", "capabilities", "requires", "dependencies", "dev_dependencies",
-        "features", "allocator", "defines", "optimization", "lto")
+        "features", "allocator", "defines", "optimization", "lto", "link")
 
   private val PackageKeys = Set("name", "version", "sysl")
 

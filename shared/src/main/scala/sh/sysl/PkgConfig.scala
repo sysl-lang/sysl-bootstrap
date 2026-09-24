@@ -93,6 +93,24 @@ object PkgConfig {
           yield PkgConfigAnswer(c, l)
       catch case e: Throwable => Left(s"'$Tool' could not be run: ${e.getMessage}")
 
+  /** What a library that is to be linked from its archive needs besides `query`'s answer
+   * (`StaticLink`, `LinkMode`).
+   *
+   * `--static` adds the libraries this one links **privately** — which a shared library carries
+   * inside itself and an archive does not, so they have to be on the link line. `libdir` is asked
+   * because `pkg-config` leaves out a `-L` for a directory the linker searches anyway, and that is
+   * exactly where the archive then is. Asked only after `query` has answered, so a module that does
+   * not exist has already been refused with that sentence.
+   */
+  def queryStatic(module: String): Either[String, StaticAnswer] =
+    for
+      plain  <- query(module)
+      static <- try flags(module, "--static", "--libs")
+                catch case e: Throwable => Left(s"'$Tool' could not be run: ${e.getMessage}")
+      libdir <- try flags(module, "--variable=libdir")
+                catch case e: Throwable => Left(s"'$Tool' could not be run: ${e.getMessage}")
+    yield StaticAnswer(plain.ldflags, static, libdir.headOption)
+
   /** One query's output, split the way a shell would split it.
    *
    * **A path holding a space is not handled and is refused rather than mangled.** pkg-config quotes
@@ -100,11 +118,11 @@ object PkgConfig {
    * that are each half a directory — which fails as a missing header, naming neither the space nor
    * this line. The reader is told to say the path themselves, which is a flag that takes it whole.
    */
-  private def flags(module: String, what: String): Either[String, List[String]] = {
-    val result = exec(Seq(Tool, what, module))
+  private def flags(module: String, what: String*): Either[String, List[String]] = {
+    val result = exec(Seq(Tool) ++ what ++ Seq(module))
 
     if result.exitCode != 0 then
-      Left(s"'$Tool $what $module' failed: ${result.stderr.trim}")
+      Left(s"'$Tool ${what.mkString(" ")} $module' failed: ${result.stderr.trim}")
     else if result.stdout.exists(c => c == '"' || c == '\'') then
       Left(s"'$Tool' answered for '$module' with a quoted path, which is one holding a space — say " +
         "where it is on the command line instead, which takes a path whole")

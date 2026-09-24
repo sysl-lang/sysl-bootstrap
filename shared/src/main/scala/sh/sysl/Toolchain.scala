@@ -79,7 +79,15 @@ case class SearchPaths(link: List[String] = Nil, include: List[String] = Nil,
                          * argument. A `--cc` that stopped applying the moment the library was
                          * rebuilt would fail later than the flag, and blame the library.
                          */
-                       cc: Option[String] = None) {
+                       cc: Option[String] = None,
+                       /** The libraries `link` asked for statically, each `-l` name mapped to the
+                         * archive that replaces it on the link line (`StaticLink`, `LinkMode`).
+                         *
+                         * Here for `cc`'s reason: this record already reaches the one place a link
+                         * line is written, and it is part of the run cache's key as it stands, so a
+                         * binary linked one way is never handed back to a run that asked the other.
+                         */
+                       archives: Map[String, String] = Map.empty) {
 
   /** What the linker is told, as clang spells it — `--link-path`'s directories, then any a probe
    * answered with. Joined rather than passed as two arguments, which is how `-L` has been written
@@ -832,6 +840,10 @@ object Toolchain {
    * input being scanned in turn — it is where the scan looks — so putting it first is what makes the
    * line read the way a hand-run clang would be written, and leaves no question about whether a
    * directory named late reaches a library named early.
+   *
+   * A library `link` asked for statically is its archive's **path** in place of its `-l`, in the same
+   * position (`StaticLink`): an archive is scanned exactly where the `-l` would have been, and the
+   * path is the only spelling macOS's `ld` does not resolve to the `.dylib` beside it.
    */
   private[sysl] def linkCommand(ll: String, archives: List[String], exe: String, target: Target,
                                 level: String = defaultOptimization,
@@ -843,7 +855,8 @@ object Toolchain {
       pipeline.flags ::: extraFlags :::
       machineFlags(target) ::: linkerFlags(target) ::: deadStrip(target) :::
       paths.linkFlags ::: rpathFlags(target, paths) ::: List(ll) ::: objects ::: archives :::
-      libraryFlags(links, target) ::: paths.probedLinkFlags ::: List("-o", exe)
+      StaticLink.rewrite(libraryFlags(links, target) ::: paths.probedLinkFlags, paths.archives) :::
+      List("-o", exe)
 
   /** A run-time search path for each directory `--link-path` named, so that a shared library found
    * at link time is found again at load time (card `0414`).
