@@ -90,13 +90,62 @@ end display_str
  */
 display_int(n: long, out: *Writer, fmt: FormatSpec)
     var buf: [24]u8
-    var k = sysl_snprintf(&buf[0], 24, c"%lld", n)
-    display_digits(buf[0..<usize(k)], out, fmt)
+    val at = digits_long(n, buf[0..<24])
+    display_digits(buf[at..<24], out, fmt)
 
 display_uint(n: ulong, out: *Writer, fmt: FormatSpec)
     var buf: [24]u8
-    var k = sysl_snprintf(&buf[0], 24, c"%llu", n)
-    display_digits(buf[0..<usize(k)], out, fmt)
+    val at = digits_ulong(n, buf[0..<24])
+    display_digits(buf[at..<24], out, fmt)
+
+/** A `ulong`'s decimal digits, written backward so that they end where `into` ends, answering the
+ * index they start at. Twenty bytes always suffice, and twenty-one with the sign `digits_long` adds.
+ *
+ * **Every 64-bit integer the library renders ends here** -- `printi`, `display_int` and a builder's
+ * `push_int`, with their unsigned twins. They went through `snprintf` until it was measured: a
+ * format string parsed on every call and a varargs frame built, for a job that is a loop of
+ * divisions by a constant. That was a third of a string-building benchmark whose only formatting
+ * was integers. The rendering is `%lld`'s and `%llu`'s exactly -- no padding, a `-` and nothing else
+ * for a sign -- so no output changed, and the library's integers need no C library.
+ *
+ * **Two digits come off per division.** A division by a constant is a multiply and a shift, and
+ * what bounds the loop is that each one waits on the last; taking a pair and splitting it with
+ * arithmetic that does not feed the next step halves the length of that chain.
+ */
+private[sysl] digits_ulong(n: ulong, into: []u8) -> usize
+    var i = into.len
+    var v = n
+
+    while v >= 100
+        val pair = v % 100
+        v /= 100
+        i -= 2
+        into[i] = u8('0') + u8(pair / 10)
+        into[i + 1] = u8('0') + u8(pair % 10)
+
+    if v >= 10
+        i -= 2
+        into[i] = u8('0') + u8(v / 10)
+        into[i + 1] = u8('0') + u8(v % 10)
+    else
+        i -= 1
+        into[i] = u8('0') + u8(v)
+
+    i
+end digits_ulong
+
+/** A `long`'s decimal digits, the way `digits_ulong` writes them, with a `-` before a negative one.
+ *
+ * **The magnitude is taken one short and made up as a `ulong`**, because the most negative `long`
+ * has a magnitude one larger than a `long` holds: `-(n + 1)` fits for every negative `n`, and adding
+ * the one back happens at a width where it cannot overflow.
+ */
+private[sysl] digits_long(n: long, into: []u8) -> usize
+    if n >= 0 then return digits_ulong(ulong(n), into)
+
+    val at = digits_ulong(ulong(-(n + 1)) + 1, into) - 1
+    into[at] = u8('-')
+    at
 
 display_real(x: real, out: *Writer, fmt: FormatSpec)
     var buf: [64]u8

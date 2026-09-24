@@ -222,6 +222,37 @@ class StringCodegenTests extends AnyFreeSpec with CodegenSupport {
     out.sliding("declare i32 @snprintf".length).count(_ == "declare i32 @snprintf") shouldBe 1
   }
 
+  // The library's 64-bit integer renderers write their own digits (`digits_long`, `digits_ulong`)
+  // rather than calling `snprintf`, which parsed a format string on every call and was a third of a
+  // string-building benchmark that formatted nothing but integers. Each body is asserted on its own,
+  // and the module as a whole too, since a program that renders only integers now needs no C
+  // formatter at all.
+  "the library's integer renderers call no snprintf" in {
+    val out = ir("""import sysl.text.str_builder
+                   |
+                   |var b = str_builder()
+                   |b.push_int(-5)
+                   |b.push_uint(5)
+                   |print(b.finish())
+                   |printi(-3)
+                   |printu(3)
+                   |display_int(-7, stdout(), FormatSpec(0, -1, false))
+                   |display_uint(7, stdout(), FormatSpec(0, -1, false))""".stripMargin)
+
+    for name <- List("sysl.text$StrBuilder.push_int", "sysl.text$StrBuilder.push_uint", "sysl$printi",
+                     "sysl$printu", "sysl$display_int", "sysl$display_uint")
+    do
+      val body = defineOf(out, name)
+
+      withClue(s"$name:\n") {
+        body should not be empty
+        body should include("digits_")
+        body should not include "snprintf"
+      }
+
+    out should not include "@snprintf"
+  }
+
   "viewing bytes as a string in place" - {
     // `str_cast` copies (`TFromBytes` → `sysl.str.from_bytes`); its in-place sibling is the three
     // words it was given, so nothing is called and nothing allocated where it is made.
