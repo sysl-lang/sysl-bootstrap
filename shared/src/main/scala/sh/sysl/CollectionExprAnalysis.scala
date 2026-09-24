@@ -18,7 +18,13 @@ trait CollectionExprAnalysis extends ExprSupport {
   protected def sequenceExpr(expr: ArrayLit | ArrayFill | Index, expected: Option[Type]): TExpr = expr match
     case ArrayLit(elems) =>
       val elemExp = expected.flatMap(elementWanted)
-      val ts      = elems.map(analyzeExpr(_, elemExp))
+      // With nothing asked of it, the literal's elements are operands that must share one type, and
+      // they settle it the way the two sides of an operator do: a bare literal takes the type of an
+      // element that has one, wherever that element stands. So `[1usize, 2, 7]` and `[1, 2usize, 7]`
+      // are both `[3]usize`, as `val n: usize = 2` is a `usize` — and `[1u8, 300]` is refused at the
+      // `300` for not fitting, rather than for being an `int` nobody wrote. Where the position does
+      // ask for an element type, every element is read at that type and nothing here decides it.
+      val ts      = if elemExp.isEmpty then analyzeOperands(elems, None) else elems.map(analyzeExpr(_, elemExp))
 
       for t <- ts do
         if Type.noValue(t.ty) then err(s"an array cannot hold ${show(t.ty)} values")
