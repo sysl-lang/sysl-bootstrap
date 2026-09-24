@@ -193,10 +193,13 @@ class EntryFileTests extends AnyFreeSpec with CodegenSupport with RunSupport wit
     // (`reference/declarations.md`), so calling one that reads a binding needs that environment
     // too. `main` is the platform's symbol, not a name the program calls, so it can never be one of
     // the body's — and a `main` reading a binding used to become one silently, leaving the program
-    // with no entry point at all and no complaint about it.
+    // with no entry point at all and no complaint about it. The file runs a statement, which is what
+    // makes it a body whatever else it declares — a lone `var` beside a `main` is the module's
+    // (`EntryPointTests`).
     "while 'main' is never one of them, however it is written" in {
       err(
         """var count = 0
+          |print("start")
           |main()
           |    print(count)""".stripMargin,
       ) should include("this 'main' is a second")

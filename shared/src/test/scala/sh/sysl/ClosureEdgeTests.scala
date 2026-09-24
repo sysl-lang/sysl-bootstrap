@@ -601,14 +601,33 @@ class ClosureEdgeTests extends AnyFreeSpec with RunSupport with CodegenSupport {
       ) should include("a module-level 'val' states its type")
     }
 
-    "and one that names its type cannot reach module storage from there" in {
+    // One that names its type reaches module storage as any function does — by name, not by capture,
+    // since module storage is not a binding of any block. What it writes is the module's `var`, which
+    // is writable storage, so nothing here aims a store at a `constant`. (This used to read as a
+    // refusal — "undefined name 'c'" — only because an untyped module `var` was never registered, so
+    // every use of it was reported as undefined after its own diagnostic.)
+    "and one that names its type reaches module storage by name, which is writable" in {
+      val counter = "struct Counter\n    n: int\n\n    bump(*self) -> int\n        self.n += 1\n" +
+        "        self.n\n\nprivate var c: Counter = Counter(0)\n\npeek() -> int = c.n\n\n"
+
+      runOf(
+        "m/m.sysl"  -> ("module m\n\n" + counter + "val tick: &Fn() -> int = () -> c.bump()\n"),
+        "main.sysl" -> "print(m.tick(), m.tick(), m.peek())\n",
+      ) shouldBe "1 2 2\n"
+    }
+
+    // Untyped, the module `var` is refused for the type it did not state, and for nothing after it.
+    "while an untyped one is refused for its type alone" in {
       val counter = "struct Counter\n    n: int\n\n    bump(*self) -> int\n        self.n += 1\n" +
         "        self.n\n\nprivate var c = Counter(0)\n\n"
 
-      errOf(
+      val e = errOf(
         "m/m.sysl"  -> ("module m\n\n" + counter + "val tick: &Fn() -> int = () -> c.bump()\n"),
         "main.sysl" -> "print(m.tick())\n",
-      ) should include("undefined name 'c'")
+      )
+
+      e should include("'c' is module storage, and module storage states its type")
+      e should not include "undefined name"
     }
   }
 
