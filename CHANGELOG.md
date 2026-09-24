@@ -7,6 +7,10 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.131 — 2026-09-24
+
+Library fix: `Buf.push` under 0.0.130's invariant reloaded `count` after every element store as a 16-byte load half-overlapping the previous 8-byte store — a store-forwarding stall on every push (probe: 15.2 -> 3.3 cycles per iteration). `push` now reads the count once and stores it last. Programs built with 0.0.130 that push in hot loops regressed (slate: +2-5%); with 0.0.131 slate is 5.1% faster than with 0.0.129. Invariant checks and the one-compare `Buf.at` unchanged.
+
 ## 0.0.130 — 2026-09-24
 
 ### Library
