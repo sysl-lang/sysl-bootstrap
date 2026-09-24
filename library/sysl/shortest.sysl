@@ -1,0 +1,271 @@
+module sysl
+
+// The shortest decimal that reads back as a given `real` -- the digits `display_real_shortest`
+// writes, found exactly rather than by asking `printf` for one precision after another.
+//
+// The algorithm is Ryu (Ulf Adams, "Ryu: fast float-to-string conversion", PLDI 2018). A double is
+// `m * 2^e`, and every decimal that reads back as it lies strictly inside the interval halfway to
+// each neighbour -- or on its edge, where the tie in the reader goes to this value's even
+// significand. Ryu scales the value and both edges by a power of ten, so that each becomes an
+// integer, with one 64x128-bit multiplication apiece against a table of powers of five. It then
+// strips decimal digits from all three at once for as long as the two edges still differ: what is
+// left is the fewest digits any decimal in the interval can have, and the digit dropped last says
+// which way to round the one that stays. Two flags follow whether the dropped digits were all
+// zeros, because only then is the value exactly half way or the lower edge exactly representable,
+// and those are the two cases in which the answer changes.
+//
+// What comes out is the rule JavaScript and Python both print by: the fewest significant digits;
+// among those, the decimal closest to the value; and a tie between two equally close ones to the
+// even digit. `printf` cannot be asked that question -- it rounds to a precision it is told, so a
+// search over precisions finds a reading that works but not always the shortest one. `2^-24` is
+// the smallest case: rounded to sixteen digits it gives `...062e-08`, which is outside the interval
+// because the spacing below a power of two is half the spacing above, so the search went on to
+// seventeen, while `5.960464477539063e-08` is inside it and a digit shorter.
+//
+// The tables are the 125-bit-precision powers of five and their reciprocals Ryu is defined over,
+// in `shortest_powers.sysl`. A `u128` holds each one whole; the multiplication splits it into two
+// 64-bit halves so that no product is wider than 128 bits.
+
+/** The shortest reading of `x`, written into `into` the way `%g` spells a number, answering how many
+ * bytes it wrote. Thirty-two bytes is always enough.
+ *
+ * **The spelling is `%g`'s and only the digits are new**: the exponent form is chosen where `%g`
+ * chooses it -- a decimal exponent below -4, or at least the precision, which is fifteen or the digit
+ * count where that is larger -- with a sign and at least two exponent digits, and there are never
+ * trailing zeros or a trailing point. `-0` keeps its sign, and the non-finite values are `inf`,
+ * `-inf` and `nan`.
+ */
+private[sysl] shortest_real(x: real, into: []u8) -> usize
+    val bits = real_bits(x)
+    val negative = bits >> 63 != 0
+    val biased = u32((bits >> 52) & 0x7ff)
+    val fraction = bits & 0xfffffffffffff
+    var at: usize = 0
+
+    if biased == 0x7ff && fraction != 0 then return put_text(into, 0, "nan")
+
+    if negative
+        into[0] = u8('-')
+        at = 1
+
+    if biased == 0x7ff then return put_text(into, at, "inf")
+
+    if biased == 0 && fraction == 0
+        into[at] = u8('0')
+        return at + 1
+
+    val found = shortest_decimal(fraction, biased)
+    var digits: [20]u8
+    val first = digits_ulong(found.0, digits[..])
+    val count = digits.len - first
+    val shown = digits[first..]
+    val point = found.1 + int(count) - 1
+    val precision = if count > 15 then int(count) else 15
+
+    if point < -4 || point >= precision
+        into[at] = shown[0]
+        at += 1
+
+        if count > 1
+            into[at] = u8('.')
+            at = put_bytes(into, at + 1, shown[1..])
+
+        into[at] = u8('e')
+        into[at + 1] = if point < 0 then u8('-') else u8('+')
+        at += 2
+
+        val magnitude = if point < 0 then -point else point
+
+        if magnitude < 10
+            into[at] = u8('0')
+            at += 1
+
+        var exp_digits: [20]u8
+        val exp_first = digits_ulong(ulong(magnitude), exp_digits[..])
+        return put_bytes(into, at, exp_digits[exp_first..])
+
+    if point < 0
+        at = put_text(into, at, "0.")
+        for _ in 0..<-point - 1
+            into[at] = u8('0')
+            at += 1
+        return put_bytes(into, at, shown)
+
+    val whole = usize(point) + 1
+
+    if count <= whole
+        at = put_bytes(into, at, shown)
+        for _ in count..<whole
+            into[at] = u8('0')
+            at += 1
+        return at
+
+    at = put_bytes(into, at, shown[0..<whole])
+    into[at] = u8('.')
+    put_bytes(into, at + 1, shown[whole..])
+end shortest_real
+
+private put_bytes(into: []u8, at: usize, bytes: []const u8) -> usize
+    for i in 0..<bytes.len
+        into[at + i] = bytes[i]
+    at + bytes.len
+
+private put_text(into: []u8, at: usize, text: string) -> usize = put_bytes(into, at, text.bytes)
+
+// A `real`'s bits, read through its address -- the reinterpretation the value itself has no
+// conversion for.
+private real_bits(x: real) -> u64
+    var held = x
+    val p: *u64 = ptr_cast(&held)
+    *p
+
+/** The fewest digits naming the double whose fraction bits and biased exponent are given, as those
+ * digits and the power of ten they are scaled by: `(d, k)` reads as `d * 10^k`. The double must be
+ * finite and not zero.
+ */
+private shortest_decimal(fraction: u64, biased: u32) -> (u64, int)
+    // The significand and the exponent, less two more: the value and both edges of its interval
+    // are then `4m`, `4m + 2` and `4m - 1` or `4m - 2` times the same power of two, all integers.
+    var e2: int = 1 - 1023 - 52 - 2
+    var m2 = fraction
+
+    if biased != 0
+        e2 = int(biased) - 1023 - 52 - 2
+        m2 = (u64(1) << 52) | fraction
+
+    // A tie in the reader goes to the even significand, so an even value owns both edges.
+    val accept_edges = (m2 & 1) == 0
+    val mv = 4 * m2
+
+    // Below a power of two the neighbour is half as far away, so the lower edge is a quarter step
+    // rather than half of one -- except at the bottom of the exponent range, where the spacing does
+    // not change.
+    val mm_shift: u64 = if fraction != 0 || biased <= 1 then 1 else 0
+
+    var vr: u64 = 0
+    var vp: u64 = 0
+    var vm: u64 = 0
+    var e10 = 0
+    var vm_zeros = false
+    var vr_zeros = false
+
+    if e2 >= 0
+        val q = log10_pow2(e2) - (if e2 > 3 then 1 else 0)
+        val shift = -e2 + q + 125 + pow5_bits(q) - 1
+        val power = pow5_inv_split[q]
+
+        e10 = q
+        vr = mul_shift(mv, power, shift)
+        vp = mul_shift(mv + 2, power, shift)
+        vm = mul_shift(mv - 1 - mm_shift, power, shift)
+
+        // Dividing by 10^q drops q digits, and they can all be zeros only where 5^q divides the
+        // scaled value; above 10^21 no 55-bit significand is a multiple of 5^q.
+        if q <= 21
+            if mv % 5 == 0
+                vr_zeros = multiple_of_pow5(mv, q)
+            elif accept_edges
+                vm_zeros = multiple_of_pow5(mv - 1 - mm_shift, q)
+            elif multiple_of_pow5(mv + 2, q)
+                vp -= 1
+    else
+        val q = log10_pow5(-e2) - (if -e2 > 1 then 1 else 0)
+        val i = -e2 - q
+        val shift = q - (pow5_bits(i) - 125)
+        val power = pow5_split[i]
+
+        e10 = q + e2
+        vr = mul_shift(mv, power, shift)
+        vp = mul_shift(mv + 2, power, shift)
+        vm = mul_shift(mv - 1 - mm_shift, power, shift)
+
+        if q <= 1
+            // The dropped digits are all zeros: `mv` has at least two trailing zero bits.
+            vr_zeros = true
+
+            if accept_edges
+                vm_zeros = mm_shift == 1
+            else
+                vp -= 1
+        elif q < 63
+            vr_zeros = multiple_of_pow2(mv, q)
+
+    var removed = 0
+    var last_removed: u64 = 0
+    var output: u64 = 0
+
+    if vm_zeros || vr_zeros
+        // The general case, which has to know whether everything dropped was a zero.
+        while vp / 10 > vm / 10
+            vm_zeros = vm_zeros && vm % 10 == 0
+            vr_zeros = vr_zeros && last_removed == 0
+            last_removed = vr % 10
+            vr /= 10
+            vp /= 10
+            vm /= 10
+            removed += 1
+
+        if vm_zeros
+            while vm % 10 == 0
+                vr_zeros = vr_zeros && last_removed == 0
+                last_removed = vr % 10
+                vr /= 10
+                vp /= 10
+                vm /= 10
+                removed += 1
+
+        // Exactly half way, to the even digit.
+        if vr_zeros && last_removed == 5 && vr % 2 == 0 then last_removed = 4
+
+        val round_up = (vr == vm && (!accept_edges || !vm_zeros)) || last_removed >= 5
+        output = vr + (if round_up then 1 else 0)
+    else
+        // Nearly every value: nothing is ever a tie, so only the last digit dropped matters.
+        var round_up = false
+
+        if vp / 100 > vm / 100
+            round_up = vr % 100 >= 50
+            vr /= 100
+            vp /= 100
+            vm /= 100
+            removed += 2
+
+        while vp / 10 > vm / 10
+            round_up = vr % 10 >= 5
+            vr /= 10
+            vp /= 10
+            vm /= 10
+            removed += 1
+
+        output = vr + (if vr == vm || round_up then 1 else 0)
+
+    (output, e10 + removed)
+end shortest_decimal
+
+// The high bits of `m` times a 125-bit power, shifted right by `shift`: the power is split into
+// halves so that each partial product fits in 128 bits.
+private mul_shift(m: u64, power: u128, shift: int) -> u64
+    val low = u128(m) * u128(u64(power))
+    val high = u128(m) * (power >> 64)
+    u64(((low >> 64) + high) >> (shift - 64))
+
+// floor(log2(5^e)) + 1, exact for 0 <= e <= 3528.
+private pow5_bits(e: int) -> int = ((e * 1217359) >> 19) + 1
+
+// floor(log10(2^e)), exact for 0 <= e <= 1650.
+private log10_pow2(e: int) -> int = (e * 78913) >> 18
+
+// floor(log10(5^e)), exact for 0 <= e <= 2620.
+private log10_pow5(e: int) -> int = (e * 732923) >> 20
+
+private multiple_of_pow5(value: u64, p: int) -> bool
+    var v = value
+    var count = 0
+
+    while v % 5 == 0
+        v /= 5
+        count += 1
+
+    count >= p
+
+private multiple_of_pow2(value: u64, p: int) -> bool = (value & ((u64(1) << p) - 1)) == 0

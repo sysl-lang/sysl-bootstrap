@@ -109,9 +109,11 @@ val esink: *Stderr = ptr_cast(0usize)
 stderr() -> *Writer = esink
 
 /** The integers render in sysl, through `digits_long` and `digits_ulong` beside `display_int`. The
- * float still leans on `snprintf`, which is formatting rather than I/O: doing it in sysl is a large
- * job (correct shortest round-trip), so it waits until there is a reason -- a target without a C
- * library.
+ * float still leans on `snprintf`, which is formatting rather than I/O. What it prints is `%g`'s six
+ * significant digits, correctly rounded, and rounding to a precision the caller chose needs exact
+ * arithmetic over the whole value -- a different job from `shortest_real`'s, which finds the fewest
+ * digits and never rounds to a count it was given -- so it waits until there is a reason, such as a
+ * target without a C library.
  */
 printi(n: long)
     var buf: [24]u8

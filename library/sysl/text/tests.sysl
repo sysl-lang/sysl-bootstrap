@@ -520,19 +520,18 @@ real_renders_shortest()
     assert_eq(shortest(1e23), "1e+23")
     assert_eq(shortest(0.1 + 0.2), "0.30000000000000004")
 
-// A subnormal's neighbours are not evenly spaced, so a value down here can already round-trip at
-// fifteen digits without that being the shortest reading -- `5e-324` renders at fifteen digits as
-// `4.94065645841247e-324`, which reads back correctly and is fourteen characters longer than it
-// needs to be. These three each have a true shortest reading well under fifteen digits.
+// A subnormal's neighbours are far apart, so many short decimals read back as one -- `5e-324`
+// rounded to fifteen digits is `4.94065645841247e-324`, which reads back correctly and is fourteen
+// characters longer than it needs to be. These three each have a true shortest reading well under
+// fifteen digits.
 @test("a subnormal renders at its true shortest, not just what fifteen digits round-trips")
 real_renders_shortest_subnormal()
     assert_eq(shortest(5e-324), "5e-324")
     assert_eq(shortest(-5e-324), "-5e-324")
     assert_eq(shortest(1e-310), "1e-310")
 
-// Near the top of the subnormal range the spacing is as fine as the normal range's, so fifteen
-// digits already finds the true shortest reading -- these two are unchanged by the search added
-// for the cases above.
+// Near the top of the subnormal range the spacing is as fine as the normal range's, and the two
+// sides of the boundary each need all the digits they have.
 @test("the subnormal-normal boundary needs no shorter reading than fifteen digits already finds")
 real_renders_shortest_at_the_boundary()
     assert_eq(shortest(2.225073858507201e-308), "2.225073858507201e-308")
@@ -545,9 +544,8 @@ real_renders_shortest_at_the_boundary()
 str_is_unchanged()
     assert_eq(str(3.141592653589793), "3.14159")
 
-// Fifteen digits round-trips most reals and not all of them, which is the whole reason the search
-// has three steps rather than one. 0.1 needs no more than one digit and 1/3 needs sixteen; the
-// assertion here is the property itself, over values chosen to reach each step.
+// A reading is only as good as the reader that takes it back, so the assertion here is the property
+// itself: 0.1 needs one digit, 1/3 sixteen, and the extremes of the range seventeen.
 private assert_round_trip(x: real)
     val same = parse_real(shortest(x)) match
         Ok(back) -> back == x
@@ -574,22 +572,133 @@ real_round_trips()
     assert_round_trip(-0.0)
 
 // `%g` chooses the exponent form for a value whose plain decimal would be long, and this function
-// leaves that choice where it found it: it decides the precision and nothing else. A `1` with no
-// point in it is the same fact one step smaller -- writing a number a format's reader will take as
-// an integer is that format's problem, not the number's.
+// makes that choice where `%g` makes it: it decides the digits and nothing else. A `1` with no point
+// in it is the same fact one step smaller -- writing a number a format's reader will take as an
+// integer is that format's problem, not the number's.
 @test("the exponent form and a whole number are left as %g spells them")
 real_keeps_its_form()
     assert_eq(shortest(1e300), "1e+300")
     assert_eq(shortest(1.0), "1")
 
-// A value with no decimal reading never compares equal to anything, so the loop cannot stop early
-// and the seventeen-digit rendering is what comes out. That it is `%g`'s spelling rather than a
-// name this library chose is deliberate: a format that wants `null` here is writing its own syntax.
-@test("an infinity and a NaN fall through the search")
+// A value with no decimal reading is spelled the way `%g` spells it rather than with a name this
+// library chose, and that is deliberate: a format that wants `null` here is writing its own syntax.
+@test("an infinity and a NaN are spelled as %g spells them")
 real_non_finite()
     assert_eq(shortest(real.infinity()), "inf")
     assert_eq(shortest(-real.infinity()), "-inf")
     assert_eq(shortest(real.nan()), "nan")
+
+// The digits are the ones JavaScript and Python print -- the fewest that read back, the closest of
+// those, a tie to the even digit -- in `%g`'s spelling around them. Each value below is one a search
+// over `printf` precisions gets wrong or one that sits on an edge of the spelling.
+@test("the digits are the ones JavaScript prints")
+real_digits_are_javascripts()
+    // Below a power of two the neighbour is half as far away, so the sixteen-digit rounding
+    // `...062` does not read back while `...063`, one digit shorter than the exact value, does.
+    assert_eq(shortest(5.9604644775390625e-8), "5.960464477539063e-08")
+    assert_eq(shortest(7.120236347223045e-307), "7.120236347223045e-307")
+    assert_eq(shortest(5.684341886080802e-14), "5.684341886080802e-14")
+    assert_eq(shortest(9.5367431640625e-7), "9.5367431640625e-07")
+
+    assert_eq(shortest(5e-324), "5e-324")
+    assert_eq(shortest(1.5e-323), "1.5e-323")
+    assert_eq(shortest(1.7976931348623157e308), "1.7976931348623157e+308")
+    assert_eq(shortest(0.3), "0.3")
+    assert_eq(shortest(2.0 / 3.0), "0.6666666666666666")
+    assert_eq(shortest(4.35), "4.35")
+    assert_eq(shortest(-2.5e-10), "-2.5e-10")
+    assert_eq(shortest(123456789012345680000.0), "1.2345678901234568e+20")
+    assert_eq(shortest(9007199254740993.0), "9007199254740992")
+    assert_eq(shortest(9223372036854775808.0), "9.223372036854776e+18")
+    assert_eq(shortest(123456789012345.6), "123456789012345.6")
+    assert_eq(shortest(-0.0), "-0")
+    assert_eq(shortest(0.0), "0")
+
+// Where the plain decimal gives way to the exponent: below 1e-4, and at fifteen digits before the
+// point -- or at the digit count, where a reading needs sixteen or seventeen.
+@test("the exponent form starts where %g starts it")
+real_exponent_boundaries()
+    assert_eq(shortest(1e-4), "0.0001")
+    assert_eq(shortest(1e-5), "1e-05")
+    assert_eq(shortest(1e-6), "1e-06")
+    assert_eq(shortest(1e-7), "1e-07")
+    assert_eq(shortest(1e14), "100000000000000")
+    assert_eq(shortest(1e15), "1e+15")
+    assert_eq(shortest(100.0), "100")
+    assert_eq(shortest(1.5), "1.5")
+    assert_eq(shortest(1e21), "1e+21")
+    assert_eq(shortest(1e22), "1e+22")
+
+private real_of_bits(b: u64) -> real
+    var held = b
+    val p: *real = ptr_cast(&held)
+    *p
+
+// Each binade has its own spacing and the one power of two at its foot is where the spacing
+// changes, which is the case a reading most often gets wrong -- so every one of them, subnormal to
+// the largest, both signs.
+@test("every power of two reads back as itself")
+real_powers_of_two_round_trip()
+    var x = 5e-324
+
+    for _ in 0..<2098
+        assert_round_trip(x)
+        assert_round_trip(-x)
+        x *= 2.0
+
+    assert_eq(x, real.infinity())
+
+// The digits in front of the exponent, less leading and trailing zeros.
+private significant_digits(text: string) -> int
+    var first = -1
+    var last = -1
+    var at = 0
+
+    for b in text.bytes
+        if b == u8('e') then break
+        if b >= u8('0') && b <= u8('9')
+            if b != u8('0')
+                if first < 0 then first = at
+                last = at
+            at += 1
+
+    if first < 0 then 0 else last - first + 1
+
+private at_precision(x: real, digits: int) -> string
+    var sink = byte_sink()
+
+    display_real(x, &sink, FormatSpec(0, digits, false))
+    from_utf8(sink.text()).unwrap()
+
+// Ten thousand bit patterns from a fixed-seed generator, every one finite: each rendering reads back
+// as the value, and one digit fewer does not -- the nearest decimal a digit shorter is the only one
+// that could have, so its failing to read back is what says no shorter reading exists.
+@test("random reals read back, and a digit fewer does not")
+real_random_bits_are_shortest()
+    var state: u64 = 20260924
+
+    for _ in 0..<10000
+        state = state * 6364136223846793005 + 1442695040888963407
+        val x = real_of_bits(state)
+
+        if x != x || x == real.infinity() || x == -real.infinity() then continue
+
+        val text = shortest(x)
+        val back = parse_real(text) match
+            Ok(v) -> v == x
+            Err(_) -> false
+
+        assert(back, "a random real did not survive its own shortest rendering")
+        assert(!text.contains("0e"), "a rendering kept a trailing zero")
+
+        val n = significant_digits(text)
+
+        if n > 1
+            val shorter = parse_real(at_precision(x, n - 1)) match
+                Ok(v) -> v == x
+                Err(_) -> false
+
+            assert(!shorter, "a reading one digit shorter also reads back")
 
 // -- trimming a string, which is Unicode, against trimming bytes, which is not ---------------------
 //
