@@ -1050,9 +1050,9 @@ private def libPkgNeeds(roots: List[String]): Either[String, List[LibNeed]] =
  * ==A library linked from its archive is asked twice more==
  *
  * Where `mode` marks the module (`LinkMode`), `--static --libs` replaces `--libs` on the link line and
- * each of its libraries with an archive is recorded in `SearchPaths.archives`; one the program links
- * directly with none stops the build here, naming the file and where it was looked for
- * (`StaticLink.archives`).
+ * each of its libraries with an archive is recorded in `SearchPaths.archives`. One the program links
+ * directly with none stops the build here, naming the file and where it was looked for, when a `link`
+ * list named it; under `static` it is linked dynamically and traced (`StaticLink.archives`).
  */
 private def probeLibs(needs: List[LibNeed], supplied: Set[String], target: Target,
                       verbose: Boolean, mode: LinkMode = LinkMode.Dynamic,
