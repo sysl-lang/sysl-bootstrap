@@ -228,7 +228,7 @@ trait ContractEmitter extends ArcEmitter with ScalarEmitter {
 
   /** **What a member is told about its receiver** — the struct's `invariant`, laid down as an
    * `llvm.assume` on entry to every function whose receiver is a struct that carries clauses
-   * (`reference/errors.md § What the optimizer is told`).
+   * (`reference/verification.md § What the optimizer is told`).
    *
    * A clause is checked at every write of the struct, at its construction and at its zero, so every
    * value of the type a member can be handed is one that passed the check: control reaching a

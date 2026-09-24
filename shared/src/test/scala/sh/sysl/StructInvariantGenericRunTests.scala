@@ -112,8 +112,22 @@ class StructInvariantGenericRunTests extends AnyFreeSpec with RunSupport {
       exits(Window + "struct Frame\n    w: Window\n    k: int\nvar f: Frame\nprint(f.k)")
     }
 
-    "as module storage" in {
-      exits(Window + "var w: Window\n\nmain()\n    print(w.hi)")
+    // Storage a module declares with no initializer is zeroed in the object file unless something
+    // has to run, and a zero holding a clause is exactly something that has to run.
+    "as module storage" - {
+      def program(clause: String) =
+        List(
+          "frame.sysl" -> (s"module frame\n\nstruct Window\n    lo: int\n    hi: int\n    invariant $clause\n\n" +
+            "var w: Window\n\nwidth() -> int = w.hi - w.lo\n"),
+          "main.sysl" -> "import frame.width\n\nprint(width())\n")
+
+      "one whose zero breaks the clause stops the program" in {
+        exitsOf(program("lo < hi")*)
+      }
+
+      "and one whose zero satisfies it runs" in {
+        runOf(program("lo <= hi")*) shouldBe "0\n"
+      }
     }
 
     "and a generic struct's zero at its instantiation" in {

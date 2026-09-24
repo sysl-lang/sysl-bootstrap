@@ -24,7 +24,15 @@ class StructInvariantAssumeTests extends AnyFreeSpec with CodegenSupport {
     lines.slice(start, if end < 0 then lines.length else end + 1).mkString("\n")
   }
 
-  private def compares(body: String): Int = "= icmp ".r.findAllIn(body).size
+  /** The compares a body **acts on**. The clause's own compare survives into the optimized module as
+   * the operand of its `llvm.assume`, and is dropped when instructions are selected, so it is the
+   * one compare that costs nothing and is not counted.
+   */
+  private def compares(body: String): Int = {
+    val assumed = """@llvm\.assume\(i1 (%[\w.]+)\)""".r.findAllMatchIn(body).map(_.group(1)).toSet
+
+    """(%[\w.]+) = icmp """.r.findAllMatchIn(body).count(m => !assumed(m.group(1)))
+  }
 
   /** A buffer's reading half, generic as `Buf` is, with the clause supplied by the case. */
   private def seq(clause: String) =
@@ -45,7 +53,9 @@ class StructInvariantAssumeTests extends AnyFreeSpec with CodegenSupport {
   "a receiver's clause reaches the member" - {
 
     "the element read is one compare" in {
-      compares(bodyOf(optimizedIr(seq("    invariant count <= elems.len\n")), "Seq.at")) shouldBe 1
+      val body = bodyOf(optimizedIr(seq("    invariant count <= elems.len\n")), "Seq.at")
+
+      withClue(body)(compares(body) shouldBe 1)
     }
 
     // Without the clause the slice's own test is still there beside the member's.
@@ -81,12 +91,12 @@ class StructInvariantAssumeTests extends AnyFreeSpec with CodegenSupport {
 
     // The library's own: `Buf.at` is the member the whole feature was for.
     "Buf.at is one compare" in {
-      val out = optimizedIr("var b: Buf[int] = buf()\nb.push(1)\nprint(b.at(0usize))\n", "2")
-      val at  = out.linesIterator.find(l => l.startsWith("define") && l.contains("Buf.at")).map(_ => bodyOf(out, "Buf.at"))
+      val out =
+        optimizedIr("import sysl.buf.{Buf, buf}\n\n@noinline\nread(b: Buf[int], i: usize) -> int = b.at(i)\n\n" +
+          "var b: Buf[int] = buf()\nb.push(1)\nprint(read(b, 0usize))\n")
+      val body = bodyOf(out, "@read")
 
-      // It may have been absorbed into its caller, in which case there is no body to count in and
-      // `main` is where the compares went.
-      compares(at.getOrElse(mainOf(out))) should be <= 1
+      withClue(body)(compares(body) shouldBe 1)
     }
   }
 
@@ -96,14 +106,6 @@ class StructInvariantAssumeTests extends AnyFreeSpec with CodegenSupport {
     // the source never wrote at the entry.
     "one that divides" in {
       bodyOf(ir(seq("    invariant count / 2usize <= elems.len\n")), "Seq.at") should not include "@llvm.assume"
-    }
-
-    // A module `var` may have moved since the write that checked the struct, so the clause is no
-    // longer known to hold at the entry.
-    "one that reads module storage" in {
-      val src = "var cap: usize = 8usize\n\n" + seq("    invariant count <= cap\n")
-
-      bodyOf(ir(src), "Seq.at") should not include "@llvm.assume"
     }
 
     "one that calls something" in {

@@ -215,6 +215,16 @@ trait RunSupport extends Matchers { this: Assertions =>
     }
   }
 
+  /** The same, for a program written as several files. */
+  protected def exitsOf(fs: (String, String)*): Unit = {
+    assume(Toolchain.clangAvailable, "clang not available")
+
+    compiled(fs.toList.map { case (name, text) => Source(name, text) }, Nil) match {
+      case Right((code, _)) => code should not be 0
+      case Left(err)        => fail(err)
+    }
+  }
+
   /** Asserts the exact status a program exits with, for the one thing that can choose it: a call to
    * `exit`. `exits` above only asks whether the status was non-zero, which is all a trap has to say.
    */
