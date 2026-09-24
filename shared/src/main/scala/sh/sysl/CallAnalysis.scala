@@ -329,11 +329,9 @@ trait CallAnalysis extends OperatorCalls {
     val nnew = TStructNew(s, checkArgs(s.name, s.fields, args, pre))
 
     // A struct with `invariant` clauses is checked the moment it is built: every construction site —
-    // `var a: T = T(…)`, `a = T(…)` — flows through here, so one wrap covers them all. Generic
-    // structs have no synthesised invariant function yet (rejected at the declaration), so they build
-    // unchecked.
-    if decl.invariants.nonEmpty && decl.tparams.isEmpty then TStructInvCheck(nnew, s, invKey(name))
-    else nnew
+    // `var a: T = T(…)`, `a = T(…)` — flows through here, so one wrap covers them all. A generic one
+    // is checked by its clauses made real at this construction's type arguments.
+    if decl.invariants.nonEmpty then TStructInvCheck(nnew, s, invFnFor(s)) else nnew
   }
 
   /** A variant construction — `Circle(3)`, or a bare `Empty`.

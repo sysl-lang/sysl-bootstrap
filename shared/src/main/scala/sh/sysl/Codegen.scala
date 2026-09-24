@@ -689,6 +689,9 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
 
     for (cond, _) <- f.requires if !ghostly(cond) do emitContract(cond, "require")
 
+    // A member is handed a receiver that passed its struct's clauses, and says so to the optimizer.
+    assumeReceiverInvariant(f)
+
     // Each `old(e)` snapshots the entry value into a hidden owned slot, exactly as a `var` would,
     // so a postcondition can compare the returned state against the state on entry. The slot is
     // released with every other local at each return.

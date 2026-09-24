@@ -220,6 +220,68 @@ trait ContractEmitter extends ArcEmitter with ScalarEmitter {
         case _ => ()
       resultSSA = saved
 
+  /** Every struct's synthesised `invariant` function by the name it is emitted under — one per
+   * instantiation, for a generic struct — for the assume below to read its clause out of.
+   */
+  private lazy val invariantFuncs: Map[String, TFunc] =
+    program.funcs.filter(_.name.contains("$inv")).map(f => f.name -> f).toMap
+
+  /** **What a member is told about its receiver** — the struct's `invariant`, laid down as an
+   * `llvm.assume` on entry to every function whose receiver is a struct that carries clauses
+   * (`reference/errors.md § What the optimizer is told`).
+   *
+   * A clause is checked at every write of the struct, at its construction and at its zero, so every
+   * value of the type a member can be handed is one that passed the check: control reaching a
+   * member is control that got past the trap, exactly as it is after a callee's `ensure`. What
+   * the fact buys is a test the member does not have to make twice — `Buf.at` compares the index
+   * with `count` to panic with the length, and the slice under it compares it with `elems.len`;
+   * told `count <= elems.len`, the second compare is implied by the first and folds.
+   *
+   * **What it rests on is the checking, so what the checking cannot reach is outside it**, as it is
+   * for every other guarantee about memory reached through a raw pointer
+   * (`reference/memory.md`): bytes written into the struct through a `*T` of another type, or by
+   * C, are the writer's promise to keep.
+   *
+   * Only a clause that lowers to arithmetic and comparisons over the receiver's fields is repeated,
+   * by the test `assumeEnsures` uses (`tryPure`) — one that calls something, divides, or allocates
+   * is left as the check it already is.
+   */
+  protected def assumeReceiverInvariant(f: TFunc): Unit =
+    f.params.headOption match
+      case Some(("self", ty)) =>
+        val (recv, target) = Type.unqualified(ty) match
+          case s: Type.Struct => (Some(TLoad("self", ty)), Some(s))
+          case p: Type.Ptr =>
+            Type.pointee(p).map(Type.unqualified) match
+              case Some(s: Type.Struct) => (Some(TDeref(TLoad("self", ty), s)), Some(s))
+              case _                    => (None, None)
+          case _ => (None, None)
+
+        for
+          r   <- recv
+          s   <- target
+          inv <- invariantFuncs.get(Type.mangled(s"${s.base}$$inv", s.targs))
+          if inv.body.stmts.isEmpty && inv.params.length == s.fields.length
+          clause <- inv.body.result
+          if !ghostly(clause)
+          ported <- ContractAssume.substitute(clause,
+                      inv.params.map(_._1).zip(s.fields.zipWithIndex.map { case ((_, ft), i) =>
+                        TField(r, i, ft)
+                      }).toMap)
+        do
+          tryPure {
+            pushTemps()
+            val ok = genExpr(ported)
+
+            popTemps()
+            ok
+          } match
+            case Some(ok) if ok != Val.Nothing =>
+              usesAssume = true
+              emit(Inst.Call(None, LType.Void, Val.Global(Llvm.assume.name), List(Arg(i1, ok))))
+            case _ => ()
+      case _ => ()
+
   /** Sets up a `variant`'s two slots at the point the loop is entered (`reference/verification.md §
    * invariant and variant on a loop`), then emits the loop.
    *

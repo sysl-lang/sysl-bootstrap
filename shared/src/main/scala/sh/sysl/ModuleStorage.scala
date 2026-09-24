@@ -107,7 +107,7 @@ trait ModuleStorage extends ModuleFiles {
 
     inTestBody = testOnlyDecls(key)
 
-    val init = decl.init.map { e =>
+    val written = decl.init.map { e =>
       val t = analyzeExpr(e, Some(ty))
 
       if disagree(t.ty, ty) then
@@ -116,6 +116,12 @@ trait ModuleStorage extends ModuleFiles {
       checkNoMaterialized(t)
       t
     }
+
+    // A zero that holds a struct carrying clauses is checked as a construction is, which makes it
+    // an initializer that runs rather than an image the object file carries — exactly what storage
+    // initialized by `Window(2, 10)` already is (`checkedZero`).
+    val init = written.orElse(
+      Option.when(!Type.zeroSized(ty) && hasZero(ty))(checkedZero(ty)).filterNot(_.isInstanceOf[TZero]))
 
     if Type.zeroSized(ty) then
       err(s"'${qn(key)}' cannot be module storage: ${show(ty)} has no representation, so there is " +

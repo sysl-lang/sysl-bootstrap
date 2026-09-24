@@ -23,11 +23,61 @@ import scala.collection.mutable
  */
 trait Aliasing extends RefBindings {
 
-  /** Whether a struct type carries clauses this machinery has to honour. A generic one is refused
-   * where it is declared, so it never reaches a check that would have to be instantiated first.
-   */
+  /** Whether a struct type carries clauses this machinery has to honour. */
   protected def carriesInvariants(s: Type.Struct): Boolean =
-    structDecls.get(s.base).exists(d => d.invariants.nonEmpty && d.tparams.isEmpty)
+    structDecls.get(s.base).exists(_.invariants.nonEmpty)
+
+  /** The instantiations whose field types have been held to the read rule, so each is asked once. */
+  private val readsChecked = mutable.Set.empty[String]
+
+  /** The function a check of this struct calls — the synthesised `<Struct>$inv`, made real at the
+   * struct's own type arguments where the struct is generic.
+   *
+   * **A generic struct's read rule is asked here rather than at its declaration**, because whether a
+   * clause reads through something the struct does not own depends on what the parameters are: a
+   * field of type `T` is the struct's own storage at `int` and a pointer's far side at `*Inner`. So
+   * each instantiation's field types are held to the rule a non-generic struct's are held to where
+   * it is declared, and the diagnostic is the same one, at the clause.
+   */
+  protected def invFnFor(s: Type.Struct): String =
+    val decl = structDecls(s.base)
+    val key  = invKey(s.base)
+
+    if decl.tparams.isEmpty then key
+    else
+      if readsChecked.add(s.name) then checkInvariantReads(decl, s.fields.toMap)
+      instantiateFunc(funcDecls(key), s.targs)
+
+  /** The zero value a declaration with no initializer starts at, checked against every clause it
+   * holds (`reference/errors.md § Struct invariants`).
+   *
+   * **A zero is a construction the program did not spell**, and a struct whose clause the zero does
+   * not satisfy — `invariant lo < hi` — would otherwise begin its life broken with nothing having
+   * checked it. That is a hole in the checking, and it is a hole in what the optimizer is told too:
+   * a clause is assumed at the entry of the struct's members (`ContractEmitter`), which is sound only
+   * if no value of the type ever got past a check. So each struct carrying clauses that lies inside
+   * the zero — the type itself, a field of it, an element of an array — is checked once, at its own
+   * zero. The check is of a constant and folds away wherever the zero satisfies it.
+   */
+  protected def checkedZero(ty: Type): TExpr =
+    def owed(t: Type): List[Type.Struct] = Type.unqualified(t) match
+      case s: Type.Struct =>
+        (if carriesInvariants(s) then List(s) else Nil) ::: s.fields.flatMap(f => owed(f._2))
+      case Type.Array(n, e) if n > 0 => owed(e)
+      case _                         => Nil
+
+    owed(ty).distinctBy(_.name) match
+      case Nil => TZero(ty)
+      case owes =>
+        val checks = owes.map(s => TExprStmt(TStructInvCheck(TZero(s), s, invFnFor(s)).setPos(currentPos)))
+
+        TBlockExpr(TBlock(checks, Some(TZero(ty)), ty)).setPos(currentPos)
+
+  /** Whether an element reached by indexing a value of this type is on the far side of it — a
+   * view's element, which has an identity of its own — rather than storage the value holds, as an
+   * array's element is.
+   */
+  private def farSide(t: Type): Boolean = Type.underlying(Type.unqualified(t)).isInstanceOf[Type.View]
 
   /** Every struct a write through `place` obliges a re-check of: what to re-read, its type, and the
    * predicate to call, innermost first.
@@ -39,12 +89,17 @@ trait Aliasing extends RefBindings {
    */
   protected def invCheckFor(place: TExpr): List[(TExpr, Type.Struct, String)] =
     def owed(recv: TExpr): List[(TExpr, Type.Struct, String)] = recv.ty match
-      case s: Type.Struct if carriesInvariants(s) => List((recv, s, invKey(s.base)))
+      case s: Type.Struct if carriesInvariants(s) => List((recv, s, invFnFor(s)))
       case _                                      => Nil
 
     place match
       case TField(recv, _, _) => owed(recv) ++ invCheckFor(recv)
-      case TIndex(recv, _, _) => invCheckFor(recv)
+      // A view's element is on its far side, which no clause may read (`checkInvariantReads`), so
+      // writing one can break nothing the struct holding the view promised and is owed no
+      // re-check. `self.elems[i] = v` in a buffer whose clause reads `elems.len` changes an element
+      // and leaves the length where it was.
+      case TIndex(recv, _, _) if farSide(recv.ty) => Nil
+      case TIndex(recv, _, _)                     => invCheckFor(recv)
       // A `ref` name is a place written shorter (`reference/memory.md § ref — a name for a place`),
       // so the walk carries on through what it stands for. This is the whole of why a ref keeps the
       // checking a `*T` would have severed: there is still a place here to walk outward through,
@@ -71,7 +126,10 @@ trait Aliasing extends RefBindings {
             val path = s.fields(i)._1 :: below
             (if carriesInvariants(s) then List((s, path)) else Nil) ::: walk(recv, path)
           case _ => Nil
-      case TIndex(recv, _, _) => walk(recv, below)
+      // An alias of a view's element is an alias of the far side, which no struct holding the view
+      // owns — `&b.elems[0]` names storage no clause may read, so it is below no promise.
+      case TIndex(recv, _, _) if farSide(recv.ty) => Nil
+      case TIndex(recv, _, _)                     => walk(recv, below)
       // As in `invCheckFor`: a ref is a shorter spelling of the place it stands for, and the path a
       // clause would be told about is the one through that place.
       case TLoad(n, _) if refPlaces.contains(n) => walk(refPlaces(n), below)
@@ -275,7 +333,9 @@ trait Aliasing extends RefBindings {
    * the alias carry no promise it could break.
    */
   protected def checkSliceable(base: TExpr, view: Type): Unit =
-    if !Type.readOnlyView(view) then
+    // Slicing a view makes a view of **its** storage, which is on the far side and no clause's to
+    // read — `self.elems[..<self.count]` shares the buffer's elements and leaves its length alone.
+    if !Type.readOnlyView(view) && !farSide(base.ty) then
       for (s, read) <- severed(base) do
         err(s"this view may be written, and it views storage inside ${show(s)}, whose invariant reads " +
           s"'${read.mkString(".")}' — a '${show(view)}' names no ${show(s)}, so a write through it would " +

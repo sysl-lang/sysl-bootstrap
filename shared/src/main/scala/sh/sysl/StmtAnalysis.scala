@@ -723,7 +723,7 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
       noThreadLocal(name, perThread)
       val ty = typOpt.map(rt).getOrElse(err(s"'$name' needs either a type or an initial value"))
       if !hasZero(ty) then err(s"${show(ty)} has no zero value, so '$name' needs an initial value")
-      List(TVarDecl(declare(name, ty), ty, TZero(ty), boundary(name, align)))
+      List(TVarDecl(declare(name, ty), ty, checkedZero(ty), boundary(name, align)))
 
     // A statement's value is nobody's, so whatever branching it contains is analyzed knowing that.
     case ExprStmt(e) =>

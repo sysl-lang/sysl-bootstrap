@@ -65,16 +65,31 @@ object ContractAssume {
       port(clause, sub, hasResult)
   }
 
+  /** A struct's `invariant` clause, read over a receiver's fields rather than over the parameters
+   * its synthesised function takes them as — `sub` maps each field's name to the read of it.
+   *
+   * **A module-level name is refused here where `atCall` keeps it**, because the two facts are
+   * about different moments. A postcondition is repeated on the instruction after the check that
+   * established it; an invariant is assumed at a member's entry, arbitrarily long after the write
+   * that checked it, and a `var` the clause read may have moved in between with nothing re-checking
+   * the struct. A constant never reaches here as a name — it is folded into the clause — so what
+   * this gives up is exactly the storage that could have changed.
+   */
+  def substitute(clause: TExpr, sub: Map[String, TExpr]): Option[TExpr] =
+    port(clause, sub, hasResult = false, globals = false)
+
   /** The clause in the caller's terms, or nothing. A parameter the substitution has no entry for is
    * one whose argument could not be moved here, and a clause naming it cannot be repeated at all.
    */
-  private def port(e: TExpr, sub: Map[String, TExpr], hasResult: Boolean): Option[TExpr] = {
-    def go(x: TExpr) = port(x, sub, hasResult)
+  private def port(e: TExpr, sub: Map[String, TExpr], hasResult: Boolean,
+                   globals: Boolean = true): Option[TExpr] = {
+    def go(x: TExpr) = port(x, sub, hasResult, globals)
 
     e match
-      case _: TIntLit | _: TFloatLit | _: TBoolLit | _: TNullLit | _: TUnitLit | _: TStrLit |
-          _: TGlobal =>
+      case _: TIntLit | _: TFloatLit | _: TBoolLit | _: TNullLit | _: TUnitLit | _: TStrLit =>
         Some(e)
+
+      case _: TGlobal => Option.when(globals)(e)
 
       case _: TResult => Option.when(hasResult)(e)
 

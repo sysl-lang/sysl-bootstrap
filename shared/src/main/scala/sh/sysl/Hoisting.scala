@@ -549,21 +549,26 @@ trait Hoisting extends HoistMembers {
       val key  = Modules.qualify(currentModule, s.name)
       val ikey = invKey(key)
 
-      if s.tparams.nonEmpty then
-        at(s.pos)(err(s"invariants on generic structs are not supported yet — '${s.name}'"))
-      else
-        val cond   = s.invariants.reduce((a, b) => Binary("&&", a, b))
+      val cond = s.invariants.reduce((a, b) => Binary("&&", a, b))
+
+      // The synthetic function takes the fields by value, so its parameters are written without
+      // whatever qualifier the field carried — a `volatile u32` field is a `u32` argument, exactly
+      // as it is everywhere else a register is read. A clause that reads one is refused below;
+      // stripping here is what keeps that the *only* thing said about it.
+      val params = s.fields.map(p => p.copy(typ = unqualifiedRef(p.typ)).setPos(p.pos))
+
+      // A **generic** struct's clauses are a generic function over the struct's own parameters,
+      // with its bounds — so the body is checked once against the bounds by the definition-time
+      // pass, as any generic body is, and made real per instantiation by the check site
+      // (`invFnFor`). What the clauses may read depends on what the parameters turn out to be, so
+      // that question is asked there too, of each instantiation's field types.
+      funcDecls(ikey) = FuncDecl(ikey, s.tparams, params, Some(NamedType("bool")),
+        List(ExprStmt(cond)), s.bounds, variadic = false, tvalues = s.tvalues).setPos(s.pos)
+      declScope(ikey) = currentScope
+
+      if s.tparams.isEmpty then
         val ftypes = s.fields.map(p => (p.name, recover(Type.Unknown)(resolveQualified(p.typ, Map.empty))))
 
-        // The synthetic function takes the fields by value, so its parameters are written without
-        // whatever qualifier the field carried — a `volatile u32` field is a `u32` argument, exactly
-        // as it is everywhere else a register is read. A clause that reads one is refused below;
-        // stripping here is what keeps that the *only* thing said about it.
-        val params = s.fields.map(p => p.copy(typ = unqualifiedRef(p.typ)).setPos(p.pos))
-
-        funcDecls(ikey) = FuncDecl(ikey, Nil, params, Some(NamedType("bool")),
-          List(ExprStmt(cond)), Map.empty, variadic = false).setPos(s.pos)
-        declScope(ikey) = currentScope
         funcInsts(ikey) = (ftypes.map((n, t) => (n, Type.unqualified(t))), Type.Bool)
 
         // What the clauses may read is settled here, where the field types have just been resolved

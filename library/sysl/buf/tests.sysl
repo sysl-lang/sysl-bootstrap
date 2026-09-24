@@ -356,6 +356,46 @@ removing_past_the_count_traps()
     b.push(1)
     b.remove(1)
 
+// -- the count never passes the storage -----------------------------------------------------------
+//
+// The clause every member is told on entry, and so the one every write has to keep. The fields are
+// public, so the writes that could break it are a caller's as much as the module's -- and each is
+// refused where it is made rather than left for the next read to find.
+
+@test("a buffer with no initializer is the empty one, and grows")
+a_zero_buffer_is_empty()
+    var b: Buf[int]
+
+    assert_eq(b.len(), 0)
+    b.push(7)
+    assert_eq(b.at(0), 7)
+end a_zero_buffer_is_empty
+
+@test(should_trap)
+moving_the_count_past_the_storage_traps()
+    var b: Buf[int] = buf()
+
+    b.push(1)
+    b.count = b.elems.len + 1
+
+@test("but moving it within the storage is not refused")
+moving_the_count_within_the_storage_is_fine()
+    var b: Buf[int] = buf()
+
+    b.extend([1, 2, 3])
+    b.truncate(1)
+    b.count = 3
+
+    assert_eq(b.at(2), 3)
+end moving_the_count_within_the_storage_is_fine
+
+@test(should_trap)
+taking_the_storage_from_under_the_count_traps()
+    var b: Buf[int] = buf()
+
+    b.push(1)
+    b.elems = []
+
 // -- a buffer is the sequence it holds ------------------------------------------------------------
 //
 // Both `Eq` and `Display` delegate to `view()`, so what is asserted here is that the storage past

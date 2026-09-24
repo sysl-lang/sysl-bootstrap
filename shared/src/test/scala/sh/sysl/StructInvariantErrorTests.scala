@@ -3,7 +3,7 @@ package sh.sysl
 import org.scalatest.freespec.AnyFreeSpec
 
 /** Compile-time diagnostics for a misused `invariant`: a clause that is not a `bool`, one that
- * names something not in scope, an invariant on a generic struct (not supported yet), and the
+ * names something not in scope, a generic struct's clause its bounds do not license, and the
  * aliases a clause forbids — which is the larger half of the file, because a clause is checked at
  * the write by walking the *place*, and every one of these is a way of reaching the storage with no
  * place that names the struct.
@@ -40,8 +40,26 @@ class StructInvariantErrorTests extends AnyFreeSpec with CodegenSupport {
     err("struct Account\n    balance: int\n    invariant blance >= 0\nvar a = Account(1)") should include("blance")
   }
 
-  "an invariant on a generic struct is not supported yet" in {
-    err("struct Box[T]\n    v: T\n    invariant true\nvar b = Box(1)") should include("generic")
+  /* A generic struct's clauses are a generic body over the struct's parameters, checked once against
+   * the bounds it declares — so the mistakes are reported at the declaration, as any generic body's
+   * are, and not once per instantiation in terms of whatever type it was made at.
+   */
+  "a generic struct's clause is held to the struct's own bounds" - {
+    "a non-bool clause is refused as a non-generic one is" in {
+      val e = err("struct Box[T]\n    v: T\n    n: int\n    invariant n + 1\nvar b = Box(1, 2)")
+
+      e should include("an 'invariant' must be a 'bool'")
+      e should not include "$inv"
+    }
+
+    "a comparison the parameter is not bounded for is refused" in {
+      err("struct Span[T]\n    lo: T\n    hi: T\n    invariant lo <= hi\nvar s = Span(1, 2)") should include("Ord")
+    }
+
+    "and the bounded one compiles" in {
+      ir("struct Span[T: Ord]\n    lo: T\n    hi: T\n    invariant lo <= hi\nvar s = Span(1, 2)\nprint(s.lo)") should
+        include("$inv")
+    }
   }
 
   /* The whole point of refusing at the `&` is that the pointer's *type* is what is wrong with it: a

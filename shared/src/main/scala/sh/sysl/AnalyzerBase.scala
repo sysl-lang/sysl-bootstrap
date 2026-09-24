@@ -465,6 +465,8 @@ trait AnalyzerBase extends Scoping {
   protected def analyzePlace(target: Expr, what: String, writes: Boolean = true): TExpr
   protected def requirePlace(t: TExpr, target: Expr, what: String, writes: Boolean = true): TExpr
   protected def invCheckFor(place: TExpr): List[(TExpr, Type.Struct, String)]
+  protected def invFnFor(s: Type.Struct): String
+  protected def carriesInvariants(s: Type.Struct): Boolean
   protected def describe(target: Expr): String
   /** Pairs each setter in a member list with the property it writes, filling in the parameter type
    * the source deliberately leaves out (`reference/declarations.md § A property may be settable`).
