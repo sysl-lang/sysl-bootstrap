@@ -98,6 +98,36 @@ class StructInvariantAssumeTests extends AnyFreeSpec with CodegenSupport {
 
       withClue(body)(compares(body) shouldBe 1)
     }
+
+    // The other side of the bargain: every write of `count` or `elems` re-checks the clause, and in
+    // the members that write them the re-check is settled by what the member already knows — the
+    // compare that chose the arm, the growth's `ensure`, the entry assume. A trap left in any of
+    // these is a compare every append, pop or truncate would pay for the clause.
+    "Buf's own writers keep no re-check the optimizer could not settle" in {
+      val out = optimizedIr(
+        """import sysl.buf.{Buf, buf}
+          |
+          |@noinline
+          |churn(n: int, xs: []const int) -> int
+          |    var b: Buf[int] = buf()
+          |    var i = 0
+          |
+          |    while i < n
+          |        b.push(i)
+          |        i += 1
+          |
+          |    b.extend(xs)
+          |    b.truncate(3usize)
+          |    b.pop()
+          |
+          |    int(b.len())
+          |
+          |print(churn(10, [1, 2, 3]))
+          |""".stripMargin)
+      val body = bodyOf(out, "@churn")
+
+      withClue(body)(body should not include "invariant.bad")
+    }
   }
 
   "a clause that cannot be repeated is not assumed" - {

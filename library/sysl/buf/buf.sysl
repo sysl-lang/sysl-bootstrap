@@ -58,8 +58,13 @@ struct Buf[T]
      *    knowing `count < elems.len` and its store needs no bounds check of its own;
      *  - the growth *and the store that follows it* sit behind one out-of-line name, so nothing the
      *    store needs has to survive a call and no callee-saved register is spilled to hold it;
-     *  - the count is raised once, after both arms, so a caller appending in a loop keeps it in a
-     *    register instead of reading it back out of the buffer on every turn.
+     *  - the count is raised here rather than inside the growth, so a caller appending in a loop keeps
+     *    it in a register instead of reading it back out of the buffer on every turn -- and it is
+     *    raised in **each arm**, beside the fact that makes the raise legal: the clause
+     *    `count <= elems.len` is re-checked at the write, and each arm's own fact (the compare that
+     *    chose it, and `grow_store`'s `ensure`) settles that check where it stands. Raised once after
+     *    the arms, the two facts meet in a merge the optimizer does not see through, and every append
+     *    keeps a compare and a trap it has no use for.
      *
      * **`@inline` raises the element type at which an append stops being a store.** Shaped as above
      * the member still costs a little more for every word of the element and a good deal more for
@@ -73,10 +78,10 @@ struct Buf[T]
     push(*self, v: T)
         if self.count >= self.elems.len
             self.grow_store(v)
+            self.count += 1
         else
             self.elems[self.count] = v
-
-        self.count += 1
+            self.count += 1
 
     /** Storage grown by one element's worth, with that element written into the slot the count
      * names -- the rare half of `push`, behind a name of its own.
@@ -86,10 +91,16 @@ struct Buf[T]
      * arms, it costs every append a frame big enough to hold the value across a call that is almost
      * never made. What deliberately does *not* move here is the count: `push` raises it for both
      * arms, and a count raised in here would be a count its caller had to read back.
+     *
+     * **The `ensure` is what keeps that raise free.** Raising the count re-checks the clause, and on
+     * the arm that did not grow the compare that chose it already says there is room; on this arm the
+     * promise is the only thing that can say so, repeated at the call as a fact.
      */
     @noinline
     @cold
     private grow_store(*self, v: T)
+        ensure self.count < self.elems.len
+
         self.grow(self.count + 1, v)
 
         self.elems[self.count] = v
@@ -126,6 +137,7 @@ struct Buf[T]
     private grow(*self, need: usize, fill: T)
         require need > self.count
         ensure self.count < self.elems.len
+        ensure need <= self.elems.len
 
         var bigger_len = if self.elems.len == 0 then 8usize else self.elems.len
 
