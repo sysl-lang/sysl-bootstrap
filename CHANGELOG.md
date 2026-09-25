@@ -7,6 +7,24 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.135 — 2026-09-25
+
+A one-file program with a `var` beside `main` now compiles. A file whose only running lines are `var`s used to be read as a script body even when it declared `main`, so the program was refused over its own `main` ("this 'main' is a second") and every function reading the `var` was reported as an undefined name. A declared `main` is now the program's one beginning, and the `var` beside it is module storage that the functions and `main` share:
+
+```
+var counter: int = 0
+
+bump() =
+    counter += 1
+
+main() =
+    bump()
+    bump()
+    print(counter)
+```
+
+Module storage states its type, so an untyped module `var` or `val` is refused with one sentence on its own line — `'counter' is module storage, and module storage states its type — write 'counter: T'` — and no "undefined name" errors after it. A file with no `main` is unchanged: its lone `var` is still the script's local, and a file that runs a real statement beside a `main` is still reported on the `main`.
+
 ## 0.0.134 — 2026-09-24
 
 `link = "static"` (and `--link static`) now means *every library that has a static archive*: a library with no archive — macOS's `/usr/lib` sqlite3, say — is linked dynamically, exactly as a dynamic build links it, and `--verbose` traces which libraries went which way. A library that a `link = [...]` list names explicitly and that has no archive is still refused, as before.
