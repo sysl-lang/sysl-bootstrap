@@ -96,11 +96,13 @@ object CHeader {
   def prototype(f: TFunc): String = {
     val params =
       if f.params.isEmpty then "void"
-      else f.params.map((n, t) => s"${spell(t)} $n").mkString(", ")
+      else f.params.map((n, t) => declare(t, n)).mkString(", ")
 
     val noReturn = if Type.repr(f.retTy) == Type.Never then "SYSL_NORETURN " else ""
 
-    s"$noReturn${spell(f.retTy)} ${f.exported.get}($params)"
+    // The function's own name and parameter list are the declarator its result type wraps, which is
+    // what puts a returned function pointer's `(*` … `)` around them: `void (*get(void))(int32_t)`.
+    s"$noReturn${declare(f.retTy, s"${f.exported.get}($params)")}"
   }
 
   /** Every named aggregate the exported signatures reach, **innermost first**.
@@ -157,12 +159,33 @@ object CHeader {
       s"typedef struct {\n$fields} ${cName(s)};\n"
     case _ => ""
 
-  /** A field, which is where the **declarator** matters: an array's brackets go after the name, so a
-   * member is not simply its type followed by its name the way a parameter is.
+  /** A field, which is a declaration like any other: `declare` puts an array's brackets and a
+   * function pointer's `(*` … `)` around the name where C wants them.
    */
-  private def member(t: Type, name: String): String = Type.repr(t) match
-    case a: Type.Array => s"${spell(a.elem)} $name[${a.length}]"
-    case _             => s"${spell(t)} $name"
+  private def member(t: Type, name: String): String = declare(t, name)
+
+  /** A sysl type declaring `name` — a parameter, a field, or (with `name` holding the function's own
+   * name and parameter list) a whole prototype.
+   *
+   * **C does not write a type and then a name.** The name is the innermost part of a *declarator*
+   * that the type wraps around it: an array's `[n]` and a function's parameter list go after it, a
+   * pointer's `*` goes before it, and a function pointer is the two together, `R (*name)(A)`.
+   * Spelling the type whole and appending the name gives `void (*)(int32_t) f`, which no C compiler
+   * accepts. So this builds the declarator outward from the name, and `spell` is the same walk with
+   * no name at all — C's *abstract* declarator, `void (*)(int32_t)`.
+   */
+  def declare(t: Type, name: String): String = Type.repr(t) match
+    case Type.CFn(params, ret) =>
+      val ps = if params.isEmpty then "void" else params.map(spell).mkString(", ")
+      declare(ret, s"(*$name)($ps)")
+    // A pointer to something whose declarator binds tighter than `*` — an array or a function
+    // pointer — needs the parentheses that make the `*` apply first.
+    case Type.Ptr(inner) =>
+      Type.repr(inner) match
+        case _: Type.Array | _: Type.CFn => declare(inner, s"(*$name)")
+        case _                           => declare(inner, if name.isEmpty then "*" else s"* $name")
+    case a: Type.Array => declare(a.elem, s"$name[${a.length}]")
+    case _             => if name.isEmpty then base(t) else s"${base(t)} $name"
 
   /** The C name of a named type — the one the author chose, or the derived one.
    *
@@ -195,7 +218,12 @@ object CHeader {
    * quietly emitted `void*` for something it did not understand would compile on both sides and be
    * wrong in between.
    */
-  def spell(t: Type): String = Type.repr(t) match
+  def spell(t: Type): String = declare(t, "")
+
+  /** A type that is not built from a declarator — a scalar, a struct's name, a simple enum's
+   * integer. Pointers, arrays and function pointers are `declare`'s, since they wrap a name.
+   */
+  private def base(t: Type): String = Type.repr(t) match
     case Type.Unit | Type.Never              => "void"
     case Type.Bool                           => "bool"
     // A `char` is a Unicode scalar value, which is four bytes and not C's `char`. `uint32_t` is what
@@ -210,13 +238,6 @@ object CHeader {
     case Type.Floating(16, _)                => "_Float16"
     case Type.Floating(32, _)                => "float"
     case Type.Floating(_, _)                 => "double"
-    // Pointed-to `void` has no size in C, so a pointer to nothing is `void *` and everything else
-    // keeps its pointee. A pointer to a type C cannot spell never gets here.
-    case Type.Ptr(Type.Unit)                 => "void *"
-    case Type.Ptr(inner)                     => s"${spell(inner)} *"
-    case Type.CFn(params, ret)               =>
-      val ps = if params.isEmpty then "void" else params.map(spell).mkString(", ")
-      s"${spell(ret)} (*)($ps)"
     // A struct is named rather than written out, and `aggregates` is what put the definition above
     // this prototype (0137). A **simple** enum is its underlying integer and is spelled as one: C's
     // own `enum` has an implementation-defined width, so naming the integer is what states the same

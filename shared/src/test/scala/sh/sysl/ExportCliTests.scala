@@ -329,6 +329,71 @@ class ExportCliTests extends LibraryCliSupport {
     withClue(build.stderr)(build.exitCode shouldBe 0)
   }
 
+  /** A function pointer in all three places a C declarator can hold one — a parameter, a struct
+    * field and a result — each of which the header once spelled `void (*)(int32_t) name`, which is
+    * not C. clang under `-Werror` is the judge, and a callback it really calls is the proof.
+    */
+  private val callbacks =
+    """module mylib
+      |
+      |@export("mylib_each")
+      |each(xs: *i32, n: usize, f: *extern(i32) -> unit)
+      |    for i in 0..<n do f(xs[i])
+      |
+      |@export("mylib_sink")
+      |struct Sink
+      |    put: *extern(i32) -> unit
+      |    n: i32
+      |
+      |@export("mylib_emit")
+      |emit(s: *Sink) = s.put(s.n)
+      |
+      |@export("mylib_hook")
+      |hook(f: *extern(i32) -> unit) -> *extern(i32) -> unit = f
+      |""".stripMargin
+
+  "the header names a function pointer inside its declarator, as a parameter, a field and a result" in {
+    val text = readFile(built(callbacks)._2)
+
+    text should include("void mylib_each(int32_t * xs, uint64_t n, void (*f)(int32_t));")
+    text should include("\tvoid (*put)(int32_t);")
+    text should include("void (*mylib_hook(void (*f)(int32_t)))(int32_t);")
+  }
+
+  "and a C program passes, stores and gets back a real callback, under -Werror" in {
+    val (archive, header) = built(callbacks)
+    val dir               = createTempDirectory("sysl-c-callback-")
+    val source            = s"$dir/main.c"
+    val exe               = s"$dir/caller"
+
+    writeFile(source,
+      s"""#include <stdio.h>
+         |#include "$header"
+         |
+         |static int32_t total = 0;
+         |
+         |static void add(int32_t x) { total += x; }
+         |
+         |int main(void) {
+         |    int32_t xs[3] = {1, 2, 3};
+         |    mylib_each(xs, 3, add);
+         |    mylib_sink s = { mylib_hook(add), 10 };
+         |    mylib_emit(&s);
+         |    printf("%d\\n", (int) total);
+         |    return 0;
+         |}
+         |""".stripMargin)
+
+    val build = exec(Seq("clang", "-Werror", source, archive, "-o", exe))
+
+    withClue(build.stderr)(build.exitCode shouldBe 0)
+
+    val run = exec(Seq(exe))
+
+    withClue(run.stderr)(run.exitCode shouldBe 0)
+    run.stdout.trim shouldBe "16"
+  }
+
   "a C program links an export that uses the standard library, which is the case a '.syslib' cannot serve" in {
     val (archive, header) = built(talkative)
     val dir               = createTempDirectory("sysl-c-printing-")

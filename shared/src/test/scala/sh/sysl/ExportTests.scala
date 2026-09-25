@@ -587,7 +587,19 @@ class ExportTests extends AnyFreeSpec with CodegenSupport with TestFrameworkSupp
         "struct Body\n    at: V\n\n@export\nshift(b: *Body, cb: *extern(V) -> unit) -> V = b.at\n")
 
       h should include("\tb2Vec2 at;")
-      h should include("b2Vec2 shift(demo_Body * b, void (*)(b2Vec2) cb);")
+      h should include("b2Vec2 shift(demo_Body * b, void (*cb)(b2Vec2));")
+    }
+
+    // A function pointer is a declarator, not a type followed by a name: the name goes inside the
+    // `(*` … `)`, wherever the pointer stands. `void (*)(int32_t) f` is not C.
+    "a function pointer puts the name inside its declarator, as a parameter, a field and a result" in {
+      val h = headerFor("module demo\n\nstruct Sink\n    put: *extern(i32) -> unit\n    n: i32\n\n" +
+        "@export\nemit(s: *Sink) = s.put(s.n)\n\n" +
+        "@export\nhook(f: *extern(i32) -> unit) -> *extern(i32) -> unit = f\n")
+
+      h should include("\tvoid (*put)(int32_t);")
+      h should include("void (*hook(void (*f)(int32_t)))(int32_t);")
+      h should not include "(*)"
     }
 
     // The layout pair and the name are three facts about one struct, so they compose — which is the
