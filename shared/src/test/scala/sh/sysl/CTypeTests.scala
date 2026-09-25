@@ -427,7 +427,7 @@ class CTypeTests extends AnyFreeSpec with CodegenSupport with RunSupport with Pa
 
     "the artifact carries a type declaration naming a sysl integer" in {
       val bases =
-        trees.flatMap(_.body).collect { case TypeDecl("Size", NamedType(b, _), _, _, _, _, true) => b }
+        trees.flatMap(_.body).collect { case TypeDecl("Size", NamedType(b, _), _, _, _, _, true, _) => b }
 
       bases.map(_.head) shouldBe List('u')
     }
@@ -563,7 +563,7 @@ class CTypeTests extends AnyFreeSpec with CodegenSupport with RunSupport with Pa
       case Right(units) =>
         val body     = units.head.body
         val consts   = body.collect { case ConstDecl(n, _, IntLit(v, _), _) => n -> v }.toMap
-        val resolved = body.collect { case TypeDecl(n, NamedType(b, _), _, _, _, _, true) if n == name => b }
+        val resolved = body.collect { case TypeDecl(n, NamedType(b, _), _, _, _, _, true, _) if n == name => b }
 
         (consts("WIDTH").toInt, consts("SIGNED") != BigInt(0), resolved.head)
     }

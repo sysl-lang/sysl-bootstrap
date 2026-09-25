@@ -133,7 +133,7 @@ trait CollectionExprAnalysis extends ExprSupport {
       // read-only view of storage no writable view may be taken of is the ordinary thing it reads as.
       val viewIsConst = readOnly(tr) || expected.exists(Type.readOnlyView)
 
-      val elem = tr.ty match
+      val elem = Type.unnamed(tr.ty) match
         case Type.Ref(Type.Array(_, e), false) => e
         case Type.Ref(Type.Array(_, _), true) =>
           err("a slice does not record whether its owner's count is atomic, so a '&sync' array cannot be sliced")
@@ -186,7 +186,7 @@ trait CollectionExprAnalysis extends ExprSupport {
       // is the address arithmetic C spells the same way. It is read off the *undereferenced*
       // receiver — a pointer to an array keeps the checked form below, because that one has a
       // length in its type to check against.
-      val tr = raw.ty match
+      val tr = Type.unnamed(raw.ty) match
         case Type.Ptr(_: Type.Array) => autoDeref(raw)
         case _: Type.Ptr             => raw
         case _                       => autoDeref(raw)

@@ -20,9 +20,15 @@ trait ConstrainedTypes extends GenericInstantiation {
    * A measured `c type` is written by the compiler in exactly this shape and is **not** an alias in
    * this sense: it is a distinct scalar whose width came from the C compiler, and the code below
    * builds it as one.
+   *
+   * **Nor is an exported one**, for the same reason seen from the header's side: `@export` asks a
+   * generated header to spell the type by a name of its own, and a name that dissolved into its base
+   * here would leave nothing there to spell. It is built as a transparent type with no constraint,
+   * which is a `c type`'s shape — interchangeable with its base in both directions, as before.
    */
   protected def plainAlias(key: String): Boolean =
-    constrainedDecls.get(key).exists(d => !d.derived && d.range.isEmpty && d.pred.isEmpty && !d.fromC)
+    constrainedDecls.get(key).exists(d =>
+      !d.derived && d.range.isEmpty && d.pred.isEmpty && !d.fromC && d.cname.isEmpty)
 
   /** The key an alias ultimately stands for, following a chain of them, where what it names is a
    * declared type. A key that is not an alias, and one whose base is not a bare declared name — a
@@ -74,15 +80,30 @@ trait ConstrainedTypes extends GenericInstantiation {
     val d = constrainedDecls(key)
 
     at(d.pos) {
-      val base = resolveType(d.base, Map.empty)
+      // In the declaration's own scope, for `aliasedKey`'s reason: a pointer base names a struct in
+      // the file that wrote the type, and the file using it need not import that struct's module.
+      val base = inScope(scopeFor(key))(resolveType(d.base, Map.empty))
+
+      // An exported name with no constraint is the one shape that may stand for more than a
+      // number: what it asks for is a `typedef`, and C writes one for a pointer as readily as for
+      // an integer. Anything C cannot spell that way is refused here, under the export's reading
+      // rather than the subtype's, since the constraint sentence below would be about a question
+      // nobody asked.
+      val exportedAlias = d.cname.isDefined && !d.derived && d.range.isEmpty && d.pred.isEmpty
+
+      if exportedAlias && !ExportCheck.typedefable(base) then
+        err(s"'${qn(key)}' is exported to a C header as ${show(base)}, which C has no way to spell " +
+          s"as a typedef — a header names an integer, a float, 'bool', 'char' or a pointer this way. " +
+          ExportCheck.typedefAdvice(base))
 
       val scalar = Type.underlying(base) match
         case _: Type.Integer | _: Type.Floating | Type.Char => true
         // `bool` is a base for a measured `c type` and for nothing else, because C's `_Bool` is what
         // sysl's `bool` already is. Nothing is given up by admitting it: there is no range and no
-        // predicate a `bool` could carry, so the one thing this allows is the alias itself.
-        case Type.Bool                                      => d.fromC
-        case _                                              => false
+        // predicate a `bool` could carry, so the one thing this allows is the alias itself — which is
+        // also what an exported alias is.
+        case Type.Bool                                      => d.fromC || exportedAlias
+        case _                                              => exportedAlias
       if !scalar then
         err(s"a constrained subtype's base must be an integer, a float, or 'char', not ${show(base)}")
 
@@ -102,12 +123,14 @@ trait ConstrainedTypes extends GenericInstantiation {
       // reaches a key that `typeKey` has already followed past the alias. This is the backstop for
       // a route that grows later and forgets to: it says what is wrong rather than building a
       // `Constrained` with no constraint, which would be a subtype whose value set is everything.
-      if lo.isEmpty && d.pred.isEmpty && !d.derived && !d.fromC then
+      if lo.isEmpty && d.pred.isEmpty && !d.derived && !d.fromC && d.cname.isEmpty then
         err(s"'${qn(key)}' is a transparent alias and declares no subtype, so there is nothing here " +
           "to constrain")
 
       val predFn = if d.pred.isDefined then Some(predKey(key)) else None
-      Type.Constrained(key, base, d.derived, lo, hi, d.range.exists(_.exclusiveHi), predFn)
+      // Written bare, `@export` gives the header the declared name, as it does a struct's.
+      val cname  = d.cname.map(e => e.symbol.getOrElse(Modules.bare(key)))
+      Type.Constrained(key, base, d.derived, lo, hi, d.range.exists(_.exclusiveHi), predFn, cname)
     }
   }
 

@@ -137,7 +137,7 @@ trait ExprSupport extends SpecialForms with PatternAnalysis with StmtAnalysis {
     // Only where the elements are the receiver's own storage. A slice's are somebody else's, and
     // whose they are is exactly what a slice does not record.
     case TIndex(recv, _, _) =>
-      recv.ty match
+      Type.unnamed(recv.ty) match
         case _: Type.View => false
         // A `val *T` fixes the address, not what is at it — exactly as `*p = v` through one is
         // already allowed. C's `T *const p` reads the same way.

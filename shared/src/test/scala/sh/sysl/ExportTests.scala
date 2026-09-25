@@ -724,6 +724,124 @@ class ExportTests extends AnyFreeSpec with CodegenSupport with TestFrameworkSupp
     }
   }
 
+  /** `@export` on a `type` (`reference/ffi.md § Naming a type`): the header declares a `typedef`
+    * and spells the type by that name wherever it appears, rather than dissolving it into its base.
+    */
+  "the name a type carries in the header" - {
+
+    val slate =
+      "module demo\n\n@export(\"slate_value\")\ntype Handle = u64\n\n" +
+        "@export(\"slate_int\")\nint_of(n: i64) -> Handle = u64(n)\n"
+
+    "is declared as a typedef of what it stands for, and the prototype uses it" in {
+      val h = headerFor(slate)
+
+      h should include("typedef uint64_t slate_value;\n")
+      h should include("slate_value slate_int(int64_t n);")
+      h.indexOf("typedef uint64_t slate_value;") should be < h.indexOf("slate_int(")
+    }
+
+    "and the bare form is the declared name, as a struct's is" in {
+      val h = headerFor("module demo\n\n@export\ntype Handle = u64\n\n@export\nf(h: Handle) -> Handle = h\n")
+
+      h should include("typedef uint64_t Handle;\n")
+      h should include("Handle f(Handle h);")
+    }
+
+    // Exporting it changes what the header says and nothing a sysl caller sees: it is still
+    // interchangeable with its base in both directions, with no conversion written.
+    "and a sysl caller still mixes it with its base freely" in {
+      ir("module demo\n\n@export(\"v\")\ntype Handle = u64\n\n@export\nf(h: Handle) -> u64 = h + 1\n\n" +
+        "val a: u64 = f(41)\nval b: Handle = a\nprint(b)\n") should include("define")
+    }
+
+    "is what a struct field and a function pointer's parameter spell too" in {
+      val h = headerFor("module demo\n\n@export(\"slate_value\")\ntype Handle = u64\n\n" +
+        "@export(\"box\")\nstruct Box\n    v: Handle\n    cb: *extern(Handle) -> Handle\n\n" +
+        "@export\nput(b: *Box, f: *extern(Handle, i32) -> unit)\n    f(b.v, 1)\n")
+
+      h should include("\tslate_value v;")
+      h should include("\tslate_value (*cb)(slate_value);")
+      h should include("void put(box * b, void (*f)(slate_value, int32_t));")
+      h.indexOf("typedef uint64_t slate_value;") should be < h.indexOf("typedef struct {")
+    }
+
+    // A pointer's `*` is part of what the name stands for, so a pointer to a named pointer is `h *`,
+    // and a function pointer given a name takes no parentheses of its own where it is used.
+    "a pointer and a function pointer are declared with their declarators inside the typedef" in {
+      val h = headerFor("module demo\n\n@export(\"vm\")\nopaque struct Vm\n    n: int\n\n" +
+        "@export(\"vm_ref\")\ntype VmRef = *Vm\n\n@export(\"on_event\")\ntype OnEvent = *extern(i32) -> i32\n\n" +
+        "@export\nrun(v: VmRef, f: OnEvent, fs: *OnEvent) -> VmRef = v\n")
+
+      h should include("typedef struct vm vm;\n")
+      h should include("typedef vm * vm_ref;\n")
+      h should include("typedef int32_t (*on_event)(int32_t);\n")
+      h should include("vm_ref run(vm_ref v, on_event f, on_event * fs);")
+      h.indexOf("typedef struct vm vm;") should be < h.indexOf("typedef vm * vm_ref;")
+    }
+
+    "while a type that is not exported is spelled as what it stands for" in {
+      val h = headerFor("module demo\n\ntype Handle = u64\ntype Meters = new f64\ntype Slot = u8 within 0..<8\n\n" +
+        "@export\nf(h: Handle, m: Meters, s: Slot) -> Handle = h\n")
+
+      h should include("uint64_t f(uint64_t h, double m, uint8_t s);")
+      h should not include "typedef uint64_t"
+    }
+
+    // A narrowed type is exported the same way: the header has no way to check the bound, and says
+    // what the value is made of — which is all a C declaration ever says.
+    "and a narrowed or derived type exports as its base, under its own name" in {
+      val h = headerFor("module demo\n\n@export(\"slot\")\ntype Slot = u8 within 0..<8\n\n" +
+        "@export(\"meters\")\ntype Meters = new f64\n\n@export\nf(s: Slot, m: Meters) -> Meters = m\n")
+
+      h should include("typedef uint8_t slot;\n")
+      h should include("typedef double meters;\n")
+      h should include("meters f(slot s, meters m);")
+    }
+
+    "two aliases of one base are two typedefs, and a bare base is still the C name" in {
+      val h = headerFor("module demo\n\n@export(\"value_a\")\ntype A = u64\n\n@export(\"value_b\")\ntype B = u64\n\n" +
+        "@export\nf(a: A, b: B, n: u64) -> B = b\n")
+
+      h should include("typedef uint64_t value_a;\n")
+      h should include("typedef uint64_t value_b;\n")
+      h should include("value_b f(value_a a, value_b b, uint64_t n);")
+    }
+
+    "an alias of an alias is declared after the one it names" in {
+      val h = headerFor("module demo\n\n@export(\"base_t\")\ntype A = u32\n\n@export(\"top_t\")\ntype B = A\n\n" +
+        "@export\nf(b: B) -> A = b\n")
+
+      h should include("typedef uint32_t base_t;\n")
+      h should include("typedef base_t top_t;\n")
+      h should include("base_t f(top_t b);")
+      h.indexOf("typedef uint32_t base_t;") should be < h.indexOf("typedef base_t top_t;")
+    }
+
+    "a type over a struct is refused, with the struct's own attribute named instead" in {
+      val e = err("module demo\n\nstruct Point\n    x: i32\n\n@export(\"point_t\")\ntype P = Point\n")
+
+      e should include("'demo.P' is exported to a C header as demo.Point, which C has no way to spell as a typedef")
+      e should include("above the struct itself")
+    }
+
+    "and so are a slice and a counted reference, each with its own advice" in {
+      err("module demo\n\n@export(\"bytes\")\ntype Bytes = []u8\n") should include("a pointer and a 'usize'")
+      err("module demo\n\nstruct N\n    x: i32\n\n@export(\"nref\")\ntype R = &N\n") should
+        include("Hand out a raw pointer")
+    }
+
+    "a type's C name is held to a function's rules" in {
+      err("module demo\n\n@export(\"no-good\")\ntype H = u64\n") should include("'no-good' is not a name C can declare")
+      err("module demo\n\n@export(\"h\")\nprivate type H = u64\n") should include("'demo.H' is private")
+    }
+
+    "and it claims its name against a function's symbol, which C has one namespace for" in {
+      err("module demo\n\n@export(\"handle\")\ntype H = u64\n\n@export(\"handle\")\nmake(n: u64) -> H = n\n") should
+        include("'handle' is the C name of the function 'demo.make' and the type 'demo.H'")
+    }
+  }
+
   /** **A test build is held to the same rules, and was held to none of them** (0140).
     *
     * `Compiler.compileTests` ran `Escape.check` and `TailCalls.check` and never `Exports.check`, so

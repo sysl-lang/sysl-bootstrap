@@ -119,9 +119,19 @@ object CHeader {
     val seen  = scala.collection.mutable.LinkedHashSet.empty[Type]
     val named = scala.collection.mutable.ListBuffer.empty[Type]
 
-    def walk(t: Type): Unit =
-      val r = Type.repr(t)
+    def walk(t: Type): Unit = t match
+      // An exported `type` is a `typedef`, and what it stands for goes first for a struct's reason:
+      // a pointer to a struct names a type the C compiler must already have met. It is matched before
+      // `repr`, which would see straight through a transparent one to its base.
+      case c: Type.Constrained if c.cname.isDefined =>
+        if seen.add(c) then
+          walk(c.base)
+          named += c
+      case c: Type.Constrained => walk(c.base)
+      case Type.Volatile(inner) => walk(inner)
+      case _                    => aggregate(Type.repr(t))
 
+    def aggregate(r: Type): Unit =
       if !seen.add(r) then ()
       else
         r match
@@ -152,6 +162,9 @@ object CHeader {
    * without a layout, where an anonymous struct has nothing to be incomplete about.
    */
   private def definition(t: Type): String = t match
+    // An exported `type` declares its name over what it stands for, which is the declarator walk
+    // with the new name where a variable's would go: `typedef int32_t (*on_event)(int32_t);`.
+    case c: Type.Constrained        => s"typedef ${declare(c.base, cName(c))};\n"
     case s: Type.Struct if s.opaque => s"typedef struct ${cName(s)} ${cName(s)};\n"
     case s: Type.Struct =>
       val fields = s.stored.map((n, f) => s"\t${member(f, n)};\n").mkString
@@ -174,15 +187,25 @@ object CHeader {
    * accepts. So this builds the declarator outward from the name, and `spell` is the same walk with
    * no name at all — C's *abstract* declarator, `void (*)(int32_t)`.
    */
-  def declare(t: Type, name: String): String = Type.repr(t) match
+  def declare(t: Type, name: String): String = t match
+    // An exported `type` is spelled by its name wherever it appears, which makes it a base type
+    // here whatever it stands for — a `typedef` of a pointer is written `h name`, with the `*`
+    // already inside the name. One that is not exported is spelled as what it stands for.
+    case c: Type.Constrained if c.cname.isDefined => if name.isEmpty then cName(c) else s"${cName(c)} $name"
+    case c: Type.Constrained                      => declare(c.base, name)
+    case Type.Volatile(inner)                     => declare(inner, name)
+    case _                                        => declarator(t, name)
+
+  private def declarator(t: Type, name: String): String = Type.repr(t) match
     case Type.CFn(params, ret) =>
       val ps = if params.isEmpty then "void" else params.map(spell).mkString(", ")
       declare(ret, s"(*$name)($ps)")
     // A pointer to something whose declarator binds tighter than `*` — an array or a function
     // pointer — needs the parentheses that make the `*` apply first.
+    // An exported name is a base type, so a pointer to one takes no parentheses whatever it names.
     case Type.Ptr(inner) =>
       Type.repr(inner) match
-        case _: Type.Array | _: Type.CFn => declare(inner, s"(*$name)")
+        case _: Type.Array | _: Type.CFn if !typedefd(inner) => declare(inner, s"(*$name)")
         case _                           => declare(inner, if name.isEmpty then "*" else s"* $name")
     case a: Type.Array => declare(a.elem, s"$name[${a.length}]")
     case _             => if name.isEmpty then base(t) else s"${base(t)} $name"
@@ -206,7 +229,8 @@ object CHeader {
    * is that the derived name is *ordinarily* unique and the collision rule is what guarantees it.
    */
   def cName(t: Type): String = t match
-    case s: Type.Struct if s.cname.isDefined => s.cname.get
+    case s: Type.Struct if s.cname.isDefined      => s.cname.get
+    case c: Type.Constrained if c.cname.isDefined => c.cname.get
     case n: Type.Named =>
       Type.mangled(n.base, n.targs).map(c => if c.isLetterOrDigit then c else '_')
     case _ => "void"
@@ -219,6 +243,12 @@ object CHeader {
    * wrong in between.
    */
   def spell(t: Type): String = declare(t, "")
+
+  /** Whether `t` is spelled by an exported `type`'s name, looking through a qualifier. */
+  private def typedefd(t: Type): Boolean = t match
+    case c: Type.Constrained  => c.cname.isDefined
+    case Type.Volatile(inner) => typedefd(inner)
+    case _                    => false
 
   /** A type that is not built from a declarator — a scalar, a struct's name, a simple enum's
    * integer. Pointers, arrays and function pointers are `declare`'s, since they wrap a name.

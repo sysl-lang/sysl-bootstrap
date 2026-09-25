@@ -538,7 +538,17 @@ object Type extends TypeQueries {
     // A `*T` is a bare address, so its `i`th element is C's `p[i]` — unchecked, since there is no
     // length in the type to check against (`03`).
     case Ptr(e)      => Some(e)
+    // An exported pointer type (`reference/ffi.md § Naming a type`) is the pointer it names.
+    case c: Constrained if !c.derived => element(c.base)
     case _           => None
+
+  /** A type with a transparent name taken off it — an exported pointer type (`reference/ffi.md §
+   * Naming a type`) seen as the pointer it names, for the places that ask what shape a receiver
+   * has. Unlike `repr` it leaves a qualifier alone, since those places read `volatile` themselves.
+   */
+  def unnamed(t: Type): Type = t match
+    case c: Constrained if !c.derived => unnamed(c.base)
+    case _                            => t
 
   /** The type a `*T` or `&T` points at, for the one level of automatic dereference that field
    * selection performs. A trait object has none: it has forgotten what it points at, which is
@@ -548,6 +558,7 @@ object Type extends TypeQueries {
     case _ if erased(t)  => None
     case Ptr(inner)      => Some(inner)
     case Ref(inner, _)   => Some(inner)
+    case c: Constrained if !c.derived => pointee(c.base)
     case _               => None
 
   /** The types an unsuffixed literal falls back to when nothing else fixes it. */
@@ -884,6 +895,12 @@ object Type extends TypeQueries {
    * with its base; a derived one is nominally distinct and mixes with the base only through an
    * explicit cast. Identity is the whole tuple, but `name` alone already separates two declarations,
    * so a derived type is distinct from its base and from every other derived type over it.
+   *
+   * `cname` is the name `@export` gave it for a generated C header, which declares it as a
+   * `typedef` and spells it by that name wherever it appears (`CHeader`). An exported plain alias
+   * arrives here too, with no constraint at all, because an alias dissolves into its base and a
+   * header could not then say where the name was written; its base may be a pointer, which no
+   * other constrained type's may.
    */
   case class Constrained(
       name: String,
@@ -893,6 +910,7 @@ object Type extends TypeQueries {
       hi: Option[BigDecimal],
       exclusiveHi: Boolean,
       predFn: Option[String],
+      cname: Option[String] = None,
   ) extends Type {
     def lty(using Word): LType = base.lty
   }

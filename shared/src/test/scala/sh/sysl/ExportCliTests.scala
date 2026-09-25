@@ -526,6 +526,83 @@ class ExportCliTests extends LibraryCliSupport {
     withClue(build.stderr)(build.exitCode shouldBe 0)
   }
 
+  /** An exported `type` is a `typedef` in the header (`reference/ffi.md § Naming a type`), used by
+    * name in a prototype, a struct field, a function pointer's parameter, and — as a pointer — where
+    * a handle is passed. clang under `-Werror` judges the header, and the run proves the values
+    * crossed the boundary as what the names say they are.
+    */
+  private val aliases =
+    """module mylib
+      |
+      |@export("slate_value")
+      |type Handle = u64
+      |
+      |@export("slate_vm")
+      |opaque struct Vm
+      |    base: u64
+      |
+      |@export("slate_vm_ref")
+      |type VmRef = *Vm
+      |
+      |@export("slate_pair")
+      |struct Pair
+      |    a: Handle
+      |    each: *extern(Handle) -> Handle
+      |
+      |var vm: Vm = Vm(100)
+      |
+      |@export("slate_open")
+      |open() -> VmRef = &vm
+      |
+      |@export("slate_int")
+      |int_of(h: VmRef, n: i64) -> Handle = h.base + u64(n)
+      |
+      |@export("slate_apply")
+      |apply(p: *Pair) -> Handle = p.each(p.a)
+      |""".stripMargin
+
+  "an exported 'type' is a typedef the header declares and every position spells" in {
+    val text = readFile(built(aliases)._2)
+
+    text should include("typedef uint64_t slate_value;\n")
+    text should include("typedef slate_vm * slate_vm_ref;\n")
+    text should include("slate_value slate_int(slate_vm_ref h, int64_t n);")
+    text should include("\tslate_value a;")
+    text should include("\tslate_value (*each)(slate_value);")
+    text should not include "no C spelling"
+  }
+
+  "and a C program written against those names compiles under -Werror, links and runs" in {
+    val (archive, header) = built(aliases)
+    val dir               = createTempDirectory("sysl-c-typedef-")
+    val source            = s"$dir/main.c"
+    val exe               = s"$dir/caller"
+
+    writeFile(source,
+      s"""#include <stdio.h>
+         |#include "$header"
+         |
+         |static slate_value twice(slate_value v) { return v * 2; }
+         |
+         |int main(void) {
+         |    slate_vm_ref vm = slate_open();
+         |    slate_value v = slate_int(vm, 23);
+         |    slate_pair p = { v, twice };
+         |    printf("%llu %llu\\n", (unsigned long long) v, (unsigned long long) slate_apply(&p));
+         |    return 0;
+         |}
+         |""".stripMargin)
+
+    val build = exec(Seq("clang", "-Werror", source, archive, "-o", exe))
+
+    withClue(build.stderr)(build.exitCode shouldBe 0)
+
+    val run = exec(Seq(exe))
+
+    withClue(run.stderr)(run.exitCode shouldBe 0)
+    run.stdout.trim shouldBe "123 246"
+  }
+
   /** A function pointer in all three places a C declarator can hold one — a parameter, a struct
     * field and a result — each of which the header once spelled `void (*)(int32_t) name`, which is
     * not C. clang under `-Werror` is the judge, and a callback it really calls is the proof.

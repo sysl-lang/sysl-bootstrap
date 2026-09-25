@@ -1032,6 +1032,12 @@ case class RangeBound(lo: Expr, hi: Expr, exclusiveHi: Boolean) extends Position
  * compiler. It has an alias's shape — transparent, no range, no predicate — and is deliberately
  * **not** one: what it declares is a distinct scalar whose width the C compiler answered for, and a
  * program spells that width nowhere else.
+ *
+ * `cname` is `@export` written above it (`reference/ffi.md § Naming a type`): the name a generated C
+ * header gives the type in a `typedef`, and spells it by wherever it appears. **An exported alias is
+ * not an alias either**, for `fromC`'s reason — the header has to know where the name was written,
+ * so the type keeps its name rather than dissolving into its base. It is still transparent: a value
+ * flows to and from the base with no cast, exactly as it did before it was exported.
  */
 case class TypeDecl(
     name: String,
@@ -1041,6 +1047,7 @@ case class TypeDecl(
     pred: Option[Expr],
     vis: Visibility = Visibility.Public,
     fromC: Boolean = false,
+    cname: Option[ExportAttr] = None,
 ) extends Stmt
 
 /** `trait Name` with indented method declarations — a method with a receiver and a parameter list,

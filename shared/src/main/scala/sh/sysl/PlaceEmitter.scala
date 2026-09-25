@@ -258,7 +258,7 @@ trait PlaceEmitter extends ArcEmitter with ScalarEmitter {
     // The length is what there is to check against, and a `*T` has none — so the pointer case
     // yields no length and the check is skipped. That is the whole difference between `p[i]` and
     // every other subscript, and it is `03`'s unchecked primitive doing what C's does.
-    val (base, len, elem) = receiver.ty match
+    val (base, len, elem) = Type.unnamed(receiver.ty) match
       case Type.Array(n, e) => (address(receiver), Some(Val.Int(n)), e)
       case w: Type.View =>
         val v = genExpr(receiver)
@@ -320,7 +320,7 @@ trait PlaceEmitter extends ArcEmitter with ScalarEmitter {
   ): Val = {
     val elem = sliceTy.elem
 
-    val (ownerV, first, len) = base.ty match
+    val (ownerV, first, len) = Type.unnamed(base.ty) match
       case Type.Ref(array @ Type.Array(n, _), _) =>
         val r = genExpr(base)
         val p = freshReg()

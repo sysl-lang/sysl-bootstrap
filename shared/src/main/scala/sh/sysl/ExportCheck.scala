@@ -54,6 +54,33 @@ trait ExportCheck extends TypeResolution {
       s <- structDecls.values.toList
       e <- s.cname
     do recover(())(at(e.pos)(checkStructExport(e, s)))
+
+    for
+      (key, t) <- constrainedDecls.toList
+      e        <- t.cname
+    do recover(())(at(e.pos)(checkTypeExport(e, key, t)))
+  }
+
+  /** Refuses a `type` a header could not declare as a `typedef` — the struct's rules for its name,
+   * and building the type, which is where a base C cannot spell is refused. Building it here rather
+   * than waiting for a use is what makes the refusal unconditional: a published name is a claim
+   * whether or not anything in this module happens to write it.
+   */
+  private def checkTypeExport(e: ExportAttr, key: String, t: TypeDecl): Unit = {
+    for n <- e.symbol if !ExportCheck.cIdentifier(n) do
+      err(s"'$n' is not a name C can declare — a type's name in a header is a C identifier, so it " +
+        "is a letter or '_' followed by letters, digits and '_'")
+
+    if e.symbol.isEmpty && !ExportCheck.cIdentifier(Modules.bare(key)) then
+      err(s"'${qn(key)}' is not a name C can declare, so naming it after itself would put a " +
+        "spelling in the header no C declaration could use — name it instead, '@export(\"...\")'")
+
+    if t.vis != Visibility.Public then
+      err(s"'${qn(key)}' is private, so no exported function may name it — an export is public, " +
+        "and a declaration may not be more visible than the types it names. No header can carry " +
+        "this type at all, so there is no name in one for it to take")
+
+    at(t.pos)(resolveConstrained(key))
   }
 
   /** Refuses a C name a header could not declare, or a struct that has no one name to give.
@@ -260,6 +287,38 @@ object ExportCheck {
       "A data enum is a tag beside a union of the payloads sysl laid out, which is not the shape a " +
         "C union has. Export one function per variant, or take the payload as its own type"
     case _ => ""
+
+  /** Whether an exported `type` may be declared as a C `typedef` of `t` (`reference/ffi.md § Naming
+   * a type`).
+   *
+   * **A scalar or a pointer, and nothing with a layout.** An aggregate has a name of its own in the
+   * header already — `@export` on the struct chooses it — so a second name for it would be a
+   * `typedef` the header had no reason to write; a slice, a counted reference and a data enum are
+   * the shapes no C declaration spells at all. A function pointer is a pointer, and an alias of an
+   * alias is asked about what it stands for.
+   */
+  def typedefable(t: Type): Boolean = t match
+    case c: Type.Constrained => typedefable(c.base)
+    case _ =>
+      Type.repr(t) match
+        case _: Type.Integer | _: Type.Floating | Type.Bool | Type.Char => true
+        case c: Type.Constrained                                         => typedefable(c.base)
+        case p: Type.Ptr                                                 => !Type.erased(p)
+        case _: Type.CFn                                                 => true
+        case _                                                           => false
+
+  /** What to write instead of a `typedef` C could not spell — there is always something. */
+  def typedefAdvice(t: Type): String = Type.repr(t) match
+    case _: Type.Struct =>
+      "Put '@export(\"...\")' above the struct itself, which names it in the header, or export a " +
+        "pointer to it"
+    case e: Type.Enum if e.simple =>
+      "A simple enum is spelled as the integer it is, so export an alias of that integer"
+    case _: Type.Array =>
+      "Wrap the array in a struct and name that, which is how C hands one over as a value"
+    case other =>
+      val a = advice(other)
+      if a.nonEmpty then a else "Export an alias of a scalar or a pointer"
 
   /** Whether a string is a name C could declare. ISO C also reserves a leading underscore at file
    * scope, which is a rule about *which* names a program may take rather than about what is a name —

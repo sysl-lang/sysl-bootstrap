@@ -333,16 +333,22 @@ trait StmtParser
       case _ ~ other                           => other
     } | (if !as.forall(names) then failure("not a function's annotation")
          else
+           // A `type` names a scalar or a pointer for the header, which is the struct's request made
+           // of a declaration with no fields — so it takes `@export` alone and nothing that lays out.
+           (visibility ~ typeDecl) ^^ {
+             case v ~ (t: TypeDecl) => restrict(v, t.copy(cname = as.collectFirst { case Attr.Export(e) => e }).setPos(t.pos))
+             case _ ~ other         => other
+           } |
            (visibility ~ funcDecl) ^^ {
              case Visibility.Public ~ (f: FuncDecl) => attributed(f, as)
              case v ~ (f: FuncDecl)                 => restrict(v, attributed(f, as))
              case _ ~ other                         => other
            }) | err(
       if as.forall(names) then
-        "'@export' names what C sees — a function's symbol, or the name a struct's 'typedef' " +
-          "carries in a generated header — and this declares neither. A simple enum is spelled as " +
-          "the integer it is, so it has no name in the header to choose, and an 'extern' names " +
-          "something this program does not define"
+        "'@export' names what C sees — a function's symbol, or the name a struct's or a type's " +
+          "'typedef' carries in a generated header — and this declares none of them. A simple enum " +
+          "is spelled as the integer it is, so it has no name in the header to choose, and an " +
+          "'extern' names something this program does not define"
       else
         "'@packed' and '@align(n)' lay out a struct and '@export(\"...\")' names one in a generated " +
           "header, so together they mark a struct — and this declares none",

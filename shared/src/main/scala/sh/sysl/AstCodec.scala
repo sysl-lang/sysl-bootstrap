@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 57
+  val Version: Int = 58
 
   private val Magic = "sysl-ast"
 
@@ -492,9 +492,12 @@ object AstCodec {
           tok("ed"); sref(n); list(tps)(sref); opt(und)(typ); list(vars)(variant); list(ms)(method)
           bounds(bs); vis(vs); tdefaults(tds); tdefaults(tvs); list(dv)(bound)
 
-        case TypeDecl(n, base, der, rng, pred, vs, fromC) =>
+        case TypeDecl(n, base, der, rng, pred, vs, fromC, cn) =>
           tok("td"); sref(n); typ(base); bool(der); opt(rng)(rangeBound); opt(pred)(expr); vis(vs)
           bool(fromC)
+          // The C name travels for a struct's reason: a consumer's header spells a package's type
+          // the way the package chose, compiled from source or read back from an artifact.
+          opt(cn)(e => { pos(e); opt(e.symbol)(sref) })
 
         case TraitDecl(n, tps, ms, bs, sups, vs, tds, as) =>
           tok("trt"); sref(n); list(tps)(sref); list(ms)(method); bounds(bs); list(sups)(bound)
@@ -910,7 +913,8 @@ object AstCodec {
           EnumDecl(sref(), list(sref()), opt(typ()), list(variant()), list(method()),
             bounds(), vis(), tdefaults(), tdefaults(), list(bound()))
         case "td" =>
-          TypeDecl(sref(), typ(), bool(), opt(rangeBound()), opt(expr()), vis(), bool())
+          TypeDecl(sref(), typ(), bool(), opt(rangeBound()), opt(expr()), vis(), bool(),
+            opt(at(ExportAttr(opt(sref())))))
         case "trt" =>
           TraitDecl(sref(), list(sref()), list(method()), bounds(), list(bound()), vis(), tdefaults(),
             list(assocDecl()))
