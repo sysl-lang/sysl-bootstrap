@@ -7,6 +7,22 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.139 — 2026-09-25
+
+### `build-c` writes native objects, and `--lto` asks for bitcode
+
+- **What was wrong:** `build-c` honoured the manifest's `lto` key, so a package with `lto = "thin"` produced an archive whose members were LLVM bitcode. That archive links only under clang with lld (or a linker carrying LLVM's plugin): slate's `libslate.a` could not be linked by GNU ld or gcc on Linux.
+- **What it does now:** the archive's members are native objects by default. The manifest's `lto` key no longer applies to `build-c`, so any C toolchain — GNU ld and gcc included — can link the result.
+- **`build-c --lto thin|full`** asks for a bitcode archive, for a host that links with clang and lld, and prints this advice line:
+
+  ```
+  sysl: this archive is LLVM bitcode: link it with clang and lld (-fuse-ld=lld), or with a linker that carries LLVM's plugin
+  ```
+
+- A test extracts the archive's member and checks its magic (native object by default, bitcode under `--lto`), and runs a clang link without lld against the default archive.
+- Found by slate's Linux compatibility job.
+- No language or library change; the standard-module artifact is unchanged.
+
 ## 0.0.138 — 2026-09-25
 
 ### The C header spells a function pointer as a C declarator
