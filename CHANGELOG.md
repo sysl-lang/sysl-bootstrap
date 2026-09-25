@@ -7,6 +7,22 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.138 — 2026-09-25
+
+### The C header spells a function pointer as a C declarator
+
+The header that `build-c` and `emit-header` write spelled a function-pointer type as `R (*)(A) name`, which is not a C declaration: clang stopped at it with `expected ')'`, and every call through the header was then read with the wrong argument count.
+
+It now writes a valid C declarator in every position:
+
+- parameter: `void (*f)(int32_t)`
+- struct field: `void (*put)(int32_t);`
+- return type: `void (*mylib_hook(void (*f)(int32_t)))(int32_t);`
+
+A clang `-Werror` test now compiles a C program against such a header, so the form is pinned. Found by slate's C API, which registers host callbacks through the header.
+
+No language or library change; the standard-module artifact is unchanged.
+
 ## 0.0.137 — 2026-09-25
 
 ### `build-c` writes an `opaque` exported struct as an incomplete type
