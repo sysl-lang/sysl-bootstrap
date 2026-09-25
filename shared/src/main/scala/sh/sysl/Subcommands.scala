@@ -191,6 +191,16 @@ private def buildForC(cfg: Config, compiled: Compiled, target: Target, named: Op
       if compiled.links.nonEmpty then
         Console.err.println(s"sysl: link this against: ${compiled.links.mkString(", ")}")
 
+      // **And the libraries the packages bind through their manifests**, which `@link` never sees.
+      // A package binding an installed library declares it under `pkg_config` and may say `@link`
+      // nowhere, so a list drawn from the directives alone named lmdb and left out brotli, and the
+      // C author met `Brotli*` as an undefined symbol with no archive in sight. What is said is the
+      // module names rather than this machine's flags, because the link is run on the C project's
+      // machine by its `pkg-config`, and the names are the one thing that stays true there.
+      if paths.modules.nonEmpty then
+        Console.err.println("sysl: and against what the packages require, which pkg-config " +
+          s"answers for: pkg-config --libs ${paths.modules.mkString(" ")}")
+
       0
 }
 

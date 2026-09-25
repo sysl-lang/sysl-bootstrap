@@ -560,7 +560,8 @@ private[sysl] def execute(asked: Config): Int = {
     case Right(answer) => answer
 
   val paths = SearchPaths(cfg.linkPaths, cfg.includePaths, cfg.defines,
-                          probed.probed, probed.probedLibs, carried, cfg.cc, probed.archives)
+                          probed.probed, probed.probedLibs, carried, cfg.cc, probed.archives,
+                          probed.modules)
 
   if cfg.verbose then
     for lib <- cfg.libs do trace(s"library: $lib")
@@ -1059,14 +1060,18 @@ private def probeLibs(needs: List[LibNeed], supplied: Set[String], target: Targe
                       linkPaths: List[String] = Nil): Either[String, SearchPaths] = {
   val wanted = needs.filterNot(n => supplied.contains(n.module))
 
-  if wanted.isEmpty then Right(SearchPaths())
+  // Every module declared, whether or not this run had to ask about it: one the command line
+  // answered is still one a C project linking a `build-c` archive has to name to its own toolchain.
+  val declared = SearchPaths(modules = needs.map(_.module).distinct)
+
+  if wanted.isEmpty then Right(declared)
   else if !Target.host.contains(target) then
     Left(s"${wanted.head.who} needs the '${wanted.head.module}' library and this is a build for " +
       s"'${target.name}' rather than for this machine, so there is nothing to ask where it is — " +
       s"${wanted.head.why}. Say where it is with '--include-path ${wanted.head.module}=<dir>' and " +
       "'--link-path <dir>'")
   else
-    wanted.foldLeft[Either[String, SearchPaths]](Right(SearchPaths())) { (acc, need) =>
+    wanted.foldLeft[Either[String, SearchPaths]](Right(declared)) { (acc, need) =>
       for
         so_far <- acc
         answer <- PkgConfig.query(need.module).left.map { why =>

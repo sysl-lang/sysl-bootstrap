@@ -193,6 +193,38 @@ class ExportCliTests extends LibraryCliSupport {
     run.stdout.trim shouldBe "5 20"
   }
 
+  /** A module `pkg-config` on this machine knows about, when it knows about any — the first word of
+    * `--list-all`'s first line, which is what makes the case below independent of what is installed.
+    */
+  private lazy val someModule: Option[String] =
+    if !PkgConfig.available then None
+    else
+      val result = exec(Seq("pkg-config", "--list-all"))
+
+      if result.exitCode != 0 then None
+      else result.stdout.linesIterator.map(_.trim).find(_.nonEmpty).map(_.takeWhile(!_.isWhitespace))
+
+  // A package binds an installed library through `pkg_config` in its manifest and need say `@link`
+  // nowhere, so the directives alone are not the link line. slate's brotli, webp, zstd and hiredis
+  // were all left off the list this way, and the C author met `Brotli*` as an undefined symbol.
+  "the link advice names the pkg-config modules the manifest requires, which '@link' never sees" in {
+    assume(someModule.isDefined)
+
+    val module = someModule.get
+    val root   = rootOf("mylib", boundary)
+
+    writeFile(s"$root/${PackageConfig.FileName}",
+      s"""package { name = "mylib", version = "0.1.0" }
+         |requires { pkg_config { $module = "the library this test found installed" } }
+         |""".stripMargin)
+
+    val (status, notes) = diagnostics(Config(command = "build-c", file = root,
+      output = Some(s"$root/libmylib.a")))
+
+    withClue(notes)(status shouldBe 0)
+    notes should include(s"pkg-config --libs $module")
+  }
+
   /** A module handing an aggregate across under a name it chose, which is what a binding mirroring
     * a C library looks like: the type's spelling is the library's own rather than the mangled
     * instantiation `sh_sysl_box2d_c_Id` would give it (0142).

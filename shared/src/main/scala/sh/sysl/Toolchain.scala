@@ -87,7 +87,19 @@ case class SearchPaths(link: List[String] = Nil, include: List[String] = Nil,
                          * line is written, and it is part of the run cache's key as it stands, so a
                          * binary linked one way is never handed back to a run that asked the other.
                          */
-                       archives: Map[String, String] = Map.empty) {
+                       archives: Map[String, String] = Map.empty,
+                       /** Every `pkg_config` module the build declared — the project's own, each
+                         * fetched package's and each `--lib` root's — in the order they were asked.
+                         *
+                         * `probedLibs` holds what those modules *answered*, which is what a link
+                         * this compiler runs needs; the names are what a link somebody else runs
+                         * needs. A `build-c` archive is linked by a C project's own toolchain, and
+                         * the one thing that project can be told that stays true on its machine is
+                         * which modules to ask its `pkg-config` for. A library a package binds through
+                         * its manifest alone, with no `@link` in its source, reaches the link line
+                         * only through here, so it is the whole of why the list is kept.
+                         */
+                       modules: List[String] = Nil) {
 
   /** What the linker is told, as clang spells it — `--link-path`'s directories, then any a probe
    * answered with. Joined rather than passed as two arguments, which is how `-L` has been written
