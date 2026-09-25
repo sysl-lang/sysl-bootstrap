@@ -172,7 +172,13 @@ private[sysl] def execute(asked: Config): Int = {
   // program is compiled, including the parts it has nothing to do with. This is the same ruling
   // `targets.default` gets one step below, and it is silent for the same reason — a package that
   // states its own build level has said nothing wrong, it is simply not the one being built.
-  cfg = cfg.withOptimization(project.optimization).withLto(project.lto).withLink(project.link)
+  //
+  // **`build-c` alone does not take the manifest's `lto`.** The key describes how this project's own
+  // link is done, and `build-c` does no link: its archive is native objects unless `--lto` on the
+  // command line asks for bitcode (`buildForC`). Not folding it in here is what lets `buildForC`
+  // tell the two apart — after this line, `cfg.lto` is the flag's and nothing else's.
+  val manifestLto = if cfg.command == "build-c" then None else project.lto
+  cfg = cfg.withOptimization(project.optimization).withLto(manifestLto).withLink(project.link)
 
   // **Above the target, and above every other question a compilation settles.** A graph is a
   // property of the manifests rather than of the machine, so a project that cannot be built here can

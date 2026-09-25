@@ -242,6 +242,128 @@ class ExportCliTests extends LibraryCliSupport {
 
   // The same archive through the system linker — no `-fuse-ld=lld`, which was the one link that
   // could read the bitcode the manifest's `lto` used to put here.
+  /** A project whose manifest says nothing about LTO, archived with `--lto thin` on the command
+    * line — the host that links with clang and lld and wants its link to optimize across the
+    * boundary. The stderr is returned beside the paths, since the advice line is half the contract.
+    */
+  private def builtWithLtoFlag(): (String, String, String) = {
+    val root = rootOf("mylib", boundary)
+    val out  = s"$root/libmylib.a"
+
+    writeFile(s"$root/${PackageConfig.FileName}",
+      """package { name = "mylib", version = "0.1.0" }
+        |""".stripMargin)
+
+    val (status, notes) =
+      diagnostics(Config(command = "build-c", file = root, output = Some(out), lto = Some("thin")))
+
+    withClue(notes)(status shouldBe 0)
+    (out, s"$out.h", notes)
+  }
+
+  /** Whether `bytes` begin as LLVM bitcode: the raw bitstream's `BC 0xC0DE`, or Apple's wrapper's
+    * `0x0B17C0DE` little-endian.
+    */
+  private def isBitcode(bytes: Array[Byte]): Boolean = {
+    val head = bytes.take(4).map(_ & 0xff).toList
+
+    head == List(0x42, 0x43, 0xc0, 0xde) || head == List(0xde, 0xc0, 0x17, 0x0b)
+  }
+
+  "'--lto' on the build-c command line is parsed, and a mode clang does not have is refused" in {
+    parseArgs(Seq("build-c", "/somewhere", "--lto", "thin")).map(_.lto) shouldBe Some(Some("thin"))
+    parseArgs(Seq("build-c", "/somewhere", "--lto", "full")).map(_.lto) shouldBe Some(Some("full"))
+    parseArgs(Seq("build-c", "/somewhere")).map(_.lto) shouldBe Some(None)
+    Console.withErr(new java.io.ByteArrayOutputStream)(
+      parseArgs(Seq("build-c", "/somewhere", "--lto", "medium"))) shouldBe None
+  }
+
+  "build-c's own help lists '--lto', saying the archive is native objects without it" in {
+    val usage   = scopt.OParser.usage(parser)
+    val section = usage.linesIterator
+      .dropWhile(!_.startsWith("Command: build-c"))
+      .drop(1)
+      .takeWhile(!_.startsWith("Command: "))
+      .mkString("\n")
+
+    section should include("--lto")
+    section should include("native objects")
+  }
+
+  // `--lto thin` asks for exactly what `sysl build` compiles under that mode, which is bitcode: the
+  // flag is how a clang-and-lld host opts in, where the manifest's key never does.
+  "a project archived with '--lto thin' holds bitcode, and build-c says how it must be linked" in {
+    val ar = Toolchain.findAr(None) match
+      case Right(found) => found
+      case Left(why)    => cancel(why)
+
+    val (archive, _, notes) = builtWithLtoFlag()
+    val dir                 = createTempDirectory("sysl-c-bitcode-")
+    val extract             = exec(Seq(ar, "x", s"--output=$dir", archive, LibraryArtifact.codeMember))
+
+    withClue(extract.stderr)(extract.exitCode shouldBe 0)
+
+    val member = s"$dir/${LibraryArtifact.codeMember}"
+
+    withClue(s"the first bytes of $member: ${readBytes(member).take(4).map(b => f"${b & 0xff}%02x").mkString(" ")}")(
+      isBitcode(readBytes(member)) shouldBe true)
+    notes should include("sysl: this archive is LLVM bitcode: link it with clang and lld (-fuse-ld=lld)")
+  }
+
+  "and without the flag build-c gives no bitcode advice, whatever the manifest's 'lto' says" in {
+    val root            = rootOf("mylib", boundary)
+    val out             = s"$root/libmylib.a"
+
+    writeFile(s"$root/${PackageConfig.FileName}",
+      """package { name = "mylib", version = "0.1.0" }
+        |lto = "thin"
+        |""".stripMargin)
+
+    val (status, notes) = diagnostics(Config(command = "build-c", file = root, output = Some(out)))
+
+    withClue(notes)(status shouldBe 0)
+    notes should not include "LLVM bitcode"
+  }
+
+  // The link the advice names. Skipped where this machine's clang cannot reach lld at all, which is
+  // found out on a trivial program first so that a missing linker is never read as a bad archive.
+  "a C program links against a '--lto thin' archive with clang and lld" in {
+    val probeDir = createTempDirectory("sysl-c-lld-probe-")
+
+    writeFile(s"$probeDir/p.c", "int main(void) { return 0; }\n")
+
+    val probe = exec(Seq("clang", "-fuse-ld=lld", s"$probeDir/p.c", "-o", s"$probeDir/p"))
+
+    assume(probe.exitCode == 0, s"clang cannot link with lld here: ${probe.stderr}")
+
+    val (archive, header, _) = builtWithLtoFlag()
+    val dir                  = createTempDirectory("sysl-c-lld-caller-")
+    val source               = s"$dir/main.c"
+    val exe                  = s"$dir/caller"
+
+    writeFile(source,
+      s"""#include <stdio.h>
+         |#include "$header"
+         |
+         |int main(void) {
+         |    printf("%d %d\\n", mylib_add(2, 3), mylib_scale(4, 5));
+         |    return 0;
+         |}
+         |""".stripMargin)
+
+    // The C side is compiled natively: what is under test is lld's link reading the archive's
+    // bitcode, and `-flto` on `main.c` would also hand lld bitcode from whichever clang is first on
+    // the PATH — Apple's, on a Mac, whose bitcode a Homebrew lld of another LLVM cannot codegen.
+    val build = exec(Seq("clang", "-fuse-ld=lld", source, archive, "-o", exe))
+
+    withClue(build.stderr)(build.exitCode shouldBe 0)
+
+    val run = exec(Seq(exe))
+
+    withClue(run.stderr)(run.exitCode shouldBe 0)
+    run.stdout.trim shouldBe "5 20"
+  }
+
   "a C program links against an archive built under the manifest's LTO with the system linker" in {
     val (archive, header) = builtUnderLto()
     val dir               = createTempDirectory("sysl-c-lto-caller-")

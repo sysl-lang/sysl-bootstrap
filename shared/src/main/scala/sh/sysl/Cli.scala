@@ -355,6 +355,19 @@ private[sysl] val parser = {
           opt[Unit]("all-features")
             .action((_, c) => c.copy(allFeatures = true))
             .text("turn on every feature the root's manifest declares"),
+          // Listed again here, beside the global one, because it means something different for
+          // this command: the archive is native objects unless the command line asks, and the
+          // manifest's `lto` key never does (`buildForC`).
+          opt[String]("lto")
+            .action((m, c) => c.copy(lto = Some(m)))
+            .validate(m =>
+              if Toolchain.ltoModes.contains(m) then success
+              else failure(s"'--lto $m' names no kind of link-time optimization clang has — it is " +
+                s"${Toolchain.ltoModes.mkString(" or ")}"))
+            .text(s"make the archive's members LLVM bitcode for this mode of link-time optimization, " +
+              s"'${Toolchain.ltoModes.mkString("' or '")}', so a host linking with clang and lld can " +
+              s"optimize across the boundary. Without it the members are native objects any C " +
+              s"toolchain links, and the project's 'lto' key does not change that"),
         ),
       cmd("emit-header")
         .action((_, c) => c.copy(command = "emit-header"))

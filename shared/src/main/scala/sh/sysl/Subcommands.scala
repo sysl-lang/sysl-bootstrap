@@ -160,16 +160,18 @@ private def buildForC(cfg: Config, compiled: Compiled, target: Target, named: Op
   val code    = s"$staging/${LibraryArtifact.codeMember}"
   val objects = native.map(s => s -> s"$staging/${LibraryArtifact.nativeMember(s)}")
 
-  // **Every member is compiled WITHOUT link-time optimization, whatever the manifest's `lto` key or
-  // `--lto` says.** `-flto` makes clang write LLVM bitcode rather than an object, and an archive of
+  // **Members are native objects unless `--lto` on the command line asks, whatever the manifest's
+  // `lto` key says.** `-flto` makes clang write LLVM bitcode rather than an object, and an archive of
   // bitcode links only under a linker with LLVM's plugin (`clang -fuse-ld=lld`): GNU ld and gcc
-  // answer "file format not recognized", which is to say the archive is not one "an existing C
+  // answer "file format not recognized", which is to say the archive is not one every "existing C
   // project" can link. The `lto` key describes how *this project's own* link is done, and `build-c`
-  // does no link; optimizing across the archive boundary is the consumer's link's business and their
-  // toolchain's. The level (`-O`) is a property of the object and still applies, as do the profile
-  // levers. `build-lib` is deliberately different: a `.syslib` is only ever consumed by sysl's own
-  // link, which is the link the key was written for, so its members keep the key's LTO.
-  val pipeline = cfg.pipeline.copy(lto = None)
+  // does no link, so `Main` never folds it in for this command and `cfg.lto` here is the flag's
+  // alone. A host that does link with clang and lld asks with `--lto thin|full` and gets members
+  // compiled exactly as `sysl build` compiles its own under that mode, so its link can optimize
+  // across the boundary. The level (`-O`) is a property of the object and always applies, as do the
+  // profile levers. `build-lib` is deliberately different: a `.syslib` is only ever consumed by
+  // sysl's own link, which is the link the key was written for, so its members keep the key's LTO.
+  val pipeline = cfg.pipeline
 
   val outcome =
     for
@@ -211,6 +213,12 @@ private def buildForC(cfg: Config, compiled: Compiled, target: Target, named: Op
       if paths.modules.nonEmpty then
         Console.err.println("sysl: and against what the packages require, which pkg-config " +
           s"answers for: pkg-config --libs ${paths.modules.mkString(" ")}")
+
+      // A bitcode archive fails at a GNU link with "file format not recognized", which names the
+      // archive and not the flag that made it so, so the one requirement is said while it is fresh.
+      if pipeline.lto.nonEmpty then
+        Console.err.println("sysl: this archive is LLVM bitcode: link it with clang and lld " +
+          "(-fuse-ld=lld), or with a linker that carries LLVM's plugin")
 
       0
 }
