@@ -7,6 +7,23 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.136 — 2026-09-25
+
+### `build-c` names the `pkg_config` libraries a C project still has to link
+
+The "link this against" line `sysl build-c` prints was drawn from `@link` directives alone. A package that binds an installed library through its manifest's `pkg_config` block, and says `@link` nowhere, therefore never reached it: building slate's archive named `uv, lmdb, nghttp2, ssl, crypto, sqlite3, m` and left out brotli, libwebp, zstd and hiredis, so the C link failed on `Brotli*`, `WebP*`, `ZSTD_*` and `redisReader*` with no archive in sight.
+
+`build-c` now prints a second line naming every `pkg_config` module the build declared, as the `pkg-config --libs …` the C project's own toolchain can be asked for:
+
+```
+sysl: link this against: uv, lmdb, nghttp2, ssl, crypto, sqlite3, m
+sysl: and against what the packages require, which pkg-config answers for: pkg-config --libs libuv lmdb libnghttp2 openssl libbrotlienc libbrotlidec libwebp libzstd hiredis
+```
+
+Names rather than this machine's flags, because that link runs on the C project's machine. The reference (`ffi.md § @export`) and the CLI page say the same.
+
+No language or library change; the standard-module artifact is unchanged.
+
 ## 0.0.135 — 2026-09-25
 
 A one-file program with a `var` beside `main` now compiles. A file whose only running lines are `var`s used to be read as a script body even when it declared `main`, so the program was refused over its own `main` ("this 'main' is a second") and every function reading the `var` was reported as an undefined name. A declared `main` is now the program's one beginning, and the `var` beside it is module storage that the functions and `main` share:
