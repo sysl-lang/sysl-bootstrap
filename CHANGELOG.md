@@ -7,6 +7,22 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.137 — 2026-09-25
+
+### `build-c` writes an `opaque` exported struct as an incomplete type
+
+An `@export`ed `opaque struct` used to appear in the header `build-c` (and `emit-header`) writes with its whole field layout, even though the point of `opaque` is that C never sees inside it. A field C has no spelling for came out as `void`, for example `/* no C spelling for Str */ void name;`, so clang refused the header.
+
+The header now declares such a struct as an incomplete C type, and nothing more:
+
+```c
+typedef struct mylib_handle mylib_handle;
+```
+
+C code can hold and pass `mylib_handle *` values but cannot look inside them, which is what the reference's `opaque` section says an opaque struct is: an incomplete type. Found by slate's C API.
+
+There is no language or library change in this release, and the standard-module artifact is unchanged.
+
 ## 0.0.136 — 2026-09-25
 
 ### `build-c` names the `pkg_config` libraries a C project still has to link
