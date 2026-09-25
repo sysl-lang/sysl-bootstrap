@@ -193,6 +193,81 @@ class ExportCliTests extends LibraryCliSupport {
     run.stdout.trim shouldBe "5 20"
   }
 
+  /** A project whose manifest asks for thin LTO — slate's own shape, which is how an archive of
+    * LLVM bitcode reached a C project that only GNU ld was ever going to link.
+    */
+  private def builtUnderLto(): (String, String) = {
+    val root = rootOf("mylib", boundary)
+    val out  = s"$root/libmylib.a"
+
+    writeFile(s"$root/${PackageConfig.FileName}",
+      """package { name = "mylib", version = "0.1.0" }
+        |lto = "thin"
+        |""".stripMargin)
+
+    succeeds(Config(command = "build-c", file = root, output = Some(out)))
+    (out, s"$out.h")
+  }
+
+  /** Whether `bytes` begin as a native object this machine's linkers read without LLVM's plugin:
+    * ELF, or 64-bit Mach-O in either byte order. Bitcode begins `BC 0xC0DE`, or `0x0B17C0DE` inside
+    * Apple's wrapper, and is neither.
+    */
+  private def isNativeObject(bytes: Array[Byte]): Boolean = {
+    val head = bytes.take(4).map(_ & 0xff).toList
+
+    head == List(0x7f, 0x45, 0x4c, 0x46) || head == List(0xcf, 0xfa, 0xed, 0xfe) ||
+      head == List(0xfe, 0xed, 0xfa, 0xcf)
+  }
+
+  // The manifest's `lto` is how the project's OWN link is done, and `build-c` does no link: the
+  // archive is for "an existing C project", whose linker may be GNU ld, which refuses bitcode as
+  // "file format not recognized". So the member is an object whatever the manifest says.
+  "a project whose manifest asks for LTO still archives a native object, not bitcode" in {
+    val ar = Toolchain.findAr(None) match
+      case Right(found) => found
+      case Left(why)    => cancel(why)
+
+    val (archive, _) = builtUnderLto()
+    val dir          = createTempDirectory("sysl-c-members-")
+    val extract      = exec(Seq(ar, "x", s"--output=$dir", archive, LibraryArtifact.codeMember))
+
+    withClue(extract.stderr)(extract.exitCode shouldBe 0)
+
+    val member = s"$dir/${LibraryArtifact.codeMember}"
+
+    withClue(s"the first bytes of $member: ${readBytes(member).take(4).map(b => f"${b & 0xff}%02x").mkString(" ")}")(
+      isNativeObject(readBytes(member)) shouldBe true)
+  }
+
+  // The same archive through the system linker — no `-fuse-ld=lld`, which was the one link that
+  // could read the bitcode the manifest's `lto` used to put here.
+  "a C program links against an archive built under the manifest's LTO with the system linker" in {
+    val (archive, header) = builtUnderLto()
+    val dir               = createTempDirectory("sysl-c-lto-caller-")
+    val source            = s"$dir/main.c"
+    val exe               = s"$dir/caller"
+
+    writeFile(source,
+      s"""#include <stdio.h>
+         |#include "$header"
+         |
+         |int main(void) {
+         |    printf("%d %d\\n", mylib_add(2, 3), mylib_scale(4, 5));
+         |    return 0;
+         |}
+         |""".stripMargin)
+
+    val build = exec(Seq("clang", source, archive, "-o", exe))
+
+    withClue(build.stderr)(build.exitCode shouldBe 0)
+
+    val run = exec(Seq(exe))
+
+    withClue(run.stderr)(run.exitCode shouldBe 0)
+    run.stdout.trim shouldBe "5 20"
+  }
+
   /** A module `pkg-config` on this machine knows about, when it knows about any — the first word of
     * `--list-all`'s first line, which is what makes the case below independent of what is installed.
     */

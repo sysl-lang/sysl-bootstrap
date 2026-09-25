@@ -160,12 +160,23 @@ private def buildForC(cfg: Config, compiled: Compiled, target: Target, named: Op
   val code    = s"$staging/${LibraryArtifact.codeMember}"
   val objects = native.map(s => s -> s"$staging/${LibraryArtifact.nativeMember(s)}")
 
+  // **Every member is compiled WITHOUT link-time optimization, whatever the manifest's `lto` key or
+  // `--lto` says.** `-flto` makes clang write LLVM bitcode rather than an object, and an archive of
+  // bitcode links only under a linker with LLVM's plugin (`clang -fuse-ld=lld`): GNU ld and gcc
+  // answer "file format not recognized", which is to say the archive is not one "an existing C
+  // project" can link. The `lto` key describes how *this project's own* link is done, and `build-c`
+  // does no link; optimizing across the archive boundary is the consumer's link's business and their
+  // toolchain's. The level (`-O`) is a property of the object and still applies, as do the profile
+  // levers. `build-lib` is deliberately different: a `.syslib` is only ever consumed by sysl's own
+  // link, which is the link the key was written for, so its members keep the key's LTO.
+  val pipeline = cfg.pipeline.copy(lto = None)
+
   val outcome =
     for
-      _ <- Toolchain.compileObject(compiled.ir, code, target, cfg.optimization, cfg.cc, cfg.pipeline)
+      _ <- Toolchain.compileObject(compiled.ir, code, target, cfg.optimization, cfg.cc, pipeline)
       _ <- objects.foldLeft[Either[String, Unit]](Right(()))((so_far, entry) =>
              so_far.flatMap(_ => Toolchain.compileC(entry._1.name, entry._2, target, cfg.optimization,
-               paths, cfg.verbose, pipeline = cfg.pipeline)))
+               paths, cfg.verbose, pipeline = pipeline)))
       _ <- Toolchain.archive(code :: objects.map(_._2), out, ar)
     yield ()
 
