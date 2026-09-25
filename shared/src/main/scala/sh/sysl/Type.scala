@@ -718,6 +718,12 @@ object Type extends TypeQueries {
       */
     var cname: Option[String] = None
 
+    /** `opaque struct` — the shape is withheld from everything outside the declaring module
+      * (`reference/ffi.md § opaque`). A generated C header is outside every module, so it declares
+      * the type **incomplete**, the way C's own `struct foo;` handles are, and lays out no field.
+      */
+    var opaque: Boolean = false
+
     def name: String = qualified(base, targs)
 
     def lty(using Word): LType = LType.Named(s"%struct.${mangled(base, targs)}")

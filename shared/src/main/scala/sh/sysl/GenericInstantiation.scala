@@ -157,6 +157,7 @@ trait GenericInstantiation extends ConstFolding {
         try
           s.fields = decl.fields.map(f => (f.name, recover(Type.Unknown)(resolveQualified(f.typ, subst))))
           s.packed = decl.packed
+          s.opaque = decl.opaque
           s.minAlign = decl.alignment.flatMap(a => recover(Option.empty[Int])(alignBound(decl.name, a)))
           // The declared name where `@export` carried no string, which is the reading it has on a
           // function. It is the **bare** name rather than the key: a key is `module$Name`, and being

@@ -125,8 +125,9 @@ object CHeader {
         r match
           case s: Type.Struct =>
             // The fields go first, so that what this definition lays out is already complete where
-            // the C compiler reads it.
-            s.stored.foreach((_, f) => walk(f))
+            // the C compiler reads it. An opaque struct lays nothing out, so what its fields reach
+            // is not the header's business — and a field type with no C spelling is no obstacle.
+            if !s.opaque then s.stored.foreach((_, f) => walk(f))
             named += s
           case a: Type.Array          => walk(a.elem)
           case Type.Ptr(inner)        => walk(inner)
@@ -142,8 +143,14 @@ object CHeader {
 
   /** One aggregate, as C declares it — a `typedef` of an anonymous struct, so that the name is
    * usable without the `struct` keyword and reads the way a C API's own handles do.
+   *
+   * **An `opaque` struct is declared incomplete** — `typedef struct h h;`, a tag with no body — which
+   * is exactly C's `struct foo;` (`reference/ffi.md § opaque`). The C caller is outside the declaring
+   * module, so it may hold a `*h` and never see inside; the tag is what makes the type nameable
+   * without a layout, where an anonymous struct has nothing to be incomplete about.
    */
   private def definition(t: Type): String = t match
+    case s: Type.Struct if s.opaque => s"typedef struct ${cName(s)} ${cName(s)};\n"
     case s: Type.Struct =>
       val fields = s.stored.map((n, f) => s"\t${member(f, n)};\n").mkString
 

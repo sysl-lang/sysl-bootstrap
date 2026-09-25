@@ -282,6 +282,53 @@ class ExportCliTests extends LibraryCliSupport {
     run.stdout.trim shouldBe "11 22"
   }
 
+  /** An `opaque` struct is incomplete to everything outside its module (`reference/ffi.md § opaque`),
+    * and a C caller is outside every module. So the header declares a tag with no body, and a field
+    * with no C spelling at all — a `string` here — is never written, because nothing is laid out.
+    */
+  private val handles =
+    """module mylib
+      |
+      |@export("mylib_handle")
+      |opaque struct Handle
+      |    name: string
+      |    n: int
+      |
+      |@export("mylib_count")
+      |count(h: *Handle) -> int = h.n
+      |""".stripMargin
+
+  "the header declares an 'opaque' struct incomplete, and lays out none of its fields" in {
+    val text = readFile(built(handles)._2)
+
+    text should include("typedef struct mylib_handle mylib_handle;\n")
+    text should include("int32_t mylib_count(mylib_handle * h);")
+    text should not include "no C spelling"
+    text should not include "typedef struct {"
+  }
+
+  "and a C program holding only a pointer to that handle compiles and links against it" in {
+    val (archive, header) = built(handles)
+    val dir               = createTempDirectory("sysl-c-opaque-")
+    val source            = s"$dir/main.c"
+    val exe               = s"$dir/caller"
+
+    writeFile(source,
+      s"""#include <stdio.h>
+         |#include "$header"
+         |
+         |int main(int argc, char **argv) {
+         |    mylib_handle *h = NULL;
+         |    if (argc > 99) printf("%d\\n", (int) mylib_count(h));
+         |    return 0;
+         |}
+         |""".stripMargin)
+
+    val build = exec(Seq("clang", "-Werror", source, archive, "-o", exe))
+
+    withClue(build.stderr)(build.exitCode shouldBe 0)
+  }
+
   "a C program links an export that uses the standard library, which is the case a '.syslib' cannot serve" in {
     val (archive, header) = built(talkative)
     val dir               = createTempDirectory("sysl-c-printing-")
