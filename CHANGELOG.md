@@ -7,6 +7,40 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.140 — 2026-09-26
+
+### `@export` names a type in the C header
+
+`@export("c_name")` on a `type` declaration over a scalar, a pointer or a function pointer now makes `build-c` and `emit-header` write `typedef <base> c_name;` and use that name in every position of the header where the type appears. A bare `@export` publishes the sysl name. An alias of any other shape, one C cannot spell as a typedef, is refused with advice.
+
+```
+@export("mylib_vm")
+opaque struct Vm
+    n: int
+
+@export("mylib_value")
+type Handle = u64
+
+@export("mylib_int")
+int_of(vm: *Vm, n: i64) -> Handle = Handle(n)
+```
+
+`sysl emit-header` gives:
+
+```c
+typedef struct mylib_vm mylib_vm;
+
+typedef uint64_t mylib_value;
+
+mylib_value mylib_int(mylib_vm * vm, int64_t n);
+```
+
+An exported pointer type also indexes and slices now, as the pointer it names does.
+
+slate's C API asked for this: `slate_value` had been appearing in its header as a bare `uint64_t`.
+
+`AstCodec` goes from version 57 to 58. There is no library change, and the standard-module artifact is unchanged.
+
 ## 0.0.139 — 2026-09-25
 
 ### `build-c` writes native objects, and `--lto` asks for bitcode
