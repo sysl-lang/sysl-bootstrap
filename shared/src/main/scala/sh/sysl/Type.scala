@@ -926,6 +926,49 @@ object Type extends TypeQueries {
     // one *inside* a mode — a `*volatile u32` is not a `*u32` — and stripping at the top leaves that
     // alone, since neither of those is stripped at all.
     case Volatile(inner)              => repr(inner)
+    // Below the top, only a name is taken off: a `*H` agrees with a `*u64` where `H` is a second
+    // name for `u64`, and a `*Small` does not agree with a `*u64`, because a write through the one
+    // is checked and a write through the other is not.
+    case _                            => nameless(t)
+
+  /** Whether a constrained type is **only a name** — not derived, and carrying no range and no
+   * predicate. A measured `c type` is one, and so is an exported plain alias (`reference/ffi.md §
+   * Naming a type`): both keep a name so a C header can spell it, and both are otherwise the type
+   * they stand for, with no value of the base refused and no conversion written either way.
+   */
+  def nameOnly(c: Constrained): Boolean =
+    !c.derived && c.lo.isEmpty && c.hi.isEmpty && c.predFn.isEmpty
+
+  /** A type with every name-only constrained type in it replaced by its base, at any depth.
+   *
+   * **This is the identity such a name has everywhere the language checks types** — agreement
+   * (through `repr`), and the key an instantiation is filed under — so `Buf[H]` and `Buf[u64]` are
+   * one instantiation and `*H` is a `*u64`. The name stays visible only to what reads a type as
+   * written rather than as checked: the generated header (`CHeader`), which spells the `typedef`.
+   *
+   * A named type is not entered, because its arguments were already made nameless when it was
+   * instantiated, which is the only way one is ever built.
+   */
+  def nameless(t: Type): Type = t match
+    case c: Constrained if nameOnly(c) => nameless(c.base)
+    case Ptr(inner)                    => Ptr(nameless(inner))
+    case Ref(inner, sync)              => Ref(nameless(inner), sync)
+    case Weak(inner)                   => Weak(nameless(inner))
+    case Array(n, elem)                => Array(n, nameless(elem))
+    case Vector(n, elem)               => Vector(n, nameless(elem))
+    case Slice(elem, ro)               => Slice(nameless(elem), ro)
+    case Volatile(inner)               => Volatile(nameless(inner))
+    case CFn(ps, r)                    => CFn(ps.map(nameless), nameless(r))
+    case Pack(es)                      => Pack(es.map(nameless))
+    case _                             => t
+
+  /** `repr` without `nameless`: a transparent type or a qualifier taken off the top, and every name
+   * inside left where it was written. It is what the C header walks, since a name there is exactly
+   * the thing it is asked to spell.
+   */
+  def surface(t: Type): Type = t match
+    case c: Constrained if !c.derived => surface(c.base)
+    case Volatile(inner)              => surface(inner)
     case _                            => t
 
   /** Every constrained subtype seen as its ultimate base representation — the identity for explicit

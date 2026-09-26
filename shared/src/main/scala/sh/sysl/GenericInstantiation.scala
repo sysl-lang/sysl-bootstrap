@@ -129,8 +129,9 @@ trait GenericInstantiation extends ConstFolding {
     checkArity(name, decl.tparams, decl.tdefaults, written)
 
     // Filled before anything is keyed on it, so `Buf[int]` and `Buf[int, Heap]` are one
-    // instantiation rather than two that happen to have the same fields.
-    val targs = withDefaults(name, decl.tparams, decl.tdefaults, written, Map.empty)
+    // instantiation rather than two that happen to have the same fields. And made nameless for the
+    // same reason: `Buf[H]` over a `c type` or an exported alias of `u64` *is* `Buf[u64]`.
+    val targs = withDefaults(name, decl.tparams, decl.tdefaults, written, Map.empty).map(Type.nameless)
 
     checkTypeBounds(name, decl.tparams, targs)
     val key = Type.instanceKey(name, targs)
@@ -237,7 +238,9 @@ trait GenericInstantiation extends ConstFolding {
    * twice is one type, for the same reason `Box[int]` written twice is, and the field list is a
    * consequence of the parts rather than something a second instantiation could disagree about.
    */
-  protected def tupleType(parts: List[Type]): Type.Tuple =
+  protected def tupleType(written: List[Type]): Type.Tuple =
+    // Nameless for `instantiateStruct`'s reason: `(H, int)` over a second name for `u64` is `(u64, int)`.
+    val parts = written.map(Type.nameless)
     // A tuple over a type **parameter** is not registered, and that is not an optimization. The key
     // is the type's spelling, and a parameter spells the same whatever an `impl` asked of it — so a
     // registered `(A, B)` would be handed back to the next block that wrote one, carrying the first
@@ -322,7 +325,7 @@ trait GenericInstantiation extends ConstFolding {
     val decl = enumDecls(name)
     checkArity(name, decl.tparams, decl.tdefaults, written)
 
-    val targs = withDefaults(name, decl.tparams, decl.tdefaults, written, Map.empty)
+    val targs = withDefaults(name, decl.tparams, decl.tdefaults, written, Map.empty).map(Type.nameless)
 
     checkTypeBounds(name, decl.tparams, targs)
     val key = Type.instanceKey(name, targs)
@@ -428,8 +431,18 @@ trait GenericInstantiation extends ConstFolding {
    * parameters it determines. Deliberately lenient: a structural mismatch simply leaves the
    * parameter unbound, and the argument is type-checked properly against the instantiated
    * signature afterwards, where the message can name both types.
+   *
+   * The actual type is matched nameless, so an exported `type R = *Vm` is read as the `*Vm` it is
+   * by a `*T` parameter, and what a parameter binds is never a second name for a type.
    */
   protected def unify(
+      ref: TypeRef,
+      actual: Type,
+      tparams: Set[String],
+      sub: mutable.Map[String, Type],
+  ): Unit = unifyNameless(ref, Type.nameless(actual), tparams, sub)
+
+  private def unifyNameless(
       ref: TypeRef,
       actual: Type,
       tparams: Set[String],

@@ -387,7 +387,12 @@ trait FunctionBodies extends ModuleStorage {
     case Type.Ptr(inner) => Type.Ptr(constSelfType(inner))
     case other           => Type.constView(other)
 
-  protected def instantiateFunc(f: FuncDecl, targs: List[Type], constSelf: Boolean = false): String = {
+  protected def instantiateFunc(f: FuncDecl, solved: List[Type], constSelf: Boolean = false): String = {
+    // Nameless for `instantiateStruct`'s reason: an instantiation at a `c type` or an exported alias
+    // is the instantiation at what it names, and must be one body with one signature — the mangled
+    // name below already says so, and the signature filed under it has to agree.
+    val targs = solved.map(Type.nameless)
+
     // The tag is empty for every instantiation a value is ever made at, so an emitted symbol is
     // exactly what it always was. It is not empty for a **stand-in**, which is its name and nothing
     // else — so `Buf.at.T` under one declaration's `[T: Ord]` and under another's `[T: Display]`

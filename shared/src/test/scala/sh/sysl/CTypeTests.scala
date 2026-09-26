@@ -96,6 +96,31 @@ class CTypeTests extends AnyFreeSpec with CodegenSupport with RunSupport with Pa
             |""".stripMargin) shouldBe "8\n"
     }
 
+    /** It is that integer inside a generic's arguments and behind a pointer too, not only at the top:
+      * `Buf[Size]` beside `Buf[u64]` is one instantiation, and a `*Size` is a `*u64` — where `size_t`
+      * is 64 bits, which is every host this suite runs on.
+      */
+    "and inside a generic's arguments and behind a pointer, it is still that integer" in {
+      run("""@include("<stddef.h>")
+            |
+            |import sysl.buf.{Buf, buf}
+            |
+            |c type
+            |    Size = "size_t"
+            |
+            |first(p: *Size) -> Size = p[0]
+            |
+            |main()
+            |    var a: Buf[Size] = buf()
+            |    a.push(1)
+            |    var b: Buf[u64] = buf()
+            |    b.push(2)
+            |    val p: *Size = &b.elems[0]
+            |    val q: *u64 = &a.elems[0]
+            |    print(first(p) + a.at(0), first(q) + b.at(0))
+            |""".stripMargin) shouldBe "3 3\n"
+    }
+
     /** The case the card was filed for: the width reaches a **signature**, where getting it wrong is
       * not a size mismatch anything can see. The claim is agreement again — the type sysl gave the
       * parameter is as wide as C says the typedef is.

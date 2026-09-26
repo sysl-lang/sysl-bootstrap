@@ -129,7 +129,7 @@ object CHeader {
           named += c
       case c: Type.Constrained => walk(c.base)
       case Type.Volatile(inner) => walk(inner)
-      case _                    => aggregate(Type.repr(t))
+      case _                    => aggregate(Type.surface(t))
 
     def aggregate(r: Type): Unit =
       if !seen.add(r) then ()
@@ -196,7 +196,7 @@ object CHeader {
     case Type.Volatile(inner)                     => declare(inner, name)
     case _                                        => declarator(t, name)
 
-  private def declarator(t: Type, name: String): String = Type.repr(t) match
+  private def declarator(t: Type, name: String): String = Type.surface(t) match
     case Type.CFn(params, ret) =>
       val ps = if params.isEmpty then "void" else params.map(spell).mkString(", ")
       declare(ret, s"(*$name)($ps)")
@@ -204,7 +204,7 @@ object CHeader {
     // pointer — needs the parentheses that make the `*` apply first.
     // An exported name is a base type, so a pointer to one takes no parentheses whatever it names.
     case Type.Ptr(inner) =>
-      Type.repr(inner) match
+      Type.surface(inner) match
         case _: Type.Array | _: Type.CFn if !typedefd(inner) => declare(inner, s"(*$name)")
         case _                           => declare(inner, if name.isEmpty then "*" else s"* $name")
     case a: Type.Array => declare(a.elem, s"$name[${a.length}]")
@@ -253,7 +253,7 @@ object CHeader {
   /** A type that is not built from a declarator — a scalar, a struct's name, a simple enum's
    * integer. Pointers, arrays and function pointers are `declare`'s, since they wrap a name.
    */
-  private def base(t: Type): String = Type.repr(t) match
+  private def base(t: Type): String = Type.surface(t) match
     case Type.Unit | Type.Never              => "void"
     case Type.Bool                           => "bool"
     // A `char` is a Unicode scalar value, which is four bytes and not C's `char`. `uint32_t` is what

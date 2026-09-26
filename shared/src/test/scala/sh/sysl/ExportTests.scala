@@ -780,6 +780,15 @@ class ExportTests extends AnyFreeSpec with CodegenSupport with TestFrameworkSupp
       h.indexOf("typedef struct vm vm;") should be < h.indexOf("typedef vm * vm_ref;")
     }
 
+    // The name is the header's to spell even where the checker sees straight through it: a `*Handle`
+    // agrees with a `*u64` in sysl, and is still written by its name here.
+    "a pointer to it is spelled by the name, though sysl reads it as a pointer to the base" in {
+      val h = headerFor("module demo\n\n@export(\"h_t\")\ntype H = u64\n\n" +
+        "@export\nfirst(p: *H, q: *u64) -> H = p[0] + q[0]\n")
+
+      h should include("h_t first(h_t * p, uint64_t * q);")
+    }
+
     "while a type that is not exported is spelled as what it stands for" in {
       val h = headerFor("module demo\n\ntype Handle = u64\ntype Meters = new f64\ntype Slot = u8 within 0..<8\n\n" +
         "@export\nf(h: Handle, m: Meters, s: Slot) -> Handle = h\n")
