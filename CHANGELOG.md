@@ -7,6 +7,20 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.144 — 2026-09-26
+
+### A library owns the functions its modules declared
+
+On 0.0.142 a library decided which functions were its own by parsing a module out of each symbol's name. A member of a built-in type has no module in its name — `char.is_digit` from `impl Ascii for char` in `sysl.text.ascii`, `real.nan`, `f32.abs`, `string.starts_with`, and instantiations such as `arr.eq.c16.byte` and `constslice.byte.last_index_of_byte` — so the precompiled standard module *called* these functions and never defined or advertised them. Only dead-stripping hid it: a program whose link line keeps every function (`-Wl,--export-dynamic`, which GTK's `pkg-config` output carries) failed with `undefined reference to 'real.nan'` and friends.
+
+The rule now: a function belongs to the module that declared it, and that is read off the declaration rather than out of the name. Every function records its declaring module — a trait default copied onto a type belongs to the impl's module, a generic instantiation to the definition's module, a closure to its enclosing function's — and a library partitions on that. So the standard library defines and advertises `char.is_digit` and the rest as ordinary public symbols, and a program that calls one links against std's copy instead of compiling its own; a member the library never instantiated is still the program's to compile. The special case for closures in the library builder went away with it. Symbols, language rules and program source are unchanged, but the shipped `std.syslib` now carries these members, and the library artifact format moves to version 7, so every cached library rebuilds once.
+
+`StdArtifactTests` pins it: std defines and advertises every member of a built-in type its own functions call; a program calling one declares it and links against std's copy; one std never instantiated is still compiled by the program. `LibraryArtifactTests` checks that such a member comes from the library's object file, and `LibraryBuildCliTests` checks that `build-lib --std` advertises built-in-type and blanket members as std's own.
+
+Found by the Linux desktop edition of slate, whose GTK link line exports every symbol. The design call is the user's: *"if `is_digit` is part of `char`, then you shouldn't need a fully qualified name."* No library source change.
+
+0.0.143 was never released: that release was stopped before it finished, and this release takes the next number.
+
 ## 0.0.142 — 2026-09-26
 
 ### A checked constrained type is its own instantiation
