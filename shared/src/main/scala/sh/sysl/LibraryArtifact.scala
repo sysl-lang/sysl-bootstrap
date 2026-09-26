@@ -104,8 +104,14 @@ object LibraryArtifact {
    * **6 is such a change.** A constrained type that checks its values now mangles under its own name
    * rather than its base's, so a library instantiating a generic at one defines `Buf.at.Small` where
    * an artifact from 5 defined `Buf.at.ulong`.
+   *
+   * **7 changes what an artifact advertises.** A library owns the functions its modules declared,
+   * read off the declaration rather than the name (`Compiler.compileLibrary`), so the members of a
+   * built-in type its `impl`s supply — `char.is_digit` — are defined with external linkage and
+   * advertised. An artifact from 6 neither defines nor advertises them, and a program reading its
+   * list alongside one built after would disagree with it about who defines them.
    */
-  val Version: Int = 6
+  val Version: Int = 7
 
   /** The separator both byte formats here lean on: between the fields of a fingerprint, and around
    * the metadata marker.

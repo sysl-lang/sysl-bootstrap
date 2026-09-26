@@ -60,6 +60,9 @@ trait FunctionBodies extends ModuleStorage {
       siblings: Map[String, Nested] = Map.empty,
       variadic: Boolean = false,
   ): (TFunc, Type) = {
+    // A nested body is declared by whatever declared the body it is written in.
+    val savedOwner    = currentOwner
+    val owner         = if currentOwner.nonEmpty then currentOwner else currentModule
     val savedScopes   = scopes
     val savedUsed     = used.toSet
     val savedReadOnly = readOnlyLocals.toSet
@@ -96,6 +99,7 @@ trait FunctionBodies extends ModuleStorage {
       resetFunction()
       currentFunctionName = savedFuncName
       currentMemberName = savedMember
+      currentOwner = owner
       inTestBody = savedInTest
       retTy = declaredResult.getOrElse(Type.Unknown)
       retIsList = false
@@ -175,11 +179,13 @@ trait FunctionBodies extends ModuleStorage {
       // and with external linkage the linker is free to resolve one unit's call to the other unit's
       // body: a different environment layout under a different body, which is a wrong answer rather
       // than a failure to link.
-      (TFunc(name, tparams, result, tbody, variadic, requires, ensures, olds, internal = true),
+      (TFunc(name, tparams, result, tbody, variadic, requires, ensures, olds, internal = true,
+             module = owner),
        result)
     finally
       currentFunctionName = savedFuncName
       currentMemberName = savedMember
+      currentOwner = savedOwner
       inTestBody = savedInTest
       scopes = savedScopes
       used.clear(); used ++= savedUsed
@@ -222,6 +228,9 @@ trait FunctionBodies extends ModuleStorage {
     // Whole, for the reason `currentMemberName` carries: the split above cuts a setter's name in the
     // wrong place, and which member this body is has to be answerable.
     currentMemberName = f.name
+    // Who declared it is read off the declaration too, so an instantiation belongs to the module of
+    // the generic it was made from rather than to whichever module's call asked for it.
+    currentOwner = ownerOf(f.name)
     // Read off the declaration for the same reason, and off the declaration's own name rather than
     // off `name`: an instantiation of a generic written in a test file is scaffolding exactly as the
     // generic is, and its mangled key is in no table that remembers which file wrote it.
@@ -308,7 +317,7 @@ trait FunctionBodies extends ModuleStorage {
       // All three reach the emitted `define` line and nothing else. They travel per **instantiation**
       // rather than per declaration, which is what a generic marked with one of them means: every
       // copy the program asks for carries the mark the declaration was written with.
-      f.noinline, f.cold, f.inline)
+      f.noinline, f.cold, f.inline, currentOwner)
       // **The declaration's own position travels with it**, which is what lets the checks that run
       // on the *typed* tree point somewhere. `Exports.check` and `TailCalls.check` both complain
       // about a whole function rather than about an expression inside one, and until this they

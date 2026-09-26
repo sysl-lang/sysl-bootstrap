@@ -296,6 +296,11 @@ trait AnalyzerBase extends Scoping {
    */
   protected var currentMemberName: String = ""
 
+  /** The module that declared the body being analyzed (`TFunc.module`), or empty outside any body —
+   * where a closure written in a module `val`'s initializer belongs to the module being read.
+   */
+  protected var currentOwner: String = ""
+
   protected def resetFunction(): Unit = {
     // Cleared here rather than left to whoever sets it, because "outside any body" has to be a
     // state the analyzer can actually be in. Left uncleared it held the last name analyzed, so a
@@ -304,6 +309,7 @@ trait AnalyzerBase extends Scoping {
     // before any storage is laid down.
     currentFunctionName = ""
     currentMemberName = ""
+    currentOwner = ""
     // Cleared for the same reason, and it matters for the same one: a body left over from the last
     // declaration walked would make a closure lowered outside any of them — in `main`, in a module
     // `val`'s initializer — inherit whether *that* was a test.

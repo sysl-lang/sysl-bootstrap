@@ -362,6 +362,8 @@ trait MemberLowering extends TypeResolution {
       // named — and an inherited default's body is the trait's source, wherever the trait is. Both
       // resolve their names where they were written, so that is what is recorded here.
       declScope(fd.name) = defaultHome(fd.name).getOrElse(currentScope)
+      // Declared here, though: the copy is this block's member, whichever module wrote its body.
+      declOwner(fd.name) = currentScope.module
 
       lowered += fd
 

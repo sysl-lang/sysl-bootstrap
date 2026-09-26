@@ -242,6 +242,14 @@ case class TFunc(
      * never seen beside is `noinline`.
       */
     inline: Boolean = false,
+    /** The module that declared this function, which is the module whose compilation owns its
+     * definition. It is a fact about the declaration and is recorded from it, because the name
+     * cannot be asked: a member of a built-in type (`char.is_digit`) is keyed under the type, and a
+     * closure's key begins with `$`. An instantiation of a generic carries the module of the
+     * **definition** it was made from, whichever caller asked for it, and a closure or nested
+     * function carries the module of the body it was written in.
+     */
+    module: String = "",
 ) extends Positioned
 
 /** A function the linker supplies, which the module declares rather than defines. Only the ones

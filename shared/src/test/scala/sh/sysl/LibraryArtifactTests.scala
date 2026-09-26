@@ -611,8 +611,9 @@ class LibraryArtifactTests extends AnyFreeSpec with Matchers {
    * }}}
    *
    * The library **declared** the closure's body — its key begins with the module separator, so
-   * `Modules.moduleOf` read it as the root module's and filed it as something another library
-   * supplies — while advertising the instantiation that calls it. A program then declared the
+   * ownership read off the name filed it as something another library supplies, where the
+   * declaration (`TFunc.module`) says it is the enclosing body's module's — while advertising the
+   * instantiation that calls it. A program then declared the
    * instantiation rather than building one, and the artifact's body called straight into the
    * program's own closure: a different environment under a different body.
    *

@@ -867,6 +867,21 @@ trait Scoping extends DeclTables {
    */
   protected val declScope = mutable.HashMap.empty[String, Scope]
 
+  /** The module that **declared** a member whose body is read somewhere else — a trait's default
+   * copied into an implementing type is read in the trait's terms (`declScope`) and declared by the
+   * `impl` that brought it. Only those differ from `declScope`'s module, so only those are here.
+   */
+  protected val declOwner = mutable.HashMap.empty[String, String]
+
+  /** The module that declared `name`, which is the module whose compilation owns its definition.
+   *
+   * It is read off the declaration rather than off the key, and the key cannot answer it: a member
+   * of a built-in type (`char.is_digit`, `real.nan`) is keyed under the type and names no module at
+   * all, and an `impl` in one module may be written for a type in another.
+   */
+  protected def ownerOf(name: String): String =
+    declOwner.getOrElse(name, scopeFor(name).module)
+
   /** The terms a declaration's signature and body are read in. A declaration with no file behind it
    * — the library's, or one the compiler synthesized — imports nothing and is read in the module its
    * key names.

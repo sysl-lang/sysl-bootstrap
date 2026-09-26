@@ -355,11 +355,13 @@ object Compiler {
    * defined in the consuming program, which compiles the shipped library anyway and reaches them
    * through the very body that called for them.
    *
-   * Which is which is read off the **module**, and that is exact rather than approximate: a library's
-   * declarations are keyed under the module its directory names, and everything the compiler supplied
-   * — including a generic of the shipped library's monomorphized for this one's sake — is keyed
-   * somewhere else. It is exact only because a library may not sit in the anonymous root module,
-   * which `LibraryArtifact.build` is what refuses.
+   * Which is which is read off the **declaring module** each typed function records (`TFunc.module`),
+   * never off its name. A library owns the functions its modules declared: its own top-level
+   * functions, the members of every `impl` it wrote — a built-in type's included, so `char.is_digit`
+   * is `sysl.text.ascii`'s though its key names no module — every instantiation of a generic it
+   * defines, and every closure written in one of those bodies. A generic of the shipped library's
+   * monomorphized for this one's sake belongs to the shipped library. It is exact only because a
+   * library may not sit in the anonymous root module, which `LibraryArtifact.build` is what refuses.
    *
    * `building` names the shipped library's own modules where *this* is the compilation producing
    * them, so that the compiler does not supply the files it is being asked to compile.
@@ -404,45 +406,19 @@ object Compiler {
     yield
       val mine = units.map(moduleOf).toSet
 
-      // **A closure this compilation lowered is this compilation's, and the module in its key does
-      // not say so.** A closure's name begins with `$`, which is also the module separator, so
-      // `Modules.moduleOf` reads `$closure4.call` as belonging to the *root* module — which is in
-      // nobody's `mine`, so it was filed as something another library supplies. The library then
-      // declared it and never emitted it, while an instantiation made at that closure —
-      // `sysl.time$resolve.$closure4`, whose key does carry a module — was emitted *and* advertised.
-      // A program linking the artifact declared the instantiation instead of building one, and the
-      // artifact's copy called back into a `$closure4.call` the program had defined for a closure of
-      // its own: a different environment under a different body, and a silently wrong answer.
+      // **A library owns the functions its modules declared, and the symbol name is not where that
+      // is read.** Each typed function records the module that declared it (`TFunc.module`), so a
+      // member of a built-in type — `char.is_digit`, `real.nan`, `constslice.byte.last_index_of_byte`
+      // — is its `impl`'s module's, though its key names none, and a closure is the module's whose
+      // body it was written in, though its key begins with `$`. Owned functions are emitted with
+      // ordinary linkage and advertised below like any other, so a program linking the artifact
+      // declares them and links against this copy.
       //
-      // Emitting it is only half the answer and internal linkage is the other. Both units call their
-      // fourth closure `$closure4.call`, so the two copies have to be two symbols; `TFunc.internal`
-      // is set for every closure body and for every instantiation made at one, which also keeps them
-      // out of `determined` below.
-      val (claimed, unclaimed) =
-        typed.funcs.partition(f => mine(Modules.moduleOf(f.name)) || Closures.lowered(f.name))
-
-      // **A member of a built-in type belongs to no module by its key**, so the partition above
-      // files it as supplied whichever module wrote it: `char.is_digit`, `real.nan`, `f32.abs`,
-      // `constslice.byte.last_index_of_byte` are declared by the library that calls them, defined by
-      // nobody, and never advertised. A program that reaches such a caller compiles its own copy, so
-      // an ordinary link works — but only because the program's walk and the linker's dead-stripping
-      // agree on what is unreachable. A link that keeps every function (`--export-dynamic`, no
-      // `-dead_strip`, an archive member loaded whole) keeps the callers and finds no callee.
-      //
-      // So the library emits every such member its own functions reach, `internal`, the way it
-      // emits a closure: the copy is its own, the program still compiles one of its own where it
-      // needs one, and two copies under one name never meet at a link. Only what this library's
-      // functions reach is taken — a member reached only through another library's code is that
-      // library's to carry. One that reads a module-level `val` is left to the program for the reason
-      // a deferred function is below, and so is every caller of it.
-      val keyless = unclaimed.filter(f => Modules.moduleOf(f.name).isEmpty)
-      val reached = Reachability.reachedFrom(claimed, claimed ::: keyless, typed.vtables).calls
-      val (members, supplied) = unclaimed.partition(f =>
-        Modules.moduleOf(f.name).isEmpty && reached(f.name) &&
-          Reachability.reachedFrom(List(f), typed.funcs, typed.vtables).vals.isEmpty)
-      val carried = members.map(_.copy(internal = true))
-      val own     = claimed ::: carried
-      val byName  = carried.map(f => f.name -> f).toMap
+      // **Ownership and linkage are separate facts.** Both units call their fourth closure
+      // `$closure4.call`, so a closure body — and every instantiation made at one — is `internal`
+      // (`TFunc.internal`): the library's copy and the program's are two symbols, and neither is
+      // advertised, since `determined` below leaves out whatever is internal.
+      val (own, supplied) = typed.funcs.partition(f => mine(f.module))
 
       // A function that reads a module-level `val` is left out of the precompiled half, and this is
       // the honest boundary of what separate compilation reaches today: the storage for a `val` is
@@ -473,12 +449,13 @@ object Compiler {
 
       // **An `internal` deferred function is dropped outright rather than declared**, because the
       // emitter defines every `internal` function it is handed, precompiled or not — that is how a
-      // program carries its own copy of a library's private one. Handed to it here, one would be
-      // defined in the library after all, calling a deferred callee (`u32.round_key`, which reads
-      // `k256`) that this object never defines. Every caller of a deferred function is deferred too,
-      // so nothing emitted here names it.
+      // program carries its own copy of a library's private one. Handed to it here, a file-private
+      // function or a closure that reads a module `val` would be defined in the library after all,
+      // naming deferred callees this object never defines — harmless only while the linker strips
+      // the dead copy. Every caller of a deferred function is deferred too, so nothing emitted here
+      // names it.
       val dropped = deferred.filter(_.internal).map(_.name).toSet
-      val funcs   = typed.funcs.filterNot(f => dropped(f.name)).map(f => byName.getOrElse(f.name, f))
+      val funcs   = typed.funcs.filterNot(f => dropped(f.name))
 
       val ir =
         Codegen.generate(

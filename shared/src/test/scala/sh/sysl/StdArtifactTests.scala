@@ -488,10 +488,11 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       * closure of its own — a different environment under a different body, and a wrong answer with
       * nothing to say so.
       *
-      * Both halves are asserted because they failed for different reasons. The undefined body is
-      * `Compiler.compileLibrary` filing it by module, where a closure's key begins with the module
-      * separator and reads as the root module's; the advertised instantiation is a symbol whose name
-      * only the unit that lowered the closure can mean anything by.
+      * Both halves are asserted because they fail for different reasons. The body is defined because
+      * a closure belongs to the module whose body it was written in (`TFunc.module`), though its key
+      * begins with the module separator and names none; the instantiation is not advertised because
+      * it is a symbol only the unit that lowered the closure can mean anything by, which is what
+      * `internal` linkage says.
       */
     "and it neither advertises a symbol named after a closure nor leaves one to the linker" in {
       // Non-vacuous by the last line: the library does lower closures of its own — `from_local` is
@@ -504,13 +505,14 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       defines(artifact._1).filter(Closures.mentioned) should not be empty
     }
 
-    /** A member of a built-in type — `char.is_digit`, `real.nan`, `f32.abs` — has a key that names no
-      * module, so the library once filed each as supplied by somebody else: its callers were compiled
-      * and the callee was only declared. A link that keeps every function (`--export-dynamic`, or no
-      * dead-stripping) then kept `sysl.regex`'s class matcher and `sysl.path.extension` and found
-      * nothing to call.
+    /** **A library owns the functions its modules declared, and a member of a built-in type is one of
+      * them.** `char.is_digit` is keyed under `char` and names no module, but `impl Ascii for char`
+      * is written in `sysl.text`, and by the coherence rule nowhere else — so the symbol is already
+      * unambiguous and the standard module's object is where it is defined, with external linkage,
+      * and advertised like any other of its functions. A library that filed it by its key would
+      * compile its callers and leave the callee undefined, which only dead-stripping hides.
       */
-    "and it defines every member of a built-in type its own functions call" in {
+    "and it defines and advertises every member of a built-in type its own functions call" in {
       def keyless(name: String): Boolean =
         Modules.moduleOf(name).isEmpty && name.contains('.') && !name.startsWith("llvm.")
 
@@ -520,7 +522,8 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
         "@\"?([A-Za-z0-9_.$]+)".r.findAllMatchIn(line).map(_.group(1))).toSet
 
       // `u32.round_key` reads `k256`, so it is the program's to compile, and so is every caller of
-      // it; the library's private SHA-2 instantiation once kept one of those callers here anyway.
+      // it: nothing emitted here names it, and the module storage it reads is a global rather than a
+      // function.
       val globals = artifact._1.linesIterator.filter(_.startsWith("@")).map(line =>
         line.drop(1).takeWhile(c => c != ' ' && c != '=').stripPrefix("\"").stripSuffix("\"")).toSet
 
@@ -529,10 +532,12 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       val found = List("char.is_hex_digit", "char.is_digit", "real.nan", "f32.abs",
                        "constslice.byte.last_index_of_byte", "arr.eq.c16.byte")
 
-      defines(artifact._1) should contain allElementsOf found
+      external(artifact._1) should contain allElementsOf found
+      precompiled should contain allElementsOf found
+      precompiled should not contain "u32.round_key"
     }
 
-    "and its copies are its own, so a program that calls one compiles its own and neither collides" in {
+    "and a program that calls one declares it and links against the library's copy" in {
       val program =
         """import sysl.path.{extension}
           |
@@ -540,10 +545,24 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
           |    prints(extension("a.txt").unwrap_or(""))
           |""".stripMargin
 
-      external(artifact._1) should not contain "constslice.byte.last_index_of_byte"
-      precompiled should not contain "constslice.byte.last_index_of_byte"
-      defines(linked(program)) should contain("constslice.byte.last_index_of_byte")
+      val ir = linked(program)
+
+      declares(ir) should contain("constslice.byte.last_index_of_byte")
+      defines(ir) should not contain "constslice.byte.last_index_of_byte"
       bothDefine(program) shouldBe empty
+    }
+
+    "while one the library never instantiated is still the program's to compile" in {
+      // `arr.eq` is a generic default brought to every fixed-size array, and the library reached it
+      // at sixteen bytes. At three `int`s it did not, so the program builds that one itself — as it
+      // does for every generic — and the pair is the discriminating part.
+      val ir   = linked("var a = [1, 2, 3]\nvar b = [1, 2, 4]\nprint(a == b)\n")
+      val eqs  = defines(ir).filter(_.startsWith("arr.eq."))
+
+      precompiled.filter(_.startsWith("arr.eq.")) should not be empty
+      eqs should not be empty
+      eqs.filter(precompiled) shouldBe empty
+      bothDefine("var a = [1, 2, 3]\nvar b = [1, 2, 4]\nprint(a == b)\n") shouldBe empty
     }
 
     "and the library carries no entry point of its own to collide with a program's" in {
@@ -666,6 +685,37 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       deleteFile(exe)
       StdNative.clean(cs)
       ran shouldBe Right((0, "1\ntwo\n3.5\ntrue\n"))
+    }
+
+    "and a member of a built-in type the library supplies comes from its object file too" in {
+      // `char.is_digit` has no module in its name and one declaring module, so the program declares
+      // it rather than compiling a copy, and the link resolves it to the standard module's.
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      val program = "import sysl.text.Ascii\n\nprint('7'.is_digit(), 'x'.is_digit())\n"
+      val ir      = linked(program)
+
+      declares(ir) should contain("char.is_digit")
+      defines(ir) should not contain "char.is_digit"
+
+      val obj = createTempFile("sysl-std-", ".o")
+      val exe = createTempFile("sysl-std-", "")
+      val cs  = StdNative.objects()
+
+      Toolchain.compileObject(artifact._1, obj, Target.default) match
+        case Left(err) => fail(s"the standard module library did not assemble: $err")
+        case Right(_)  => ()
+
+      val ran = Toolchain.build(ir, exe, Target.default, obj :: cs).map { _ =>
+        val r = exec(List(exe))
+
+        (r.exitCode, r.stdout)
+      }
+
+      deleteFile(obj)
+      deleteFile(exe)
+      StdNative.clean(cs)
+      ran shouldBe Right((0, "true false\n"))
     }
 
     /** `sysl.flush`'s claim is about process-level buffering, which nothing above can see: every test
