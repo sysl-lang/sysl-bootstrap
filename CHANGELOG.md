@@ -7,6 +7,18 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.142 — 2026-09-26
+
+### A checked constrained type is its own instantiation
+
+On 0.0.141 a constrained type with a `where` clause or a range — `type Small = u64 where value < 100` — was mangled under its base type's name. A generic instantiated at it is a different instantiation from the base (`Buf[Small]` checks what is pushed into it and `Buf[u64]` does not), but both filed their functions under one symbol, so in a program using both, whichever was met first stood in for the other and gave it its signature.
+
+The rule now: only a name-only alias (`type H = u64`) mangles as its base, so `Buf[H]` and `Buf[u64]` stay one instantiation, as 0.0.141 made them. A `where`, range or otherwise derived constrained type mangles under its own name, so `Buf[Small]` and `Buf[u64]` are two sets of functions under two names. Because symbol names change, the library artifact format moves to version 6 and cached libraries rebuild once.
+
+Three tests in `ExportTypeRunTests` pin it: `Buf[Small]` beside `Buf[u64]` with the narrowed type met first, the same with the base met first, and a plain alias `Buf[H]` beside both, still sharing the base's instantiation through a `*Buf[u64]` parameter.
+
+Found by slate's embedding work. No library change.
+
 ## 0.0.141 — 2026-09-26
 
 ### An exported type alias is its base type everywhere but the header
