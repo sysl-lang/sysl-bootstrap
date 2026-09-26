@@ -100,8 +100,12 @@ object LibraryArtifact {
    * over-read: those were **silent**, and a naming mismatch is **loud** — the link fails on an
    * undefined symbol rather than calling the wrong thing. The bump is still owed, for the same
    * reason and with less at stake.
+   *
+   * **6 is such a change.** A constrained type that checks its values now mangles under its own name
+   * rather than its base's, so a library instantiating a generic at one defines `Buf.at.Small` where
+   * an artifact from 5 defined `Buf.at.ulong`.
    */
-  val Version: Int = 5
+  val Version: Int = 6
 
   /** The separator both byte formats here lean on: between the fields of a fingerprint, and around
    * the metadata marker.

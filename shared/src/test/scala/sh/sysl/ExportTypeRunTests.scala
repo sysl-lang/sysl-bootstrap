@@ -141,6 +141,56 @@ class ExportTypeRunTests extends AnyFreeSpec with RunSupport {
       case Right(_) => fail("a *u64 was accepted as a *Small")
   }
 
+  /** For the same reason a generic instantiated at a narrowed type is an instantiation of its own:
+    * `Buf[Small]` checks what is pushed into it and `Buf[u64]` does not, so their functions are two
+    * bodies under two names. Sharing one name let whichever was met first give the other its
+    * signature — so both orders, and a plain alias beside them, which still shares its base's.
+    */
+  "a narrowed type is its own instantiation beside its base" - {
+    val header = "import sysl.buf.{Buf, buf}\n\ntype Small = u64 where value < 100\n\n"
+
+    "the narrowed type met first" in {
+      run(header +
+        """main()
+          |    var a: Buf[Small] = buf()
+          |    a.push(1)
+          |    var b: Buf[u64] = buf()
+          |    b.push(200)
+          |    print(a.at(0) + b.at(0))
+          |""".stripMargin) shouldBe "201\n"
+    }
+
+    "and the base met first" in {
+      run(header +
+        """main()
+          |    var b: Buf[u64] = buf()
+          |    b.push(200)
+          |    var a: Buf[Small] = buf()
+          |    a.push(1)
+          |    print(b.at(0) + a.at(0))
+          |""".stripMargin) shouldBe "201\n"
+    }
+
+    "a plain alias beside them is still its base's instantiation" in {
+      run(header +
+        """type H = u64
+          |
+          |sum(b: *Buf[u64]) -> u64 = b.at(0) + b.at(1)
+          |
+          |main()
+          |    var a: Buf[Small] = buf()
+          |    a.push(1)
+          |    var h: Buf[H] = buf()
+          |    h.push(300)
+          |    h.push(4)
+          |    var b: Buf[u64] = buf()
+          |    b.push(200)
+          |    b.push(5)
+          |    print(a.at(0), sum(&h), sum(&b))
+          |""".stripMargin) shouldBe "1 304 205\n"
+    }
+  }
+
   "an exported function pointer is called through as one" in {
     run("""@export("on_event")
           |type OnEvent = *extern(i32) -> i32

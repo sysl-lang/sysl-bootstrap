@@ -999,12 +999,11 @@ object Type extends TypeQueries {
   /** The prefix a type's **members** are emitted under, which is the mangling for every type but
    * one.
    *
-   * A transparent constrained subtype mangles as its base, deliberately: sharing a representation
-   * is what makes `Vec[Meters]` and `Vec[f64]` one *emitted layout* rather than two identical ones.
-   * They remain two instantiations to the analyzer, and have to — only one of them checks what is
-   * written into it — so what the shared name obliges is that the layout be defined once, which is
-   * `Codegen`'s business rather than this function's.
-   * Members are the place that rule must not reach — `Age`'s and `int`'s are different bodies, and
+   * A name-only constrained type (a plain alias) mangles as its base, deliberately: it is its base
+   * everywhere types are checked, so `Vec[H]` and `Vec[f64]` are one instantiation under one name.
+   * A constrained type that checks anything mangles under its own name, since `Vec[Small]` and
+   * `Vec[u64]` are two instantiations with two sets of bodies.
+   * Members are the place the alias rule must not reach — `Age`'s and `int`'s are different bodies, and
    * naming both `int.describe` gives one symbol two definitions. So a member of a constrained type
    * is prefixed with the type's own name whichever kind it is, which is also the key its members
    * are filed under, so a call built from the key and a definition built from the type agree.
@@ -1057,9 +1056,13 @@ object Type extends TypeQueries {
     // the same type only where they are called the same way, and a mangled name that dropped the
     // signature would let an instantiation at one share a body with an instantiation at another.
     case CFn(ps, r)        => s"cfn${ps.length}.${(ps :+ r).map(mangleOne).mkString(".")}"
-    // A transparent subtype shares its base's representation, so it mangles as the base; a derived
-    // one is its own type and mangles under its name, keeping `Vec[Meters]` and `Vec[f64]` apart.
-    case c: Constrained    => if c.derived then mangled(c.name, Nil) else mangleOne(c.base)
+    // A plain alias is its base everywhere types are checked, so it mangles as the base and
+    // `Buf[H]` shares `Buf[u64]`'s instantiation. A type that checks anything — a `where` clause,
+    // a range — or a derived one is a type of its own, and mangles under its name: `Buf[Small]`'s
+    // functions check what is written into it and `Buf[u64]`'s do not, so the two are different
+    // bodies, and a name shared between them lets whichever instantiation is met first stand in for
+    // the other.
+    case c: Constrained    => if nameOnly(c) then mangleOne(c.base) else mangled(c.name, Nil)
     case other            => show(other)
 
   /** How a type is written in a diagnostic: the friendly alias where one exists (`int`,
