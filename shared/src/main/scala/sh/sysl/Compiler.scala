@@ -418,8 +418,31 @@ object Compiler {
       // fourth closure `$closure4.call`, so the two copies have to be two symbols; `TFunc.internal`
       // is set for every closure body and for every instantiation made at one, which also keeps them
       // out of `determined` below.
-      val (own, supplied) =
+      val (claimed, unclaimed) =
         typed.funcs.partition(f => mine(Modules.moduleOf(f.name)) || Closures.lowered(f.name))
+
+      // **A member of a built-in type belongs to no module by its key**, so the partition above
+      // files it as supplied whichever module wrote it: `char.is_digit`, `real.nan`, `f32.abs`,
+      // `constslice.byte.last_index_of_byte` are declared by the library that calls them, defined by
+      // nobody, and never advertised. A program that reaches such a caller compiles its own copy, so
+      // an ordinary link works — but only because the program's walk and the linker's dead-stripping
+      // agree on what is unreachable. A link that keeps every function (`--export-dynamic`, no
+      // `-dead_strip`, an archive member loaded whole) keeps the callers and finds no callee.
+      //
+      // So the library emits every such member its own functions reach, `internal`, the way it
+      // emits a closure: the copy is its own, the program still compiles one of its own where it
+      // needs one, and two copies under one name never meet at a link. Only what this library's
+      // functions reach is taken — a member reached only through another library's code is that
+      // library's to carry. One that reads a module-level `val` is left to the program for the reason
+      // a deferred function is below, and so is every caller of it.
+      val keyless = unclaimed.filter(f => Modules.moduleOf(f.name).isEmpty)
+      val reached = Reachability.reachedFrom(claimed, claimed ::: keyless, typed.vtables).calls
+      val (members, supplied) = unclaimed.partition(f =>
+        Modules.moduleOf(f.name).isEmpty && reached(f.name) &&
+          Reachability.reachedFrom(List(f), typed.funcs, typed.vtables).vals.isEmpty)
+      val carried = members.map(_.copy(internal = true))
+      val own     = claimed ::: carried
+      val byName  = carried.map(f => f.name -> f).toMap
 
       // A function that reads a module-level `val` is left out of the precompiled half, and this is
       // the honest boundary of what separate compilation reaches today: the storage for a `val` is
@@ -448,9 +471,19 @@ object Compiler {
       val (deferred, here) =
         own.partition(f => Reachability.reachedFrom(List(f), typed.funcs, typed.vtables).vals.nonEmpty)
 
+      // **An `internal` deferred function is dropped outright rather than declared**, because the
+      // emitter defines every `internal` function it is handed, precompiled or not — that is how a
+      // program carries its own copy of a library's private one. Handed to it here, one would be
+      // defined in the library after all, calling a deferred callee (`u32.round_key`, which reads
+      // `k256`) that this object never defines. Every caller of a deferred function is deferred too,
+      // so nothing emitted here names it.
+      val dropped = deferred.filter(_.internal).map(_.name).toSet
+      val funcs   = typed.funcs.filterNot(f => dropped(f.name)).map(f => byName.getOrElse(f.name, f))
+
       val ir =
         Codegen.generate(
-          typed.copy(entryPoint = false, precompiled = (supplied ::: deferred).map(_.name).toSet),
+          typed.copy(funcs = funcs, entryPoint = false,
+                     precompiled = (supplied ::: deferred).map(_.name).toSet),
           promoted, target, allocator)
 
       // **What is advertised is what the linker can reach**, so a file-private declaration is left

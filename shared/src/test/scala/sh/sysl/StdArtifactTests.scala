@@ -504,6 +504,48 @@ class StdArtifactTests extends AnyFreeSpec with Matchers {
       defines(artifact._1).filter(Closures.mentioned) should not be empty
     }
 
+    /** A member of a built-in type — `char.is_digit`, `real.nan`, `f32.abs` — has a key that names no
+      * module, so the library once filed each as supplied by somebody else: its callers were compiled
+      * and the callee was only declared. A link that keeps every function (`--export-dynamic`, or no
+      * dead-stripping) then kept `sysl.regex`'s class matcher and `sysl.path.extension` and found
+      * nothing to call.
+      */
+    "and it defines every member of a built-in type its own functions call" in {
+      def keyless(name: String): Boolean =
+        Modules.moduleOf(name).isEmpty && name.contains('.') && !name.startsWith("llvm.")
+
+      // What counts is what the object's code and data NAME, not what it declares: a declaration
+      // nothing uses costs a link nothing.
+      val named = artifact._1.linesIterator.filterNot(_.startsWith("declare ")).flatMap(line =>
+        "@\"?([A-Za-z0-9_.$]+)".r.findAllMatchIn(line).map(_.group(1))).toSet
+
+      // `u32.round_key` reads `k256`, so it is the program's to compile, and so is every caller of
+      // it; the library's private SHA-2 instantiation once kept one of those callers here anyway.
+      val globals = artifact._1.linesIterator.filter(_.startsWith("@")).map(line =>
+        line.drop(1).takeWhile(c => c != ' ' && c != '=').stripPrefix("\"").stripSuffix("\"")).toSet
+
+      (named.filter(keyless) -- defines(artifact._1) -- globals) shouldBe empty
+
+      val found = List("char.is_hex_digit", "char.is_digit", "real.nan", "f32.abs",
+                       "constslice.byte.last_index_of_byte", "arr.eq.c16.byte")
+
+      defines(artifact._1) should contain allElementsOf found
+    }
+
+    "and its copies are its own, so a program that calls one compiles its own and neither collides" in {
+      val program =
+        """import sysl.path.{extension}
+          |
+          |main()
+          |    prints(extension("a.txt").unwrap_or(""))
+          |""".stripMargin
+
+      external(artifact._1) should not contain "constslice.byte.last_index_of_byte"
+      precompiled should not contain "constslice.byte.last_index_of_byte"
+      defines(linked(program)) should contain("constslice.byte.last_index_of_byte")
+      bothDefine(program) shouldBe empty
+    }
+
     "and the library carries no entry point of its own to collide with a program's" in {
       artifact._1 should not include "define i32 @main("
     }
