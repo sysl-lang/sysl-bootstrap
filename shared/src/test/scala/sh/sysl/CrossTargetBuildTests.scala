@@ -4,6 +4,10 @@ import io.github.edadma.cross_platform.*
 import org.scalatest.freespec.AnyFreeSpec
 import org.scalatest.matchers.should.Matchers
 
+import java.util.concurrent.Executors
+import scala.concurrent.duration.*
+import scala.concurrent.{Await, ExecutionContext, Future}
+
 /** That every target in the registry produces an **object file**, not merely IR text.
  *
  * The other cross-target tests read the emitted module and check what it says. That catches a wrong
@@ -21,7 +25,7 @@ import org.scalatest.matchers.should.Matchers
  * slice (three words, the last of them a `usize`), an index and its bounds check, a `usize` local, a
  * heap value and so a `malloc`, and a foreign call taking an aggregate.
  */
-class CrossTargetBuildTests extends AnyFreeSpec with Matchers {
+class CrossTargetBuildTests extends AnyFreeSpec with Matchers with RunSupport {
 
   private val programs = List(
     "a slice and its length" ->
@@ -395,5 +399,161 @@ class CrossTargetBuildTests extends AnyFreeSpec with Matchers {
     withClue(s"$dumper:\n${listed.stdout}") {
       code.filter(r => r == "R_AARCH64_ABS64" || r == "R_AARCH64_ABS32") shouldBe empty
     }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The whole standard library, and a program touching every main area of the language, for every
+  // target.
+  //
+  // The sweep above assembles small programs, and a program brings in only the part of the library
+  // it reaches — so nothing compiled the *whole* library for any machine but this one, and a body no
+  // program reached could stop a target's build outright. Every `Float for bf16` body failed
+  // instruction selection on WebAssembly, whose back end has no `bf16` conversions, and
+  // `build-lib --std --target wasm32-freestanding` stayed broken for about twenty-three releases
+  // while every suite was green.
+  //
+  // Each target's library is analysed ONCE, by `LibraryArtifact.build` — what `build-lib --std`
+  // runs — and the program is compiled against the metadata that build produced rather than against
+  // the library's source, which is how an ordinary build uses the artifact. The targets are built
+  // side by side, so the block costs about what its slowest row does. Everything is assembled at
+  // `-O0`: the question is whether the back end can select every instruction, and optimizing the
+  // whole library would spend most of the time answering nothing more.
+  //
+  // The program computes inside functions of their parameters, not in top-level `var`s: a body of
+  // top-level bindings folds to constants before instruction selection, so a conversion written
+  // there never reaches the back end that would refuse it.
+  //
+  // Running is asserted only where a runner costs nothing — this machine. WASI needs wasi-sdk to link
+  // and a foreign architecture needs a QEMU user-mode binary; neither is assumed, so those rows are
+  // build-only.
+  // ---------------------------------------------------------------------------------------------
+
+  private val smoke =
+    """import sysl.buf.*
+      |
+      |struct Point
+      |    x: int
+      |    y: int
+      |
+      |    sum(self) -> int = self.x + self.y
+      |
+      |enum Shape
+      |    Circle(r: real)
+      |    Square(side: real)
+      |
+      |area(s: Shape) -> real =
+      |    s match
+      |        Circle(r) -> 3.0 * r * r
+      |        Square(a) -> a * a
+      |
+      |trait Named
+      |    name(self) -> string
+      |
+      |impl Named for Point
+      |    name(self) -> string = f"(${self.x}, ${self.y})"
+      |
+      |largest[T: Ord](a: T, b: T) -> T = if a > b then a else b
+      |
+      |half(n: int) -> Result[int, string] =
+      |    if n % 2 == 0 then Ok(n / 2) else Err(f"${n} is odd")
+      |
+      |quarter(n: int) -> Result[int, string] = Ok(half(half(n)?)?)
+      |
+      |val p = Point(3, 4)
+      |val k = 10
+      |val scale = (n: int) -> n * k
+      |
+      |var b: &Buf[int] = buf()
+      |for i in 0..<4 do b.push(scale(i))
+      |
+      |val q = quarter(12) match
+      |    Ok(v) -> v
+      |    Err(_) -> -1
+      |val odd = quarter(6) match
+      |    Ok(_) -> "even"
+      |    Err(e) -> e
+      |
+      |print(f"${p.name()} ${p.sum()} ${largest(7, 9)} ${b.at(3)} ${area(Square(1.5))} ${q} ${odd}")
+      |""".stripMargin
+
+  /** What one target answered: why it could not be asked, or the library's object and then the
+   * program's, each an error or nothing.
+   */
+  private enum Smoke {
+    case Absent(why: String)
+    case Built(library: Either[String, Unit], program: Either[String, Unit])
+  }
+
+  private val swept = Target.all.filter(t => t.supported && t.buildsWithClang)
+
+  /** Started when the suite is constructed, one thread per target; each case waits for its own row
+   * only.
+   */
+  private val smokeRows: Map[String, Future[Smoke]] = {
+    val pool               = Executors.newFixedThreadPool(swept.length)
+    given ExecutionContext = ExecutionContext.fromExecutorService(pool)
+    val started            = swept.map(t => t.name -> Future(smokeBuilt(t))).toMap
+
+    Future.sequence(started.values).onComplete(_ => pool.shutdown())
+    started
+  }
+
+  private def smokeBuilt(t: Target): Smoke =
+    Toolchain.findBackendClang(t) match
+      case Left(why) => Smoke.Absent(why)
+      case Right(cc) =>
+        LibraryArtifact.build(Std.sources(t.os), t, LibraryArtifact.std, Some(carried(t)),
+                              native = Std.cSources(t.os)) match
+          case Left(why) => Smoke.Built(Left(s"the library did not compile: $why"), Left("no library to build on"))
+          case Right((ir, meta)) =>
+            val program =
+              for
+                (std, precompiled) <- Stdlib.read("std", meta, t)
+                compiled           <- Compiler.compiledWith(List(Source("smoke.sysl", smoke)), Nil, t,
+                                                            precompiled, Some(std))
+                _                  <- assembled(compiled.ir, t, cc)
+              yield ()
+
+            Smoke.Built(assembled(ir, t, cc), program)
+
+  /** The standard module read from source for `t`, built exactly as `Stdlib.fromSource` builds it
+   * but outside that routine's memo. The memo keeps one target and holds its lock while it parses,
+   * which is the right bound for a compilation and would serialize this sweep through one slot —
+   * every row waiting for every row before it to parse the library and measure its `c const` blocks.
+   */
+  private def carried(t: Target): Stdlib = {
+    val parsed = Std.sources(t.os).map(s =>
+      SyslParser.parse(s, t).fold(e => sys.error(s"the standard module does not parse: $e"), identity))
+
+    CProbe.lower(Tests.stripSource(parsed), t, SearchPaths(cc = None)) match
+      case Right(units) => new Stdlib(units)
+      case Left(e)      => sys.error(s"the standard module's 'c const' could not be measured: ${e.rendered}")
+  }
+
+  private def assembled(ir: String, t: Target, cc: String): Either[String, Unit] = {
+    val obj = createTempFile("sysl-smoke-", ".o")
+
+    try Toolchain.compileObject(ir, obj, t, "0", named = Some(cc)).left.map(e => s"$cc, ${t.triple}: $e")
+    finally if exists(obj) then deleteFile(obj)
+  }
+
+  private def smokeRow(t: Target): (Either[String, Unit], Either[String, Unit]) =
+    Await.result(smokeRows(t.name), 5.minutes) match
+      case Smoke.Absent(why)      => cancel(s"${t.name}: $why")
+      case Smoke.Built(lib, prog) => (lib, prog)
+
+  for t <- swept do
+    s"the standard library for ${t.name}" - {
+      "assembles to an object" in {
+        smokeRow(t)._1.left.foreach(fail(_))
+      }
+
+      "and a program touching every main area of the language assembles against it" in {
+        smokeRow(t)._2.left.foreach(fail(_))
+      }
+    }
+
+  "the same program, run on this machine, prints what it computed" in {
+    run(smoke) shouldBe "(3, 4) 7 9 30 2.25 3 3 is odd\n"
   }
 }
