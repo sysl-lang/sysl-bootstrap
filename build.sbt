@@ -7,7 +7,7 @@ ThisBuild / scalaVersion           := "3.9.0"
 ThisBuild / organization           := "sh.sysl"
 ThisBuild / organizationName       := "sysl-lang"
 ThisBuild / organizationHomepage   := Some(url("https://github.com/sysl-lang"))
-ThisBuild / version                := "0.0.143"
+ThisBuild / version                := "0.0.144"
 ThisBuild / sonatypeCredentialHost := sonatypeCentralHost
 
 ThisBuild / publishConfiguration := publishConfiguration.value.withOverwrite(true).withChecksums(Vector.empty)
