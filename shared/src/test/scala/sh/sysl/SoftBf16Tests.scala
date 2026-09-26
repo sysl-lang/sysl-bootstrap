@@ -31,10 +31,10 @@ class SoftBf16Tests extends AnyFreeSpec with Matchers {
           case Right((ir, _)) => ir
           case Left(why)      => fail(s"the standard module did not build for ${t.name}: $why")
 
-        ir should not include "bfloat"
-
         val obj = createTempFile("sysl-bf16-", ".o")
         withClue(s"$cc, ${t.triple}: ")(Toolchain.compileObject(ir, obj, t, named = Some(cc)) shouldBe Right(()))
+
+        withClue("a bfloat left in the module: ")(ir.contains("bfloat") shouldBe false)
       }
   }
 
@@ -105,8 +105,8 @@ class SoftBf16Tests extends AnyFreeSpec with Matchers {
     }
 
     "the rewritten module holds no bfloat at all" in {
-      compiled.ir should include ("bfloat")
-      soft.ir should not include "bfloat"
+      compiled.ir.contains("bfloat") shouldBe true
+      soft.ir.contains("bfloat") shouldBe false
     }
 
     "and prints the same answers as the native lowering, which are the correctly rounded ones" in {
