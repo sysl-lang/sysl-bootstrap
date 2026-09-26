@@ -74,6 +74,20 @@ class CrossTargetBuildTests extends AnyFreeSpec with Matchers {
         |    display(self, w: *Writer, spec: FormatSpec) = str(self.x).display(w, spec)
         |var s = str(P(6))
         |""".stripMargin,
+    // `bf16` is the one scalar a back end may be unable to convert at all: WebAssembly's has no
+    // selection for the widening to `float` that every `bf16` operation goes through, so until the
+    // compiler carried it as bits there (`SoftBf16`) this was the program that stopped both wasm rows.
+    // A conversion from each of `real`, a wide integer and `f16`, the arithmetic, a comparison, and a
+    // reduction over a vector — each is a different case of the rewrite.
+    "bf16 arithmetic, its conversions, and a vector of it" ->
+      """var a: bf16 = 1.5
+        |var r: real = 0.1
+        |var n: i64 = 123456789
+        |var h: f16 = 0.25
+        |var b = a * bf16(r) + bf16(n) - bf16(h)
+        |var v: <4>bf16 = [1.0, 2.0, 3.0, 4.0]
+        |var ok = b > a && (v * v).sum() > b && i32(b) != 0
+        |""".stripMargin,
   )
 
   // CRAFT is not here because there is no clang to assemble what it lowers to — its back end is an

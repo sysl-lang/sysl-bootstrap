@@ -160,6 +160,18 @@ case class Target(
    */
   def runsInitializers: Boolean = os != Os.Freestanding
 
+  /** Whether a `bf16` reaches this machine's back end as the `i16` of its bits rather than as a
+   * `bfloat` (`SoftBf16`).
+   *
+   * **WebAssembly is the one back end that cannot convert a `bfloat`.** Every other one sysl targets
+   * widens a `bfloat` operation to `float` and rounds the answer back itself; LLVM's wasm back end
+   * has no selection for either conversion, so the first one it meets — and the standard library
+   * has one in every `Float for bf16` body — stops the build with *"Cannot select: bf16_to_fp"*.
+   * Measured against Apple clang 21 and LLVM 23, at both wasm rows. Nothing about the language
+   * changes: the widening is what the other back ends do, written out by the compiler instead.
+   */
+  def bf16AsBits: Boolean = cpu == Cpu.Wasm32
+
   /** The environment capabilities this machine can have **at all**, which is a different question
    * from what a project says it provides.
    *

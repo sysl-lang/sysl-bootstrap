@@ -1029,7 +1029,10 @@ object Codegen {
       promotions: Escape.Promotions = Escape.Promotions.none,
       target: Target = Target.default,
       allocator: Allocator = Allocator.c,
-  ): ir.Module = new Codegen(program, promotions, target, allocator).build()
+  ): ir.Module = {
+    val built = new Codegen(program, promotions, target, allocator).build()
+    if target.bf16AsBits then SoftBf16.lower(built) else built
+  }
 
   /** The same module as LLVM's textual form, which is what the toolchain takes. */
   def generate(
