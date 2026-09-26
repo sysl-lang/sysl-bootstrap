@@ -7,6 +7,18 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.141 — 2026-09-26
+
+### An exported type alias is its base type everywhere but the header
+
+On 0.0.140 an `@export`ed alias such as `type H = u64` kept its name inside other types, so it leaked into generic instantiation keys and pointer conversion. `Buf[H]` beside `Buf[u64]` failed with `cannot initialize 'b': declared sysl.buf.Buf[ulong] but the value is sysl.buf.Buf[H]`, and a pointer taken from a `u64` place failed with `cannot initialize 'p': declared *H but the value is *ulong`.
+
+The rule now: such an alias is transparent everywhere the language checks types — in type agreement, in instantiation (`Buf[H]` and `Buf[u64]` are one instantiation, in either order), and in unification (a type parameter solved from `H` is solved to `u64`), so `*H` converts to and from `*u64`. Only the generated C header sees the alias's name, and it still spells the typedef wherever it was written.
+
+A measured `c type` had the same defect and shares the fix. Both have tests: `Buf` of an alias beside `Buf` of its base in both orders, pointers in both directions, type-parameter solving, and a narrowed type (`where …`) keeping its own identity behind a pointer.
+
+Found by slate adopting `slate_value`. No library change.
+
 ## 0.0.140 — 2026-09-26
 
 ### `@export` names a type in the C header
