@@ -634,8 +634,20 @@ class LibraryBuildCliTests extends LibraryCliSupport {
           // the most pressure, since the whole of the rest of the library is what it was compiled
           // against. `sysl.args` is in here as well as `sysl`, which is the point of building the
           // whole tree rather than the standard module alone.
+          //
+          // A member of a built-in type is keyed under the type and names no module — `char.is_digit`
+          // is `sysl.text`'s by its `impl`, which the coherence rule puts nowhere else — so those are
+          // the library's too, and advertised; a closure's key names none either, and is never here.
+          // A blanket implementation's members are keyed under `bound.<trait>` for the same reason —
+          // the implementing type is every type meeting the bound — and are the `impl`'s module's.
+          def keyedElsewhere(s: String): Boolean =
+            val m = Modules.moduleOf(s)
+            m.nonEmpty && !Library.modules.contains(m) && !s.startsWith("bound.")
+
           syms should not be empty
-          syms.filterNot(s => Library.modules.contains(Modules.moduleOf(s))) shouldBe empty
+          syms.filter(keyedElsewhere) shouldBe empty
+          syms should contain("char.is_digit")
+          syms.filter(Closures.mentioned) shouldBe empty
           syms.map(Modules.moduleOf).size should be > 1
           trees.flatMap(_.module.map(_.show)).distinct.sorted shouldBe Library.modules
 
