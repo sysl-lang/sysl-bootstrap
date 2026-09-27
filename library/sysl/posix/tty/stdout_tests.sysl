@@ -1,0 +1,193 @@
+module sysl.posix.tty
+@requires(posix)
+@tests
+
+import sysl.fs.{read_bytes, remove_file}
+import sysl.posix.time.monotonic
+import sysl.sys.sysl_stdout_write
+import sysl.text.{cstring, from_cstring, repeat}
+import sysl.time.whole_micros
+
+// What `sysl.putbytes` promises about standard output, asserted by pointing descriptor 1 at a file
+// for the length of a test and reading back what arrived.
+//
+// **They live in this module rather than beside `putbytes` because of where the tools are.** The
+// root module's own test file may not import a submodule, and capturing needs `sysl.fs` to read the
+// file back, `sysl.text` to build a payload and `sysl.posix.time` to time one; this module already
+// owns the paragraph about getting output out of a program, and imports none of those in a cycle.
+//
+// **The claim worth asserting is the ORDER.** A hosted `putbytes` hands a whole buffer to stdio's
+// `fwrite` rather than a byte at a time to `putchar`, and it stays on stdio rather than writing to
+// descriptor 1 directly -- so output from C in the same program (`printf`, `putchar`) and output
+// from sysl must still come out in the order it was written. A raw `write(1, ...)` would pass the
+// byte-count half of these and fail the order half, which is why every capture mixes the two.
+
+private extern "mkstemp" c_mkstemp(template: *u8) -> int
+private extern "dup" c_dup(fd: int) -> int
+private extern "dup2" c_dup2(from: int, to: int) -> int
+private extern "close" c_close(fd: int) -> int
+private extern "printf" c_printf(fmt: *u8, ...) -> int
+private extern "putchar" c_putchar(c: int) -> int
+
+// Standard output redirected into a fresh temporary file, and where the real one was kept.
+private struct Capture
+    saved: int
+    path: string
+
+private capture() -> Capture
+    val template = cstring("/tmp/sysl-stdout-XXXXXX")
+    val fd = c_mkstemp(template.ptr)
+
+    assert(fd >= 0, "mkstemp should make a file to capture standard output into")
+
+    // Whatever the runner had already buffered goes to the runner's stream, not into the capture.
+    flush()
+
+    val saved = c_dup(1)
+
+    c_dup2(fd, 1)
+    c_close(fd)
+    Capture(saved, from_cstring(template.ptr).unwrap())
+end capture
+
+// Puts standard output back and answers every byte the capture received.
+private release(c: Capture) -> []u8
+    flush()
+    c_dup2(c.saved, 1)
+    c_close(c.saved)
+
+    val out = read_bytes(c.path).unwrap()
+
+    remove_file(c.path).unwrap()
+    out
+end release
+
+// Asserts two byte sequences are equal without printing megabytes when they are not: the lengths,
+// then the first position they part at.
+private same(got: []const u8, want: []const u8)
+    assert_eq(got.len, want.len)
+
+    for i in 0..<got.len
+        if got[i] != want[i]
+            assert(false, "the captured output first differs at byte " + str(i))
+            return
+end same
+
+// Twenty-six bytes carrying a NUL, two- three- and four-byte UTF-8, and a newline, so that a sink
+// stopping at a terminator, splitting a character or translating a line ending all show up.
+private unit() -> string = "sysl\u{0}é€\u{1F600} 0123456789\n"
+
+@test("a large print comes out whole and in order among small ones from sysl and from C")
+large_print_keeps_its_place()
+    val big = repeat(unit(), 200000)
+
+    val c = capture()
+
+    prints("head:")
+    c_printf(c"[c %d]", 7)
+    print(big)
+    c_putchar(88)
+    stdout().write("tail".bytes)
+    c_printf(c"[c %d]", 8)
+    printi(-42)
+
+    val out = release(c)
+
+    assert_eq(big.len, 5200000)
+    same(out, ("head:[c 7]" + big + "\nXtail[c 8]-42").bytes)
+end large_print_keeps_its_place
+
+@test("C output between two large prints stays between them")
+c_output_between_large_prints()
+    val a = repeat("a", 3000000)
+    val b = repeat(unit(), 100000)
+
+    val c = capture()
+
+    prints(a)
+    c_putchar(124)
+    c_printf(c"%s", c"<printf>")
+    prints(b)
+    c_putchar(124)
+
+    val out = release(c)
+
+    same(out, (a + "|<printf>" + b + "|").bytes)
+end c_output_between_large_prints
+
+@test("an empty print writes nothing and disturbs nothing around it")
+empty_print_is_nothing()
+    val c = capture()
+
+    prints("x")
+    prints("")
+    putbytes("".bytes)
+    prints("y")
+
+    same(release(c), "xy".bytes)
+end empty_print_is_nothing
+
+@test("flush pushes out what print left in the buffer, before the program has finished")
+flush_empties_the_buffer()
+    val c = capture()
+
+    // Small enough to sit whole in stdio's buffer, since a file is fully buffered.
+    prints("partial, no newline")
+
+    val before = read_bytes(c.path).unwrap()
+
+    flush()
+
+    val after = read_bytes(c.path).unwrap()
+    val out = release(c)
+
+    assert_eq(before.len, 0)
+    same(after, "partial, no newline".bytes)
+    same(out, "partial, no newline".bytes)
+end flush_empties_the_buffer
+
+// **A timing is not usually an assertion here, and this one is a RATIO for that reason.** It compares
+// `print` against the single `fwrite` it is meant to amount to, on the same bytes, into the same file,
+// in the same process, taking the best of three rounds of each -- so a slow machine, a loaded one or
+// one running on efficiency cores slows both halves together. The byte-at-a-time `putchar` loop this
+// replaced measured over a hundred times slower than the `fwrite` here (101 ms against 0.7 ms for
+// 10 MB); the bound is four times, with two milliseconds of slack for a machine fast enough to make
+// the baseline nearly nothing.
+@test("printing a large buffer costs about one fwrite rather than one call per byte")
+large_print_costs_one_write()
+    val big = repeat(unit(), 400000)
+    val bytes = big.bytes
+
+    var via_print: long = 0
+    var via_fwrite: long = 0
+
+    val c = capture()
+
+    for round in 0..<3
+        val t0 = monotonic()
+
+        prints(big)
+
+        val p = whole_micros(monotonic() - t0)
+        val t1 = monotonic()
+
+        var at: usize = 0
+
+        while at < bytes.len
+            val k = sysl_stdout_write(&bytes[at], bytes.len - at)
+
+            if k == 0 then break
+
+            at += k
+
+        val f = whole_micros(monotonic() - t1)
+
+        if round == 0 || p < via_print then via_print = p
+        if round == 0 || f < via_fwrite then via_fwrite = f
+
+    val out = release(c)
+
+    assert_eq(out.len, 6 * bytes.len)
+    assert(via_print <= 4 * via_fwrite + 2000,
+           "print took " + str(via_print) + " us against " + str(via_fwrite) + " us for one fwrite")
+end large_print_costs_one_write

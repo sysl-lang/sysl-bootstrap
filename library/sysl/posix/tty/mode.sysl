@@ -189,7 +189,7 @@ private restore()
 // ## Getting output out, which a terminal needs and a pipe does not
 //
 // **`print` does not reach the screen when you expect it to, and that breaks every prompt.**
-// `sysl.putbytes` -- the one sink all printing goes through -- writes with C's `putchar`, and C
+// `sysl.putbytes` -- the one sink all printing goes through -- writes with C's `fwrite`, and C
 // line-buffers a stream attached to a terminal. So a prompt written without a newline sits in the
 // buffer, and so does every character an editor echoes, until something writes a `\n`. What a person
 // sees is a program that prints nothing while they type and then produces the whole line at once,

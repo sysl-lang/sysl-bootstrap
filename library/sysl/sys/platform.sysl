@@ -22,6 +22,11 @@ private[sysl] extern "putchar" sysl_putchar(c: int) -> int
 private[sysl] extern "snprintf" sysl_snprintf(buf: *u8, n: usize, fmt: *u8, ...) -> int
 private[sysl] extern "read" sysl_read(fd: int, p: *u8, n: usize) -> isize
 private[sysl] extern "write" sysl_write(fd: int, p: *u8, n: usize) -> isize
+
+// `fwrite` onto `stdout`, which is a macro on Darwin and so is reached through one line of C beside
+// the root module (`library/sysl/__hosted__/stdout.c`). A freestanding target carries no such file and
+// never calls this: `putbytes` writes through `putchar` there.
+private[sysl] extern "sysl_stdout_write" sysl_stdout_write(p: *u8, n: usize) -> usize
 private[sysl] extern "memchr" sysl_memchr(p: *u8, c: int, n: usize) -> *u8
 private[sysl] extern "memmove" sysl_memmove(dst: *u8, src: *u8, n: usize) -> *u8
 private[sysl] extern "strtod" sysl_strtod(p: *u8, end: **u8) -> real
