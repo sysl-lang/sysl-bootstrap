@@ -174,7 +174,7 @@ object SoftBf16 {
      * would get wrong — its payload could carry into the sign — so a NaN keeps its top bits and is
      * made quiet instead.
      */
-    private def narrow(f: Val, t: LType, dest: Option[Val] = None): Val = {
+    private def narrow(f: Val, t: LType, dest: Option[Val]): Val = {
       val w = as(t, I32)
       val u    = fresh(); out += Inst.Cast(u, CastOp.BitCast, as(t, F32), f, w)
       val hi   = fresh(); out += Inst.Bin(hi, BinOp.LShr, w, u, k(w, 16))
