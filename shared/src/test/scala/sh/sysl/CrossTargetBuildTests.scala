@@ -431,7 +431,8 @@ class CrossTargetBuildTests extends AnyFreeSpec with Matchers with RunSupport {
   // Each target's library is analysed ONCE, by `LibraryArtifact.build` — what `build-lib --std`
   // runs — and the program is compiled against the metadata that build produced rather than against
   // the library's source, which is how an ordinary build uses the artifact. The targets are built
-  // side by side, so the block costs about what its slowest row does. Everything is assembled at
+  // one after another, about four seconds each, because each analysis holds several gigabytes of
+  // heap and the rows share one process — see `smokeRows`. Everything is assembled at
   // `-O0`: the question is whether the back end can select every instruction, and optimizing the
   // whole library would spend most of the time answering nothing more.
   //
@@ -502,11 +503,14 @@ class CrossTargetBuildTests extends AnyFreeSpec with Matchers with RunSupport {
 
   private val swept = Target.all.filter(t => t.supported && t.buildsWithClang)
 
-  /** Started when the suite is constructed, one thread per target; each case waits for its own row
-   * only.
+  /** Every target's row, started the first time a case asks for one and built **one at a time** on a
+   * thread of their own; each case waits for its own row only. A whole-library analysis is several
+   * gigabytes of heap and the rows share one test process: two side by side exhausted the gate's
+   * 32 GB ceiling, and all twenty did so at 48. The thread is the row's own so that nothing a row
+   * built is still reachable from the stack of the thread running the cases.
    */
-  private val smokeRows: Map[String, Future[Smoke]] = {
-    val pool               = Executors.newFixedThreadPool(swept.length)
+  private lazy val smokeRows: Map[String, Future[Smoke]] = {
+    val pool               = Executors.newSingleThreadExecutor()
     given ExecutionContext = ExecutionContext.fromExecutorService(pool)
     val started            = swept.map(t => t.name -> Future(smokeBuilt(t))).toMap
 
@@ -533,9 +537,8 @@ class CrossTargetBuildTests extends AnyFreeSpec with Matchers with RunSupport {
             Smoke.Built(assembled(ir, t, cc), program)
 
   /** The standard module read from source for `t`, built exactly as `Stdlib.fromSource` builds it
-   * but outside that routine's memo. The memo keeps one target and holds its lock while it parses,
-   * which is the right bound for a compilation and would serialize this sweep through one slot —
-   * every row waiting for every row before it to parse the library and measure its `c const` blocks.
+   * but outside that routine's memo, so a row's library is let go when the row is finished rather
+   * than held in the memo's slot until the next target displaces it.
    */
   private def carried(t: Target): Stdlib = {
     val parsed = Std.sources(t.os).map(s =>
@@ -554,7 +557,7 @@ class CrossTargetBuildTests extends AnyFreeSpec with Matchers with RunSupport {
   }
 
   private def smokeRow(t: Target): (Either[String, Unit], Either[String, Unit]) =
-    Await.result(smokeRows(t.name), 5.minutes) match
+    Await.result(smokeRows(t.name), 10.minutes) match
       case Smoke.Absent(why)      => cancel(s"${t.name}: $why")
       case Smoke.Built(lib, prog) => (lib, prog)
 
