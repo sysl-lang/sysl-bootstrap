@@ -7,6 +7,40 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.145 — 2026-09-27
+
+### The standard library builds for WebAssembly again
+
+`sysl emit-llvm --target wasm32-freestanding` (and `wasm32-wasi`) stopped while building the standard module, because LLVM's wasm back end cannot select `bf16_to_fp` or `fp_to_bf16`, and every `Float for bf16` body in the library asks for one. It had been that way for about twenty-three releases, unnoticed, because nothing compiled the *whole* library for any target but the host.
+
+On a target that declares `bf16AsBits` (the two wasm32 rows), the new `SoftBf16` pass rewrites the module before it reaches LLVM: a `bf16` is carried as its sixteen bits in an `i16`, widened to `f32` exactly by a shift, and narrowed to the nearest `bf16` with ties to even. Conversions from `real` and from wide integers round to odd at binary32 first, so that only one rounding counts. Every other target is unchanged and keeps LLVM's native `bfloat`. No language change and no library source change.
+
+`SoftBf16Tests` pins the lowering, and the regression cases now compute in a function of parameters so they reach the back end's conversions rather than folding to constants first.
+
+### Every target now builds the whole standard library in the test suite
+
+`CrossTargetBuildTests` used to assemble small programs per target, and a program reaches only part of the library. Each registered target's standard library is now built once through `LibraryArtifact.build`, a broad program is compiled against its metadata, and both are assembled to an object at `-O0`; the host row also runs the program and checks its output. This is the test that would have caught the wasm break above. The rows are built one at a time on a thread of their own, which keeps the suite under the gate's heap ceiling (peak 25.3 GB, about 3.6 s a row).
+
+### `print` hands stdout a whole buffer at once
+
+On a hosted target every print went through `putbytes`, which called `putchar` once per byte — a lock and an unlock per byte. `putbytes` now hands the buffer to stdio in one `fwrite(p, 1, n, stdout)`, through a one-line C shim in `library/sysl/__hosted__/stdout.c` (`stdout` is a macro on Darwin, so no sysl `extern` reaches it). Printing 50 MB now takes 0.01 s where it took 0.47 s.
+
+- **Ordering with C output is preserved.** It stays on stdio rather than a raw `write(1, …)`, so a program mixing `print` with C's `printf` or `putchar` still sees its output in the order it wrote it. Tests capture descriptor 1 and check a 5.2 MB print interleaved with `printf`/`putchar` output, C output between two large prints, an empty print, and `flush` mid-capture; the ordering tests fail against a raw `write(1, …)`.
+- **An interior NUL still prints**, since `fwrite` is counted rather than terminated.
+- A short `fwrite` is looped over; one that writes nothing ends the loop, as `eputbytes` already does for `write`.
+- **Freestanding targets are unchanged**: they still write a byte at a time through the `putchar` the board supplies (`#if hosted` / `#else`).
+- A cost test pins it: printing is bounded at 4x one `fwrite` plus 2 ms, and fails against the old per-byte loop (101 ms against 0.7 ms for 10 MB).
+
+For a test that links a program by hand: a hosted program that prints now needs the library's C (`sysl_stdout_write`), exactly as it already did for anything else the library carries in C. Ordinary `sysl build`, `sysl run` and `sysl test` link it for you.
+
+### Also
+
+- A release-census warning fixed: `SoftBf16.narrow`'s unused default argument.
+
+### Verification
+
+Landing gate on dev `702cb383`: the full Native gate, **11,827 passed, 0 failed**. The release inherits it (dev = `702cb383` + the version bump and the one-line warning fix, which recompiled cold on JVM, JS and Native with no warning and passed `SoftBf16Tests`, `ScalarRunTests` and `IntrinsicTests`). Warnings census: `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
 ## 0.0.144 — 2026-09-26
 
 ### A library owns the functions its modules declared
