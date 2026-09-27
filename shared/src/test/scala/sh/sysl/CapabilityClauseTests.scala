@@ -747,7 +747,7 @@ class CapabilityClauseTests extends AnyFreeSpec with RunSupport with CodegenSupp
       )
 
       out shouldNot include("call ptr @malloc")
-      out should include("declare i32 @putchar")
+      out should include("declare i64 @sysl_stdout_write(ptr, i64)")
     }
 
     // A call out of the module is the other half of `reference/modules.md § Capabilities are a

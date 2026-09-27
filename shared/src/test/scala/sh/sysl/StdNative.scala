@@ -32,6 +32,17 @@ object StdNative {
       obj
     }
 
+  /** The same objects, compiled once for the whole test process and kept, for the helpers that link
+   * a program per call — `TestFrameworkSupport` links one per assertion, and compiling the Unicode
+   * database each time would cost more than the tests. Nothing links them anywhere but a temporary
+   * directory, so keeping them is free.
+   *
+   * **Any program that prints needs them**: on a hosted target `putbytes` writes through
+   * `sysl_stdout_write`, which is `library/sysl/__hosted__/stdout.c`, so the sysl half alone no longer
+   * links as soon as a test calls `print`.
+   */
+  lazy val shared: List[String] = objects()
+
   /** Removes what [[objects]] made. */
   def clean(objs: List[String]): Unit = objs.foreach(deleteFile)
 }

@@ -34,7 +34,7 @@ trait TestFrameworkSupport extends Matchers { this: Assertions =>
     val exe = createTempFile("sysl-test-", "")
 
     try
-      Toolchain.build(built.ir, exe, links = built.links) match {
+      Toolchain.build(built.ir, exe, links = built.links, objects = StdNative.shared) match {
         case Left(e)  => fail(e)
         case Right(_) => TestRunner.execute(exe, tests.filter(TestRunner.matches(_, opts.filter)), opts)
       }

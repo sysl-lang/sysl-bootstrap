@@ -29,7 +29,7 @@ class TestFileTests extends AnyFreeSpec with CodegenSupport with RunSupport {
     val exe = io.github.edadma.cross_platform.createTempFile("sysl-test-", "")
 
     try
-      Toolchain.build(built.ir, exe, links = built.links) match {
+      Toolchain.build(built.ir, exe, links = built.links, objects = StdNative.shared) match {
         case Left(e)  => fail(e)
         case Right(_) => TestRunner.execute(exe, tests, TestRunner.Options())
       }

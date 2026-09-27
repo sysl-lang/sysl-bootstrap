@@ -43,14 +43,16 @@ class StringCodegenTests extends AnyFreeSpec with CodegenSupport {
   }
 
   // A sysl string may hold an interior NUL, so every shortcut through C — `puts`, `%s`, even the
-  // length-bounded `%.*s` — would stop early. The sink walks the byte count instead.
+  // length-bounded `%.*s` — would stop early. The sink hands stdio the byte count instead, the whole
+  // buffer in one call on a hosted target rather than one `putchar` per byte.
   "printing goes by length rather than by terminator" in {
     val out  = ir("""print("hi")""")
     val sink = defineOf(out, Library.key("putbytes"))
 
     mainOf(out) should include regex raw"call void @${keyRe("prints")}\(\{ ptr, ptr, i64 \} .+\)"
     sink should include regex raw"extractvalue \{ ptr, ptr, i64 \} %t\d+, 2"
-    sink should include regex raw"call i32 @putchar\(i32 %t\d+\)"
+    sink should include regex raw"call i64 @sysl_stdout_write\(ptr %[\w.]+, i64 %[\w.]+\)"
+    sink should not include "@putchar"
     out.linesIterator.filter(_.startsWith("@.str")).foreach(_ should not include "%s")
   }
 
