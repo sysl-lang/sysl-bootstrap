@@ -492,12 +492,24 @@ class SyslLexical
 
       if answered ne null then answered
       else {
-        val illegal = Failure("illegal character", in)
+        val illegal = Failure(illegalMessage(in.first), in)
 
         if refused != null && illegal.next.pos < refused.next.pos then refused else illegal
       }
     }
   }
+
+  /** What `token` says of a character no rule wanted.
+   *
+   * A combining mark is the one such character a reader cannot see the fault in: it draws on top of
+   * whatever is before it, so `x = ́a` looks like a name beginning with `á`. It continues a name and
+   * cannot begin one, and the message says which mark it was and why.
+   */
+  private def illegalMessage(c: Char): String =
+    if isCombiningMark(c) then
+      f"illegal character: U+${c.toInt}%04X is a combining mark, which continues the letter before it " +
+        "and may not begin a name"
+    else "illegal character"
 
   /** A space, a tab or a carriage return, refused with a message built **once**.
    *
@@ -674,15 +686,34 @@ class SyslLexical
   private def isIdentStart(c: Char): Boolean =
     c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || Character.isLetter(c)
 
-  /** What may continue one: anything that may begin it, plus a digit.
+  /** What may continue one: anything that may begin it, plus a digit or a combining mark.
    *
    * `Character.isDigit` rather than the ASCII test, so that a name written in a script with its own
    * digits can use them — `caf٣` is a name where `٣` alone is not, since a digit may not *begin*
    * one. The number **literal** grammar is deliberately unmoved: `isDigit` above is ASCII and stays
    * ASCII, because a literal is a value the machine has to read and `٣` is not a spelling of three
    * that any of this compiler's arithmetic knows.
+   *
+   * **A combining mark continues a name because it is part of the letter in front of it.** `café`
+   * spelled `e` + U+0301 is the same word on the screen as the precomposed one, and
+   * `reference/lexical.md § Identifiers` says the two are *different identifiers* — which presumes
+   * both are identifiers. It is also how most of the world's scripts are written at all: a
+   * Devanagari vowel sign (`हिन्दी`'s `ि`, Mc) or virama (`्`, Mn) is a mark, not a letter, and a
+   * rule of letters alone refuses nearly every word in those scripts. No normalization is applied,
+   * so the two spellings of `café` stay two names.
    */
-  private def isIdentPart(c: Char): Boolean = isIdentStart(c) || isDigit(c) || Character.isDigit(c)
+  private def isIdentPart(c: Char): Boolean =
+    isIdentStart(c) || isDigit(c) || Character.isDigit(c) || isCombiningMark(c)
+
+  /** Unicode general category M — `Mn`, `Mc` and `Me` — which may continue a name and never begin
+   * one, since a mark with nothing before it has nothing to combine with.
+   */
+  private def isCombiningMark(c: Char): Boolean =
+    c > 0x7f && {
+      val t = Character.getType(c)
+
+      t == Character.NON_SPACING_MARK || t == Character.COMBINING_SPACING_MARK || t == Character.ENCLOSING_MARK
+    }
 
   private def takeWhile(in: Reader[Char], pred: Char => Boolean): (String, Reader[Char]) = {
     val buf = new StringBuilder
