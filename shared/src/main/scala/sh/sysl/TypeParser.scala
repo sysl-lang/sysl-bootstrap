@@ -58,18 +58,20 @@ trait TypeParser extends ExprParser {
         op("*") ~> coreType ^^ PtrType.apply |
         op("&") ~> softSync ~> coreType ^^ (t => RefType(t, sync = true)) |
         op("&") ~> coreType ^^ (t => RefType(t, sync = false)) |
-        op("weak") ~> softSync ~> err("an atomic reference has no weak form yet — 'weak sync T' " +
-          "wants the concurrency model of '06', which is not built") |
+        refusedAtStart(op("weak") ~> softSync ^^ { _ =>
+          Left("an atomic reference has no weak form yet — 'weak sync T' wants the concurrency " +
+            "model of '06', which is not built")
+        }) |
         op("weak") ~> coreType ^^ WeakType.apply |
-        ((op("[") ~> opt(expression) <~ op("]")) ~ opt(op("const")) ~ coreType >> {
+        refusedAtStart((op("[") ~> opt(expression) <~ op("]")) ~ opt(op("const")) ~ coreType ^^ {
           // `const` after the brackets says the *view* refuses writes, so a length in them is a
           // contradiction: an array is storage rather than a view of it, and storage that is written
           // once is what `val` declares. Somebody reaching for one is owed that word rather than a
           // parse error, since the two spellings are a bracketed number apart.
           case Some(_) ~ Some(_) ~ t =>
-            err(s"'const' says a view refuses writes, and an array is storage rather than a view of " +
+            Left(s"'const' says a view refuses writes, and an array is storage rather than a view of " +
               s"one — read-only storage is declared with 'val', as 'val name: [N]${t.show}'")
-          case n ~ ro ~ t => success(ArrayType(n, t, readOnly = ro.isDefined))
+          case n ~ ro ~ t => Right(ArrayType(n, t, readOnly = ro.isDefined))
         }) |
         // `<N>T`, a vector (`reference/types.md § Vectors`). The angle brackets are free in type
         // position: type arguments are spelled `[...]`, and nothing reaches `coreType` except after
@@ -77,8 +79,8 @@ trait TypeParser extends ExprParser {
         //
         // The empty spelling is caught here rather than left to fail as a stray `>`, because
         // somebody writing it has read `[]T` and is owed the reason the two are not parallel.
-        (op("<") ~> op(">") ~> coreType >> { t =>
-          err(s"a vector's lane count is part of its type, so '<>${t.show}' has no meaning — a " +
+        refusedAtStart(op("<") ~> op(">") ~> coreType ^^ { t =>
+          Left(s"a vector's lane count is part of its type, so '<>${t.show}' has no meaning — a " +
             s"slice drops its length because it carries one at run time, and a register's width is " +
             s"settled when the code is generated; write '<4>${t.show}' for four lanes")
         }) |
@@ -100,8 +102,8 @@ trait TypeParser extends ExprParser {
         // reader who wrote one in a field, a parameter or a cast is told where it belongs rather
         // than told that a type was expected. It is tried before the name alternative and needs a
         // bound to follow, so a program with a type of its own called `some` still parses.
-        (softSome ~> boundRef >> { b =>
-          err(s"'some ${b.show}' is a result whose type is read off the body that produced it, so " +
+        refusedAtStart(softSome ~> boundRef ^^ { b =>
+          Left(s"'some ${b.show}' is a result whose type is read off the body that produced it, so " +
             s"it may stand only as the result of a member of an 'impl' block — everywhere else the " +
             s"type has to be named")
         }) |
@@ -210,6 +212,26 @@ trait TypeParser extends ExprParser {
    */
   protected lazy val assocArg: Parser[TypeRef] =
     at(ident ~ (op("=") ~> typeRef) ^^ { case n ~ t => AssocArgType(n, t) })
+
+  /** A type spelling the grammar reads whole and then refuses, reported at the token it **began**
+   * on.
+   *
+   * A refusal about a type is about all of it — `[4]const int`, `<>f32`, `some Display` — so its
+   * caret belongs on the first token the reader wrote. Raised with `err` after the spelling has
+   * been read, it lands wherever the type reader happened to stop instead: the `=` after the type,
+   * or the start of the next line when the type ends one. `p` answers `Left` with the refusal and
+   * `Right` with the type, and a refusal is fatal from here exactly as `err` is, since the spelling
+   * has no other reading. A success is mapped rather than rebuilt, so it keeps its `lastFailure`.
+   */
+  private def refusedAtStart[T](p: => Parser[Either[String, T]]): Parser[T] = {
+    lazy val q = p
+
+    Parser { in =>
+      q(in) match
+        case Success(Left(msg), _) => Error(msg, in)
+        case r                     => r.map(_.fold(msg => throw IllegalStateException(msg), identity))
+    }
+  }
 
   protected lazy val softSync: Parser[Unit] =
     accept("'sync'", { case t: lexical.Identifier if t.chars == "sync" => () })

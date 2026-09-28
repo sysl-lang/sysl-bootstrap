@@ -326,24 +326,30 @@ object Toolchain {
 
   /** The levels every clang has, which is what a **manifest** may name.
    *
-   * ==Why a written-down set exists at all, when the flag needs none==
-   *
-   * `--optimize` passes whatever was written and lets clang rule on it, which is right for something
-   * somebody is typing: the build they are watching stops in the same second, with the authority on
-   * clang's levels saying so in its own words. `fast` and `g` are clang's too and a person reaching
-   * for one gets it.
-   *
-   * A manifest is the other case. It is written once and read on every later build, by consumers who
-   * did not write it and by `sysl run` replaying a cached binary — so the same mistake surfaces from
-   * inside clang, at a remove, naming no file and no key. A manifest is refused when it is read
-   * instead (`PackageConfig`), and the price of refusing early is that the accepted set has to be
-   * stated here rather than deferred.
+   * A manifest is written once and read on every later build, by consumers who did not write it and
+   * by `sysl run` replaying a cached binary — so a mistake in it would surface from inside clang, at
+   * a remove, naming no file and no key. A manifest is refused when it is read instead
+   * (`PackageConfig`).
    *
    * **So it is the six levels every clang has**, and deliberately not `fast` (which clang has been
    * retiring) or `g` (which is about debugging rather than about what a release is built at). A
-   * project that needs one of those names it on the command line, where clang answers for itself.
+   * project that needs one of those names it on the command line (`commandLineLevels`).
    */
   val levels = List("0", "1", "2", "3", "s", "z")
+
+  /** The levels `--optimize` may name: the manifest's six, and clang's `fast` and `g`.
+   *
+   * ==Why the flag has a written-down set too, when clang is the authority on its own levels==
+   *
+   * Because clang is not asked first. The level is part of the standard module's cache key
+   * (`LibraryArtifact.codegen`), so a build makes the cache directory for its level before clang
+   * ever sees it — and clang's answer to a level it does not have is not always a refusal:
+   * `-Ononsense` is refused, but `-O7` and `-O-1` are *warned* about ("using '-O3' instead") in a
+   * warning a build never shows, and a whole standard module was built and kept under a key naming
+   * a level that does not exist. So the driver refuses a level outside this set before anything
+   * reaches the cache (`Main`).
+   */
+  val commandLineLevels = levels ++ List("fast", "g")
 
   /** How a build may ask for **link-time optimization**, which is what `--lto` and a manifest's
     * `lto` key take (`Pipeline`).
@@ -368,9 +374,8 @@ object Toolchain {
     */
   val ltoModes = List("thin", "full")
 
-  /** The flag a level is passed as. A level is whatever was written — `0`, `2`, `s`, `z`, `fast` are
-   * all clang's — and one clang does not have is clang's to complain about, since it is the
-   * authority on its own levels and would say so better than a list here could.
+  /** The flag a level is passed as — one of `commandLineLevels`, the driver having refused anything
+   * else before a build began.
    */
   private def flag(level: String) = s"-O$level"
 

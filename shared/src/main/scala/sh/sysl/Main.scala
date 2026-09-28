@@ -153,6 +153,16 @@ private[sysl] def execute(asked: Config): Int = {
       "--features/--no-default-features each say something narrower about the same set — a " +
       "compilation cannot ask for both")
 
+  // **A level on the command line is refused here, before anything reaches the cache.** The level
+  // names the standard module's cache directory, which a build makes before clang sees the flag —
+  // and clang answers `-O7` with a warning nobody is shown rather than a refusal
+  // (`Toolchain.commandLineLevels`). Here because every building command comes through this line.
+  cfg.optimize.filterNot(Toolchain.commandLineLevels.contains) match
+    case Some(level) =>
+      return fail(s"'-O$level' names no level clang has — it is one of " +
+        Toolchain.commandLineLevels.mkString(", "))
+    case None =>
+
   val project = readPackageConfig(cfg.file) match
     case Left(err) => return fail(err)
     case Right(p)  => p
@@ -687,6 +697,11 @@ private[sysl] def execute(asked: Config): Int = {
       BuildInfo.version,
       target.name,
       s"${allocator.alloc}/${allocator.free}",
+      // **What the target provides, as the config narrowed it.** It decides whether a program
+      // compiles at all — a module reaching one that requires `posix` is refused where the config
+      // says `posix = false` — and nothing else in this key moves when only the config does, so a
+      // tree built once with POSIX was replayed, unrefused, after the config took POSIX away.
+      provides.toList.sorted.mkString(","),
       cfg.optimization,
       // **And everything asked of the optimizer beyond the level** (`Pipeline.key`). A cached
       // binary is replayed without reaching clang at all, so a run that added `--lto=thin` to an

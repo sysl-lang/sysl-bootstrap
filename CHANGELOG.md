@@ -7,6 +7,50 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.147 — 2026-09-28
+
+**an imported generic struct no longer crashes the compiler**
+
+### Fixed: constructing an imported generic struct crashed the compiler
+
+With a generic struct imported by name,
+
+```sysl
+import b.G
+
+val g = G[int](1, "s")
+```
+
+the compiler stopped with `NoSuchElementException: key not found` instead of compiling. The constructor path resolved the written name to the key the module keeps the struct under, and then looked the declaration up by the *written* name again. It now looks it up by the resolved key, so an imported generic struct constructs exactly as a local one does.
+
+The same path named a struct by its internal key when a constructor's field did not match its type — `'x' of 'b$T'`. It now names the struct as every other diagnostic does: `'b.T'`, and `'b.G[int]'` for an instantiation.
+
+### Behaviour change: a type-argument list on a module-qualified type or variant now compiles
+
+These were refused with *"the thing being called must be a name"*:
+
+```sysl
+import b
+
+val g = b.G[int](1, "s")          // a constructor
+val m = b.Maybe[int].Just(3)      // a called variant
+val n = b.Maybe[string].Nothing   // an uncalled one
+```
+
+`reference/generics.md § Writing the type arguments` gives the list on a function "qualified or not", on a constructor and on a variant, and the qualified function form already worked; the constructor and variant forms matched only an unqualified head. A qualified head is now folded through the module into the key it keeps the type under, as `b.G(1, "s")` already was, and diagnostics keep the dotted spelling. A program that was refused now compiles; nothing that compiled before changes meaning.
+
+### Tests
+
+- `AnalyzerDeclErrorTests` gains the imported-by-name generic constructor that used to crash, and the constructor field-mismatch message naming `b.T` / `b.G[int]`.
+- `WrittenTypeArgsTests` gains the qualified constructor, the called and uncalled qualified variants, and their diagnostics keeping the dotted spelling.
+- `ArgumentTests`' self-recursive default case named its function `loop`, which is a keyword, so the program failed to parse and the loose assertion passed without reaching the check it was written for. It now uses an ordinary name and asserts the actual diagnostic in both recursion cases.
+
+### Verification
+
+Full Native gate on the released tree (`./run-gate.sh` on dev `788d936d`; the tag is that sha plus the version bump): **GATE: GREEN, 11,853 passed, 0 failed**, 71:45, no retries, no timeouts. Warnings census, cleaned: zero compile warnings; `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
+The macOS tarball was extracted into a bare prefix and run through a symlink under a fresh `HOME` before upload: `sysl --version` answers `sysl 0.0.147`, the standard module builds from the shipped `share/sysl/library`, `sysl doc` reaches `sysl-doc`, and a two-module project using `b.G[int](1, "s")`, `G[int](2, "t")` after `import b.G`, `b.Maybe[int].Just(3)` and `b.Maybe[string].Nothing` prints `1 s 2 t` / `just 3` / `nothing`. The same project on 0.0.146 crashes with `NoSuchElementException: key not found: G`.
+
 ## 0.0.146 — 2026-09-28
 
 **a closure inside a block reads that block's imports**
