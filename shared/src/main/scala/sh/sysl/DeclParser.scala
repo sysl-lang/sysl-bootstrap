@@ -207,6 +207,33 @@ trait DeclParser extends ExprParser {
   protected lazy val memberName: Parser[String] =
     reservedName("a member's name", op("(") | op("[") | op("->")) | ident
 
+  /** The member-name refusal, asked **before** the body lines a reserved word opens —
+   * `type(self) -> int` in a trait or an `impl`, `static(self)`, `private(self)`, `override(self)`.
+   *
+   * It is `reservedFuncHead` one level in, and for the same reason: `type` is tried as an associated
+   * type, `static` as a static property and `private` as a visibility, each reads the word and fails
+   * at the token after it — further along, so it outranks `memberName`'s `Error` back at the word —
+   * and `override` and a trait's `private` are refused by rules of their own before the member form
+   * is reached at all. So the reader was told `identifier expected`, or that a trait's member takes
+   * no visibility, about a line whose only fault is its name.
+   *
+   * The lookahead is the word, optional type parameters, and then a parameter list or a property's
+   * arrow, and nothing legitimate in a type's body has that shape: `type Item = int` and
+   * `static count -> int` have a name after the word, and `private[m] f(self)` has one after the
+   * bracket, which is where this looks for the `(`. Where it declines it records nothing, exactly as
+   * `reservedFuncHead` does, so an absence cannot outrank the real complaint about a line.
+   */
+  protected lazy val reservedMemberHead: Parser[Unit] = {
+    lazy val look = reservedName("a member's name", opt(boundedTypeParams) ~ (op("(") | op("->")))
+
+    Parser { in =>
+      look(in) match {
+        case e: Error => e
+        case _        => Success((), in)
+      }
+    }
+  }
+
   /** `extern name(params) -> ret` — a header with no body at all, which is what tells it from a
    * function declaration — or `extern name: type`, the same seam pointed at a variable the other
    * side exports rather than a function. The result is optional and absent means `unit`, exactly as
@@ -414,7 +441,9 @@ trait DeclParser extends ExprParser {
   private lazy val fieldAhead: Parser[Unit] = guard(visibility ~> ident ~ op(":")) ^^^ (())
 
   private lazy val plainMember: PackratParser[MethodDecl] =
-    visibility ~ (noOverride ~> (setter | member)) ^^ { case v ~ m => m.copy(vis = v).setPos(m.pos) }
+    reservedMemberHead ~> visibility ~ (noOverride ~> (setter | member)) ^^ { case v ~ m =>
+      m.copy(vis = v).setPos(m.pos)
+    }
 
   private def notAMember: Parser[MethodDecl] =
     err("'@crossing', '@reads' and '@writes' are about a parameter, so they stand above a method or " +
@@ -780,12 +809,12 @@ trait DeclParser extends ExprParser {
         }
     }
 
-  /** One line of a trait body: an associated type, or a member. The associated type is tried first
-   * and cannot be confused with anything — `type` is reserved, so no member declaration can begin
-   * with it.
+  /** One line of a trait body: an associated type, or a member. The associated type is tried first,
+   * and `reservedMemberHead` ahead of it is what answers a member *named* `type`, which the
+   * associated type would otherwise read as far as the parenthesis and refuse there.
    */
   protected lazy val traitItem: PackratParser[Either[AssocDecl, MethodDecl]] =
-    assocSig ^^ (Left(_)) | traitMember ^^ (Right(_))
+    reservedMemberHead ~> (assocSig ^^ (Left(_)) | traitMember ^^ (Right(_)))
 
   /** `type Body: View` — a trait's **associated type**: a parameter the *implementation* supplies
    * rather than one written where the trait is applied.
@@ -813,7 +842,7 @@ trait DeclParser extends ExprParser {
    * an implementation for that member; one written with a body supplies a default instead.
    */
   protected lazy val traitMember: PackratParser[MethodDecl] =
-    memberAttrs ~ (noVisibility ~> noOverride ~>
+    memberAttrs ~ (reservedMemberHead ~> noVisibility ~> noOverride ~>
       (setter | setterSig | member | staticPropertySig | methodSig | propertySig)) ^^ { case as ~ m =>
       attributedMember(m, as)
     }
@@ -898,7 +927,7 @@ trait DeclParser extends ExprParser {
 
   /** One line of an `impl` block: an associated type supplied, or a member. */
   protected lazy val implItem: PackratParser[Either[AssocBind, MethodDecl]] =
-    assocBind ^^ (Left(_)) | implMember ^^ (Right(_))
+    reservedMemberHead ~> (assocBind ^^ (Left(_)) | implMember ^^ (Right(_)))
 
   /** `type Body = Column[Text, Button]` — the associated type this block supplies.
    *
@@ -918,7 +947,7 @@ trait DeclParser extends ExprParser {
    * implements is the only thing a member of a type can be replacing a body from.
    */
   protected lazy val implMember: PackratParser[MethodDecl] =
-    memberAttrs ~ (noVisibility ~> overrideMod) ~ (setter | member) ^^ { case as ~ ov ~ m =>
+    memberAttrs ~ (reservedMemberHead ~> noVisibility ~> overrideMod) ~ (setter | member) ^^ { case as ~ ov ~ m =>
       attributedMember(m.copy(overrides = ov).setPos(m.pos), as)
     }
 
