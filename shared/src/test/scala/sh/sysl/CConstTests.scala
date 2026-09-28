@@ -962,10 +962,16 @@ class CConstTests extends AnyFreeSpec with CodegenSupport with RunSupport with P
         ("", "main.sysl", "@no_posix\n\nprint(str(host.size()))\n"),
       )
 
+      // The whole list, not a substring of it: the refusal is the only thing the reader is told. The
+      // call's function is missing because the body was dropped, and reporting it as undefined too
+      // is the typo hunt this test exists to rule out.
       Compiler.compile(reaching, bare) match {
         case Right(out) => fail(s"expected a refusal, got:\n$out")
         case Left(e) =>
-          e should include("requires 'posix'")
+          e.linesIterator.filter(_.startsWith("error:")).toList shouldBe List(
+            "error: this reaches 'host', which requires 'posix', and this module declared 'no posix' " +
+              "— an environment capability gates which modules exist, so a module that gave one up " +
+              "may not reach one that needs it")
           e should not include "regex.h"
       }
     }

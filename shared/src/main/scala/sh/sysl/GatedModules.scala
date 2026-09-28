@@ -64,10 +64,6 @@ trait GatedModules extends AnalyzerBase {
     // gated module, and that edge starts in a module of the program's.
     val absent = Capability.environment.filterNot(targetProvides)
 
-    def reaching(module: String): Set[String] =
-      narrowed.getOrElse(module, Set.empty) ++
-        (if ownModule(module) && !std.carries(module) then absent else Set.empty)
-
     // Nothing narrowed anything and the target has everything, which is almost every compilation: the
     // walk below reads every edge, and one with no question to ask should pay nothing at all for it.
     if narrowed.nonEmpty || absent.nonEmpty then
@@ -75,7 +71,7 @@ trait GatedModules extends AnalyzerBase {
 
       for
         ((from, to), pos) <- moduleEdges.toList
-        given_up = reaching(from) if given_up.nonEmpty
+        given_up = givenUp(from) if given_up.nonEmpty
         // The least of them by name where a reference is refused for more than one reason, so the
         // message does not vary between runs with the iteration order of a set.
         cap <- (given_up & needed.getOrElse(to, Set.empty)).toList.sorted.headOption
@@ -97,6 +93,30 @@ trait GatedModules extends AnalyzerBase {
 
         recover(())(err(s"this reaches '$to', which requires '$cap', and $why"))
   }
+
+  /** The environment capabilities `module` may not reach: what its own clause gave up, plus — for a
+   * module of the program's own — whatever the target does not provide. The library's modules are
+   * left out of the second half for the reason `checkGatedModules` gives.
+   */
+  private def givenUp(module: String): Set[String] =
+    (moduleNarrows.getOrElse(module, Map.empty).keySet & Capability.environment) ++
+      (if ownModule(module) && !std.carries(module) then Capability.environment.filterNot(targetProvides)
+       else Set.empty)
+
+  /** Whether a reference from the module being walked into `module` is one `checkGatedModules` will
+   * refuse on the strength of `module`'s own clause.
+   *
+   * **A name such a reference fails to find is not worth a diagnostic of its own.** A module that
+   * requires what this machine lacks may have had its body dropped before analysis — `CProbe` keeps
+   * the header of a file whose `c const` it could not measure and nothing else — so everything it
+   * declares is missing here for the reason the gate reports. Saying the name is undefined as well
+   * would send the reader looking for a typo in a module that is exactly as they wrote it, and the
+   * refusal at the same reference already tells them what to change.
+   */
+  protected def gatedAway(module: String): Boolean =
+    val needs = moduleRequires.get(module).map(_.keySet).getOrElse(Set.empty) & Capability.environment
+
+    module != currentModule && needs.nonEmpty && (givenUp(currentModule) & needs).nonEmpty
 
   /** How a module refers to itself in a diagnostic. The root module has no name to print, and a
    * program's own files are in it, so the common case reads as a sentence rather than as an empty

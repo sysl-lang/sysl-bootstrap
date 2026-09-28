@@ -29,6 +29,26 @@ trait SyslParserBase extends PackratParsers {
 
   val source: Source
 
+  /** Where this parser's text stands inside another file, for a parser over a piece of one — an
+   * interpolation's hole — rather than over a file of its own. `None` for every whole file.
+   */
+  def origin: Option[SourceOrigin] = None
+
+  /** The file this parser's positions name: the enclosing one where the text is a piece of it. */
+  protected final def home: Source = origin.fold(source)(_.file)
+
+  /** A line and column counted in this parser's text, as a line and column in `home`.
+   *
+   * The text's first line begins part-way along the enclosing file's line, so only its columns are
+   * shifted; every later line of it is a whole line of the file. A hole never reaches a second line
+   * today — the lexer refuses a line break inside one as an unterminated interpolation — so the
+   * second case is what makes the mapping true of any piece rather than of one shape. Line 0 is the
+   * reader's "no position at all" and is left as it is.
+   */
+  protected final def placed(line: Int, col: Int): (Int, Int) = origin match
+    case Some(o) if line == 1 => (o.line, o.col + col - 1)
+    case Some(o) if line > 1  => (o.line + line - 1, col)
+    case _                    => (line, col)
 
   val lexical: SyslLexical = new SyslLexical
   type Elem = lexical.Token
@@ -101,8 +121,8 @@ trait SyslParserBase extends PackratParsers {
   protected def reader(src: String): Reader[lexical.Token] = {
     val tokens = spanned(lexical.scanPositioned(src))
     val past   = tokens.lastOption match {
-      case Some((_, p)) => TokenPos.after(source, p.endLine, p.endColumn)
-      case None         => TokenPos.after(source, 0, 0)
+      case Some((_, p)) => TokenPos.after(home, p.endLine, p.endColumn)
+      case None         => TokenPos.after(home, 0, 0)
     }
 
     new PositionReader(new TokenReader(tokens, past))
@@ -124,15 +144,15 @@ trait SyslParserBase extends PackratParsers {
    */
   private def spanned(scanned: List[(lexical.Token, Position, Int)]): List[(lexical.Token, TokenPos)] = {
     val buf        = ListBuffer.empty[(lexical.Token, TokenPos)]
-    var prevLine   = 1
-    var prevColumn = 1
+    var (prevLine, prevColumn) = placed(1, 1)
 
     for ((token, start, past) <- scanned) {
       val (line, column)       = source.placeOf(past)
       val backwards            = line < start.line || (line == start.line && column < start.column)
-      val (endLine, endColumn) = if backwards then (start.line, start.column) else (line, column)
+      val (endLine, endColumn) = placed.tupled(if backwards then (start.line, start.column) else (line, column))
+      val (startLine, startColumn) = placed(start.line, start.column)
 
-      buf += ((token, TokenPos(source, start.line, start.column, endLine, endColumn, prevLine, prevColumn)))
+      buf += ((token, TokenPos(home, startLine, startColumn, endLine, endColumn, prevLine, prevColumn)))
       prevLine = endLine
       prevColumn = endColumn
     }
@@ -145,7 +165,9 @@ trait SyslParserBase extends PackratParsers {
   /** The span of the next token, in this parser's source. */
   protected def posOf(in: Input): Pos = in.pos match {
     case p: TokenPos => p.toPos
-    case p           => Pos(source, p.line, p.column)
+    case p           =>
+      val (line, column) = placed(p.line, p.column)
+      Pos(home, line, column)
   }
 
   /** The extent a rule covered: from the start of the token it began at, to the end of the last
@@ -646,6 +668,13 @@ trait SyslParserBase extends PackratParsers {
    */
   protected def quantifier: PackratParser[Expr]
 }
+
+/** Where a piece of text parsed on its own begins in the file it was cut from: `file`, and the
+ * 1-based line and column of its first character. An interpolation's hole is the case — it is
+ * lexed and parsed as a source of its own, and without this every node in it would say it stood at
+ * line 1 of a file named after the hole rather than where the reader wrote it.
+ */
+final case class SourceOrigin(file: Source, line: Int, col: Int)
 
 /** A token's position, which is a **span**: a token occupies characters rather than sitting at one,
  * and both a diagnostic that underlines it and an editor that resolves a cursor to it need to know

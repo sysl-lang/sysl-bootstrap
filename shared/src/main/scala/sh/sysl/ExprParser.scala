@@ -532,16 +532,28 @@ trait ExprParser extends SyslParserBase {
    * span and the rest would report nowhere — which is how an analyzer complaint about a hole's type
    * ends up with no caret at all. The span they are all given is `whole`, the literal itself: it is
    * what the reader wrote and what they would edit, and the tree holds no finer position for a part
-   * of a token. Nodes the *sub-parse* built keep their own positions, which point into the hole.
+   * of a token. Nodes the *sub-parse* built keep their own positions, which are the places in the
+   * file where the hole's text was written.
    */
   protected def desugarInterp(t: lexical.StrInterp, whole: Pos): Either[String, Expr] = {
     def here[T <: Positioned](node: T): T = node.setPos(whole)
 
+    // Where each hole begins in the enclosing file. The lexer records it as an offset into the text
+    // this parser scanned, which is a line and a column of that text, which `placed` carries out to
+    // the file when this parser is itself reading a hole.
+    val origins: List[Option[SourceOrigin]] =
+      if t.starts.length != t.exprs.length then t.exprs.map(_ => None)
+      else
+        t.starts.map { off =>
+          val (line, col) = placed.tupled(source.placeOf(off))
+          Some(SourceOrigin(home, line, col))
+        }
+
     val parsed =
-      t.exprs.foldRight(Right(Nil): Either[String, List[Expr]]) { (src, acc) =>
+      t.exprs.zip(origins).foldRight(Right(Nil): Either[String, List[Expr]]) { case ((src, from), acc) =>
         for
           rest <- acc
-          e    <- parseEmbedded(src)
+          e    <- parseEmbedded(src, from)
         yield e :: rest
       }
 
@@ -572,8 +584,10 @@ trait ExprParser extends SyslParserBase {
 
   /** Lexes and parses the source of a `${ … }` interpolation as a single expression.
    *
-   * The embedded text is its own little source, so a position inside a hole points into the hole
-   * rather than into an unrelated column of the line the string sits on.
+   * The embedded text is lexed as its own little source, and `from` is where it was written: every
+   * node the sub-parse builds is stamped with the enclosing file and the line and column the reader
+   * wrote it at, so a complaint about `nope` in `s"x ${nope}"` points at `nope` in the file rather
+   * than at line 1 of a file named after the hole.
    *
    * **A hole is therefore a placeholder boundary** (`reference/expressions.md § _ — a parameter
    * with the name left out`), and it has to be: the sub-parser numbers placeholders from zero, so a
@@ -583,8 +597,8 @@ trait ExprParser extends SyslParserBase {
    * that a placeholder cannot reach out of a string to close over the whole of one — the arrow form
    * outside the string is how that is written.
    */
-  protected def parseEmbedded(src: String): Either[String, Expr] = {
-    val sub = new SyslParser(Source(s"${source.name} (interpolation)", src))
+  protected def parseEmbedded(src: String, from: Option[SourceOrigin]): Either[String, Expr] = {
+    val sub = new SyslParser(Source(s"${source.name} (interpolation)", src), origin = from)
 
     sub.parseExpression match
       case sub.Success(e, _) => Right(Placeholders.lift(e))
