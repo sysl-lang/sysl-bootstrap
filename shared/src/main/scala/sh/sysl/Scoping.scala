@@ -776,9 +776,22 @@ trait Scoping extends DeclTables {
    * across modules, and it is why the two questions have to stay apart: **reachability is the import
    * system's and ownership is the expected type's.** `variantVisible` answers a `private`/public
    * question and was doing duty as an in-scope one.
+   *
+   * **Two wildcards offering the name are the same case, and the expected type settles them too.**
+   * `import m.*` and `import m2.*` each offering a variant `Hit` make a bare `Hit(1)` ambiguous
+   * where nothing says which — but `val x: m.M = Hit(1)` says which, exactly as it does for two
+   * enums in one module. So where the expected enum offers the name, the search is asked about
+   * *that* key alone first: the wildcard over `m` offering it is the proof the name is in scope
+   * here, which keeps the re-point from conjuring, and the offer from `m2.*` is not a rival for a
+   * key it does not hold. Where the expected type is neither enum, the ordinary search runs and
+   * reports the ambiguity as before.
    */
-  protected def variantKeyFor(written: String, expected: Option[Type]): Option[String] =
-    variantKey(written).map(near => expectedVariantKey(written, expected).getOrElse(near))
+  protected def variantKeyFor(written: String, expected: Option[Type]): Option[String] = {
+    val wanted = expectedVariantKey(written, expected)
+
+    wanted.flatMap(key => resolveName(written, inReach = variantVisible)(_ == key))
+      .orElse(variantKey(written).map(near => wanted.getOrElse(near)))
+  }
 
   /** The key the expected type's own enum offers for this written name, where it offers one.
    *

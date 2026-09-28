@@ -638,4 +638,33 @@ class ImportTests extends AnyFreeSpec with CodegenSupport with RunSupport with P
       ) shouldBe "3\n"
     }
   }
+
+  "two wildcards offering one variant" - {
+    val m  = ("m", "m.sysl", "module m\nenum M\n    Hit(n: int)\n    Miss\nshow(v: M) -> int = v match\n    Hit(n) -> n\n    Miss -> 0")
+    val m2 = ("m2", "m2.sysl", "module m2\nenum N\n    Hit(n: int)\n    Gone")
+
+    def main(body: String) = ("", "main.sysl", s"import m.*\nimport m2.*\n$body")
+
+    "are settled by an annotated binding's type" in {
+      runIn(main("val x: m.M = Hit(1)\nprint(show(x))"), m, m2) shouldBe "1\n"
+    }
+
+    "by a parameter's type" in {
+      runIn(main("print(show(Hit(2)))"), m, m2) shouldBe "2\n"
+    }
+
+    "and by a function's declared return type" in {
+      runIn(main("make() -> m.M = Hit(3)\nprint(show(make()))"), m, m2) shouldBe "3\n"
+    }
+
+    "but with nothing expected the use is still ambiguous" in {
+      errIn(main("val x = Hit(1)\nprint(1)"), m, m2) should
+        include("'Hit' is offered by 'm.*' and 'm2.*' — import it selectively, or write the module it comes from")
+    }
+
+    "and so it is where the expected type is neither enum" in {
+      errIn(main("val x: int = Hit(1)\nprint(x)"), m, m2) should
+        include("'Hit' is offered by 'm.*' and 'm2.*' — import it selectively, or write the module it comes from")
+    }
+  }
 }
