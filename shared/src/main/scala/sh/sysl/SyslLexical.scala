@@ -88,10 +88,24 @@ class SyslLexical
    * specifier written after it in an `f"…"` string, or `None` for a hole rendered by `str`. The
    * invariants `parts.length == exprs.length + 1` and `specs.length == exprs.length` let the parser
    * interleave them: `parts(0) + render(exprs(0)) + parts(1) + …`.
+   *
+   * `starts` is where each hole's source begins, as an offset into the text that was scanned, so a
+   * hole parsed as a source of its own can place its nodes back in the file it was written in. It is
+   * in a list of its own because it is *where* the token was rather than *what* it is: two
+   * interpolations with the same parts and holes are the same token wherever they stand.
    */
-  case class StrInterp(parts: List[String], exprs: List[String], specs: List[Option[String]]) extends Token {
+  case class StrInterp(parts: List[String], exprs: List[String], specs: List[Option[String]])(
+      val starts: List[Int])
+      extends Token {
     def chars: String =
       parts.head + parts.tail.zip(exprs).map { case (p, e) => "${" + e + "}" + p }.mkString
+  }
+
+  object StrInterp {
+
+    /** A token with no record of where its holes stand — what a test compares a scan against. */
+    def apply(parts: List[String], exprs: List[String], specs: List[Option[String]]): StrInterp =
+      new StrInterp(parts, exprs, specs)(Nil)
   }
 
   /** Reserved words. Type names are deliberately absent: `int`, `usize`, `f32` and the
@@ -1033,6 +1047,7 @@ class SyslLexical
                          block: Boolean = false, strip: Int = 0): ParseResult[Token] = {
     val parts   = ListBuffer.empty[String]
     val exprs   = ListBuffer.empty[String]
+    val starts  = ListBuffer.empty[Int]
     val specs   = ListBuffer.empty[Option[String]]
     val part    = new StringBuilder
     val pending = new StringBuilder
@@ -1055,7 +1070,7 @@ class SyslLexical
       // at the first quote it meets.
       else if (rest.first == '"' && (if (block) opensBlock(rest) else true)) {
         parts += part.toString
-        result = Some(Success(StrInterp(parts.toList, exprs.toList, specs.toList),
+        result = Some(Success(StrInterp(parts.toList, exprs.toList, specs.toList)(starts.toList),
                               if (block) rest.rest.rest.rest else rest.rest))
       } else if (block && rest.first == '\n') {
         pending.clear(); part += '\n'; rest = afterIndent(rest.rest, strip)
@@ -1074,6 +1089,7 @@ class SyslLexical
             case Right((expr, next)) =>
               parts += part.toString; part.clear()
               exprs += expr
+              starts += after.rest.offset
               rest = next
               takeSpec()
           }
@@ -1082,6 +1098,7 @@ class SyslLexical
 
           parts += part.toString; part.clear()
           exprs += name
+          starts += after.offset
           rest = next
           takeSpec()
         } else result = Some(Success(errorToken("expected a name or '{' after '$'"), after))
