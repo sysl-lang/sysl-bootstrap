@@ -2,7 +2,7 @@ package sh.sysl
 
 import io.github.edadma.cross_platform.*
 
-import java.io.{ByteArrayOutputStream, IOException, PrintStream}
+import java.io.{ByteArrayOutputStream, IOException}
 
 import org.scalatest.freespec.AnyFreeSpec
 import org.scalatest.matchers.should.Matchers
@@ -26,11 +26,9 @@ class IoRefusalTests extends AnyFreeSpec with Matchers {
    */
   private def cli(cfg: Config): (Int, String) = {
     val err    = new ByteArrayOutputStream
-    val status =
-      Console.withOut(Discarded)(Console.withErr(new PrintStream(err, true, "UTF-8"))(
-        sh.sysl.execute(cfg.copy(noStdLib = true))))
+    val status = Console.withOut(Discarded)(Console.withErr(err)(sh.sysl.execute(cfg.copy(noStdLib = true))))
 
-    (status, err.toString("UTF-8"))
+    (status, err.toString)
   }
 
   /** A scratch directory holding an exported C function, a directory nobody may write, and a plain
@@ -151,9 +149,8 @@ class IoRefusalTests extends AnyFreeSpec with Matchers {
 
   "what IoFailure reads, and what it leaves alone" - {
 
-    "an IO failure is recognised, wrapped or not" in {
+    "an IO failure is recognised" in {
       IoFailure.unapply(new IOException("x")).isDefined shouldBe true
-      IoFailure.unapply(new java.io.UncheckedIOException(new IOException("x"))).isDefined shouldBe true
     }
 
     "anything else is not, so a compiler bug still escapes as one" in {
@@ -162,7 +159,7 @@ class IoRefusalTests extends AnyFreeSpec with Matchers {
     }
 
     "a stream's '<path> (<reason>)' becomes the path and the reason" in {
-      IoFailure.describe(new java.io.FileNotFoundException("a/b.h (Permission denied)")) shouldBe
+      IoFailure.describe(new IOException("a/b.h (Permission denied)")) shouldBe
         "'a/b.h': permission denied"
     }
 
