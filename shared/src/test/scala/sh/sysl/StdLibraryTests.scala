@@ -336,6 +336,91 @@ class StdLibraryTests extends AnyFreeSpec with Matchers with TreeSupport {
     }
   }
 
+  /** **A library that is found and cannot be used is a refusal, never an exception.** Each of these
+   * used to be a `sys.error` deep inside the reading of the library, which reached the user of
+   * `sysl build` as `Exception in thread "main" java.lang.RuntimeException` and a stack trace
+   * through `Stdlib.found` — reachable by nothing more exotic than a `SYSL_LIB` pointed at a copy of
+   * the library with one bad line in it.
+   *
+   * The library itself is resolved once per process (`Std.root`), so these hand the readers inputs
+   * of their own rather than swapping the library under the suite; `Stdlib.refusing` is the catch
+   * `resolve` puts around all of them, and `Main` prints its `Left` as `sysl: error:` with exit 1.
+   */
+  "a library that cannot be used" - {
+
+    val target = Target.default
+
+    def file(name: String, text: String): Source =
+      Source(s"${Std.Prefix}/sysl/$name", text, List(Std.module))
+
+    "is refused when a file does not parse, with the parser's own diagnostic under one sentence" in {
+      val problem = intercept[Std.Unusable](
+        Std.parsedFrom(List(file("std.sysl", "module sysl\n)))) broken\n")), target)).getMessage
+
+      problem.linesIterator.next() should startWith(
+        "the standard module does not parse, so nothing can be compiled against it")
+
+      // Located as any file is, by its place in the library — and the diagnostic is the parser's,
+      // not a paraphrase of it.
+      problem should include("error: expression expected")
+      problem should include("--> library/sysl/std.sysl:2:1")
+
+      // **Not wrapped in `rebuildFailure`'s advice**: building the artifact and compiling the source
+      // in both parse this same library, so recommending either sends the reader round a loop.
+      problem should not include "build-lib"
+      problem should not include "--no-std-lib"
+    }
+
+    "and names every file that does not parse, not only the first" in {
+      val problem = intercept[Std.Unusable](
+        Std.parsedFrom(List(file("a.sysl", "module sysl\n)))\n"), file("fine.sysl", "module sysl\n"),
+                            file("b.sysl", "module sysl\n\n]]]\n")), target)).getMessage
+
+      problem should include("--> library/sysl/a.sysl:2:1")
+      problem should include("--> library/sysl/b.sysl:3:1")
+    }
+
+    "while a library that parses is handed back whole, in the order it came" in {
+      val files = List(file("a.sysl", "module sysl\n"), file("b.sysl", "module sysl\n"))
+
+      Std.parsedFrom(files, target).map(_.source) shouldBe files
+    }
+
+    "is refused when its module directory holds no source" in {
+      val root = createTempDirectory("sysl-empty-lib-")
+
+      try
+        Project.makeDirectories(s"$root/${Std.module}")
+
+        intercept[Std.Unusable](Std.collectAt(root, target.os)).getMessage shouldBe
+          s"the library at $root holds no sysl source files"
+      finally discardTree(root)
+    }
+
+    "is refused when a 'c const' of it cannot be measured, with the C compiler's diagnostic rendered" in {
+      assume(Toolchain.findClang(target, None).isRight, "no C compiler for this machine")
+
+      val units = Std.parsedFrom(
+        List(file("zz.sysl", "module sysl\n\nc const\n    NOPE: int = \"SYSL_NO_SUCH_MACRO\"\n")), target)
+      val problem = intercept[Std.Unusable](Stdlib.lowered(units, target, None)).getMessage
+
+      problem.linesIterator.next() shouldBe "the standard module's 'c const' could not be measured"
+      problem should include("--> library/sysl/zz.sysl:4:5")
+      problem should include("SYSL_NO_SUCH_MACRO")
+      // It printed the case class's `toString` before — `Diagnostic(the C compiler refused …`.
+      problem should not include "Diagnostic("
+    }
+
+    "is answered by resolve as the refusal it carries" in {
+      Stdlib.refusing[Unit](throw Std.Unusable("the library at x holds no sysl source files")) shouldBe
+        Left("the library at x holds no sysl source files")
+    }
+
+    "while any other exception is left to escape, since it is a defect in the compiler" in {
+      intercept[IllegalStateException](Stdlib.refusing[Unit](throw IllegalStateException("a defect")))
+    }
+  }
+
   "two files of one module reach each other with nothing imported" in {
     // `Display.display` names `Writer`, which the *other* file declares, and `reference/modules.md
     // § The module graph is acyclic` is why that needs no import: a module's members are one set
