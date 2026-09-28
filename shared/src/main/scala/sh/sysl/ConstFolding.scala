@@ -129,8 +129,27 @@ trait ConstFolding extends ImportResolution {
    * once, at whichever of them the walk reached first, naming the loop in the order it was followed
    * — which is the same account `reference/modules.md § The module graph is acyclic` gives of a
    * cycle between modules.
+   *
+   * **A refusal is memoized as well as a value.** A constant that could not be folded is one mistake
+   * however many places name it, so every later read — a use, another constant written in terms of
+   * it — raises the very complaint the first one did, at the place that first one named. Reported
+   * again, it is the same diagnostic and is dropped as a duplicate, so the use says nothing of its
+   * own. Raising it rather than abandoning the region silently is what keeps the mistake reported
+   * when the first read was one a speculative walk took back.
    */
-  protected def constLiteral(key: String): Expr = constLits.getOrElseUpdate(key, {
+  protected def constLiteral(key: String): Expr =
+    constRefusals.get(key).foreach(e => throw e)
+
+    try foldConst(key)
+    catch
+      case e: AnalyzerError =>
+        constRefusals(key) = e
+        throw e
+      case e: Poisoned =>
+        constRefusals(key) = e
+        throw e
+
+  private def foldConst(key: String): Expr = constLits.getOrElseUpdate(key, {
     val decl = constDecls(key)
 
     if constsInProgress(key) then
@@ -162,7 +181,9 @@ trait ConstFolding extends ImportResolution {
       val value = inDecl(key)(fold(decl.value).getOrElse(
         at(decl.value.pos)(err(s"the value of '${qn(key)}' is not a constant expression"))))
 
-      checkFits(value, ty, s"'${qn(key)}'", decl.pos)
+      // The value is what does not fit, so the value is where it is said — the same place a
+      // refusal from inside the fold points, rather than the whole declaration.
+      checkFits(value, ty, s"'${qn(key)}'", decl.value.pos.orElse(decl.pos))
       value
     finally constsInProgress -= key
   })
@@ -473,16 +494,22 @@ trait ConstFolding extends ImportResolution {
     // narrowing wraps and a float-to-integer truncates toward zero (`01`). Silently doing something
     // gentler here would make a constant mean one thing and the same expression written out mean
     // another.
-    case Call(Ident(name), List(arg)) =>
+    //
+    // **A refusal the fold raises is anchored at the expression that raised it** — the conversion,
+    // the division, the shift — and not at whatever asked for the fold. That is what makes a bad
+    // constant one mistake: the declaration's own walk and every use of the name arrive at the same
+    // place with the same sentence, and one complaint at one place is reported once.
+    case c @ Call(Ident(name), List(arg)) =>
       for
         target <- scalarType(name)
         value  <- fold(arg, subst)
-        out    <- convert(value, target)
+        out    <- at(c.pos)(convert(value, target))
       yield out
 
-    case Binary(op, l, r) => for (a <- fold(l, subst); b <- fold(r, subst); v <- binary(op, a, b)) yield v
-    case Compare(List(l, r), List(op)) =>
-      for (a <- fold(l, subst); b <- fold(r, subst); v <- binary(op, a, b)) yield v
+    case b @ Binary(op, l, r) =>
+      for (x <- fold(l, subst); y <- fold(r, subst); v <- at(b.pos)(binary(op, x, y))) yield v
+    case c @ Compare(List(l, r), List(op)) =>
+      for (x <- fold(l, subst); y <- fold(r, subst); v <- at(c.pos)(binary(op, x, y))) yield v
 
     // `sizeof(T)` and `alignof(T)` are compile-time constants (`reference/memory.md §
     // Reinterpreting storage`), so they fold exactly as a literal does. That is what makes them
@@ -683,5 +710,6 @@ trait ConstFolding extends ImportResolution {
   private val externVarTypes   = mutable.HashMap.empty[String, Type]
   private val constTypes       = mutable.HashMap.empty[String, Type]
   private val constLits        = mutable.HashMap.empty[String, Expr]
+  private val constRefusals    = mutable.HashMap.empty[String, Throwable]
   private val constsInProgress = mutable.LinkedHashSet.empty[String]
 }

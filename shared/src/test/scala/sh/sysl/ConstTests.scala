@@ -429,6 +429,88 @@ class ConstTests extends AnyFreeSpec with CodegenSupport with RunSupport with Pa
     }
   }
 
+  /** A constant that cannot be folded is ONE mistake, however many places name it. The complaint
+    * points at the sub-expression that caused it — the division, the shift, the conversion, or the
+    * value that does not fit — and a use of the refused name says nothing of its own, exactly as a
+    * use of any other name whose declaration was already complained about.
+    *
+    * Every case asserts the complete list, line and column included: the defect was a second copy of
+    * the same sentence, once at the whole declaration and once at each use.
+    */
+  "a refused constant is reported once, where the mistake is" - {
+    /** Each `error:` line of a rendered report, with the `line:col` its `-->` names. */
+    def reported(src: String): List[String] = {
+      val lines = err(src).linesIterator.toList
+      val At    = """\s*-->\s+\S+?:(\d+):(\d+)""".r
+
+      lines.zipWithIndex.collect {
+        case (l, i) if l.startsWith("error: ") =>
+          val where = lines.drop(i + 1).collectFirst { case At(line, col) => s"$line:$col" }
+          s"${where.getOrElse("?")} ${l.stripPrefix("error: ")}"
+      }
+    }
+
+    val divided = "1:16 a constant divided by zero"
+
+    "a division by zero, with no use" in {
+      reported("const q: int = 1 / 0\n") shouldBe List(divided)
+    }
+
+    "a division by zero, used once" in {
+      reported("const q: int = 1 / 0\nprint(q)\n") shouldBe List(divided)
+    }
+
+    "a division by zero, used several times" in {
+      reported("const q: int = 1 / 0\nprint(q)\nprint(q)\nprint(q + 1)\n") shouldBe List(divided)
+    }
+
+    "a remainder by zero" in {
+      reported("const q: int = 7 % 0\nprint(q)\nprint(q)\n") shouldBe List(divided)
+    }
+
+    "at the operation that failed, not at the whole initializer" in {
+      reported("const q: int = 2 + 1 / 0\nprint(q)\n") shouldBe List("1:20 a constant divided by zero")
+    }
+
+    "a shift out of range" in {
+      reported("const s: int = 1 << -1\nprint(s)\nprint(s)\n") shouldBe
+        List("1:16 a constant shifted by -1 places")
+    }
+
+    "a conversion that fails" in {
+      reported("const c: char = char(0xD800)\nprint(c)\nprint(c)\n") shouldBe
+        List("1:17 55296 is not a Unicode scalar value")
+    }
+
+    "a value that does not fit, at the value" in {
+      reported("const o: u8 = 300\nprint(o)\nprint(o)\n") shouldBe List("1:15 'o' does not fit byte: 300")
+    }
+
+    "an overflow, at the value" in {
+      reported("const o: i32 = 2147483647 + 1\nprint(o)\n") shouldBe
+        List("1:16 'o' does not fit int: 2147483648")
+    }
+
+    "a value that is not constant" in {
+      reported("f() -> int = 1\nconst n: int = f()\nprint(n)\nprint(n)\n") shouldBe
+        List("2:16 the value of 'n' is not a constant expression")
+    }
+
+    "a constant written in terms of a refused one says nothing of its own" in {
+      reported("const a: int = 1 / 0\nconst b: int = a + 1\nprint(b)\nprint(a)\n") shouldBe List(divided)
+    }
+
+    "whichever of the two was declared first" in {
+      reported("const b: int = a + 1\nconst a: int = 1 / 0\nprint(b)\n") shouldBe
+        List("2:16 a constant divided by zero")
+    }
+
+    "and a use as an array bound says nothing either" in {
+      reported("const n: usize = 4 / 0\nvar xs: [n]u8 = [0; n]\nprint(xs[0])\n") shouldBe
+        List("1:18 a constant divided by zero")
+    }
+  }
+
   /** A constrained subtype is a scalar for this purpose, which `reference/errors.md § Constrained
     * types` settles rather than this file: without `new` such a type *is* its base. What it adds is
     * the `within` range, checked here against a value that is already known — the run-time check a
