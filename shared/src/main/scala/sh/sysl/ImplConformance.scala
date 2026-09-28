@@ -145,8 +145,8 @@ trait ImplConformance extends MemberLowering {
         s"${quantity(im.tparams.length, "type parameter")}, but trait '$traitName' declares " +
         s"${tm.tparams.length}")
     if tm.params.length != im.params.length then
-      err(s"method '$name' of 'impl $traitName for $forType' takes ${im.params.length} " +
-        s"parameters, but the trait declares ${tm.params.length}")
+      err(s"method '$name' of 'impl $traitName for $forType' takes " +
+        s"${quantity(im.params.length, "parameter")}, but the trait declares ${tm.params.length}")
     // A `...` is part of what a caller may write, so an implementation that has one where the trait
     // has none — or the other way about — is a different promise, not a wider one.
     if tm.variadic != im.variadic then

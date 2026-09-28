@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 /** An identifier may be written in any script (`reference/lexical.md § Identifiers`).
   *
   * **The rule is one predicate: a name begins with `_` or anything Unicode calls a letter, and
-  * continues with that or a digit.** Not a list of ranges — a table of accepted blocks is a thing
+  * continues with that, a digit or a combining mark.** Not a list of ranges — a table of accepted blocks is a thing
   * somebody has to extend every time a script is asked for, and the first extension request would
   * arrive from whoever was left out of the last one.
   *
@@ -69,9 +69,38 @@ class UnicodeIdentTests extends AnyFreeSpec with Matchers with CodegenSupport wi
 
     // The declaration is what a caller has to spell, so the two forms are two names rather than one
     // spelling of it. This is the case UAX #31's normalization would fold together and this rule
-    // deliberately does not — see the refusal below for the one that is refused outright.
+    // deliberately does not. Both must still BE names: this case once passed by asserting only that
+    // the decomposed spelling was not the precomposed identifier, which a lexer refusing the mark
+    // outright satisfied just as well.
     "a precomposed letter and a base plus a combining mark are different names" in withLexer { l =>
-      l.bare("café") shouldBe List(l.Identifier("café"))
+      val precomposed = "café"
+      val decomposed  = "café"
+
+      l.bare(precomposed) shouldBe List(l.Identifier(precomposed))
+      l.bare(decomposed) shouldBe List(l.Identifier(decomposed))
+      precomposed should not be decomposed
+    }
+
+    // A mark is part of the letter before it (Unicode category M: Mn, Mc, Me). Most of the world's
+    // scripts write their words with them, so a rule of letters alone refuses nearly every word in
+    // Devanagari — 'ि' and 'ी' are spacing marks (Mc), '्' a non-spacing one (Mn).
+    "a combining mark of any kind continues a name" in withLexer { l =>
+      l.bare("हिन्दी") shouldBe List(l.Identifier("हिन्दी"))
+      l.bare("x́") shouldBe List(l.Identifier("x́"))
+      l.bare("a⃝") shouldBe List(l.Identifier("a⃝"))
+      l.bare("_́") shouldBe List(l.Identifier("_́"))
+    }
+
+    // A mark with nothing before it has nothing to combine with, so it may not begin a name — and it
+    // draws on top of whatever precedes it, so the message has to say what the eye cannot.
+    "a combining mark may not begin a name, and the refusal says why" in withLexer { l =>
+      l.bad("́a") should include("illegal character: U+0301 is a combining mark")
+      l.bad("िx") should include("may not begin a name")
+    }
+
+    // The same claim from the other side: nothing normalizes the decomposed spelling into the
+    // precomposed identifier on the way through the lexer.
+    "and no normalization folds the decomposed spelling into the precomposed one" in withLexer { l =>
       l.bare("café") should not be List(l.Identifier("café"))
     }
 
@@ -176,6 +205,26 @@ class UnicodeIdentTests extends AnyFreeSpec with Matchers with CodegenSupport wi
           |print(café)""".stripMargin
 
       run(src) shouldBe "4\n"
+    }
+
+    // `reference/lexical.md § Identifiers`: the precomposed and the decomposed `café` are different
+    // identifiers, so one scope may bind both and each read finds its own.
+    "the precomposed and decomposed spellings bind two names in one scope" in {
+      val src =
+        "val café = 1\nval café = 2\nprint(café, café)"
+
+      run(src) shouldBe "1 2\n"
+    }
+
+    "a name in a script written with marks, declared and called" in {
+      val src =
+        "हिन्दी(x: int) -> int = x + 1\nprint(हिन्दी(41))"
+
+      run(src) shouldBe "42\n"
+    }
+
+    "a combining mark beginning a name is refused in a program" in {
+      err("val x = ́a\nprint(x)") should include("U+0301 is a combining mark")
     }
 
     "across a module boundary, imported by name" in {

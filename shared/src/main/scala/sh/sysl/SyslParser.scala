@@ -203,7 +203,7 @@ class SyslParser(val source: Source, val recovering: Boolean = false,
    * module is a module like any other.
    */
   protected lazy val program: PackratParser[Program] =
-    skipNewlines ~> maybe(moduleHeader) >> { m =>
+    skipNewlines ~> reservedFuncHead ~> maybe(moduleHeader) >> { m =>
       // An attribute goes on a line of its own, which is what both `reference/modules.md §
       // Capabilities are a module property` and `reference/modules.md § Capabilities are a module
       // property` show and what keeps `module m

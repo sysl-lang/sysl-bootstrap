@@ -46,7 +46,7 @@ class ModuleTests extends AnyFreeSpec with ParseSupport with CodegenSupport with
 
     // `module` is a reserved word, which is the cost of the header having no other marker.
     "spends the word, so nothing else may be called it" in {
-      progError("var module = 1") should include("identifier")
+      progError("var module = 1") should include("'module' is a reserved word")
     }
   }
 

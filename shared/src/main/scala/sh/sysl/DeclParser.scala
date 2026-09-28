@@ -155,9 +155,10 @@ trait DeclParser extends ExprParser {
    * declaration, and only the missing body does. `reservedName` says why a looser lookahead would
    * refuse correct programs.
    *
-   * A word that opens a declaration tried *before* this one — `type`, `struct`, `val`, `const` —
-   * keeps that declaration's complaint: it reads further along the line than this rule's word, and
-   * a `Failure` further along outranks an `Error` raised back here.
+   * A word that opens a declaration tried *before* this one — `type`, `struct`, `val`, `const`,
+   * `module`, `import` — never reaches here with its own name: that declaration reads further along
+   * the line, and a `Failure` further along outranks an `Error` raised back here. `reservedFuncHead`
+   * is what answers for those, asked before any of them is tried.
    */
   private lazy val funcName: Parser[String] =
     reservedName("a function's name", funcShape) | ident
@@ -167,6 +168,35 @@ trait DeclParser extends ExprParser {
       (op("(") ~> paramList <~ op(")")) ~ opt(op("->") ~> resultRef) ~
         whereOn(tps.getOrElse(TypeParams.none)) ~ funcBody
     }
+
+  /** The function-name refusal, asked **before** the declarations a reserved word opens —
+   * `type() -> int = 1`, `struct(x: int) -> int = x`, `module() -> int = 1`.
+   *
+   * It consumes nothing and succeeds unless the line is a whole function declaration whose name is a
+   * reserved word, in which case it raises `funcName`'s `Error`. Without it the declaration the word
+   * opens is tried first and complains about the token after the word (`identifier expected` after
+   * `type`, `a pattern expected` after `val`), which is further along than the word and so wins.
+   *
+   * The lookahead is `funcName`'s own, a complete declaration body included, so no legitimate form of
+   * those declarations is caught by it: none of them is a reserved word followed by a parameter list
+   * of `name: type`s and then a function body — `val (a, b) = pair` binds untyped names, `type T = int`
+   * and `struct Box[T]` have a name after the word.
+   *
+   * **Where it declines it records nothing**, which is why the success is built here rather than by
+   * `opt`: a declined lookahead is an absence, and `opt` would carry its `reserved word expected`
+   * forward, where it ties with — and, being last, beats — the real complaint about a line that
+   * opens badly (`)` at a file's head was told a reserved word was expected).
+   */
+  protected lazy val reservedFuncHead: Parser[Unit] = {
+    lazy val look = reservedName("a function's name", funcShape)
+
+    Parser { in =>
+      look(in) match {
+        case e: Error => e
+        case _        => Success((), in)
+      }
+    }
+  }
 
   /** A member's name, or the refusal a reserved word written there is owed — `ref(self) -> int`.
    *
