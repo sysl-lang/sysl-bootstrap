@@ -847,16 +847,23 @@ private[sysl] def execute(asked: Config): Int = {
           case Right(_)  => Console.err.println(s"wrote $exe"); 0
 
     case "run" =>
-      // Linked **straight into the cache slot** where there is one, rather than to a temporary that
-      // is copied afterwards: a copy would have to reproduce the executable bit, which is a thing to
-      // get wrong once per platform, and linking there gets it from the linker.
-      val keeping = runKey.flatMap(RunCache.reserve)
-      val exe     = keeping.getOrElse(createTempFile("sysl-", ""))
+      // Linked **beside the cache slot** under a name of this run's own and renamed into it
+      // (`RunCache.keep`), so a concurrent run of the same program finds the previous binary or
+      // this one whole, never one the linker is still writing.
+      val keeping = runKey.flatMap(key => RunCache.reserve(key).map(key -> _))
+      val linked  = keeping.fold(createTempFile("sysl-", ""))((_, slot) => Publish.pending(slot))
 
-      Toolchain.build(compiled.ir, exe, target, archives, cfg.optimization, compiled.links, native.objects,
-        paths, cfg.verbose, cfg.pipeline) match
-        case Left(err) => Project.discard(exe); fail(err)
-        case Right(_) =>
+      val built =
+        for
+          _   <- Toolchain.build(compiled.ir, linked, target, archives, cfg.optimization, compiled.links,
+                                 native.objects, paths, cfg.verbose, cfg.pipeline)
+          exe <- keeping.fold[Either[String, String]](Right(linked))((key, slot) =>
+                   RunCache.keep(key, linked, slot).map(_ => slot))
+        yield exe
+
+      built match
+        case Left(err) => Project.discard(linked); fail(err)
+        case Right(exe) =>
           // `runProgram` and not `exec`, and the difference is the whole of what this command is
           // for. `exec` runs a **tool** — `clang`, `git`, `llvm-ar` — whose output is a value the
           // compiler goes on to inspect, so it closes the child's input and hands back two strings

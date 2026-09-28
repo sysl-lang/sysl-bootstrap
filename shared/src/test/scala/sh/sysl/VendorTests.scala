@@ -94,7 +94,7 @@ class VendorTests extends AnyFreeSpec with Matchers {
     val root = createTempDirectory("sysl-vendor-relroot-")
     val rel  = relativeTo(root)
 
-    // The shape `Fetch.clone` computes a hash over: `<projectRoot>/vendor/<coordinate>/@v<version>.partial`,
+    // The shape `Fetch.clone` computes a hash over — a sibling of `<projectRoot>/vendor/<coordinate>/@v<version>`,
     // built here directly rather than through a real `git clone` so the test needs no network.
     def partialUnder(base: String): String =
       s"$base/${Project.VendorDir}/github.com/sysl-lang/demo/@v1.0.0.partial"
