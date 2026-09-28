@@ -235,8 +235,9 @@ end remove_dir_all
  * **A failure part way through leaves what it has already written.** Nothing here removes a tree on
  * the way out, because it cannot know whether the destination existed before it started, and
  * deleting one the caller owned would be far worse than the failure being reported. A caller that
- * needs the destination to appear whole or not at all copies into `make_temp_dir` and `rename`s the
- * result into place, which is one call each and is the only way to get atomicity from a filesystem.
+ * needs the destination to appear whole or not at all copies to `pending_name(to)` and hands that to
+ * `publish_dir` -- a copy built beside its destination rather than in `make_temp_dir`, since a rename
+ * only moves a directory within one filesystem, and that rename is the only atomicity a filesystem has.
  *
  * The source may be a plain file, in which case this is `copy_file` with the mode carried.
  */

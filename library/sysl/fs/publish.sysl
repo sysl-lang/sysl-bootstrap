@@ -1,0 +1,127 @@
+module sysl.fs
+@requires(os)
+
+import sysl.sync.Atomic
+import sysl.time.now
+#if posix
+import sysl.posix.rand.seed_from_os
+#endif
+
+// Putting a file or a directory where other processes may be reading it, so that none of them ever
+// sees half of one.
+//
+// A path every reader computes the same way -- a cache entry, a configuration file, a built binary --
+// has no lock in front of it, and a file written there in place is, for as long as the write takes,
+// half a file under the name the readers trust. So the thing is written under a **pending** name and
+// then **renamed** onto its place. `rename(2)` within one directory replaces the name in one step: a
+// reader finds the whole of the previous entry or the whole of the new one, never a mixture and
+// never a moment with nothing there, and a reader that had already opened the old one goes on reading
+// it.
+//
+// **The pending name sits beside the destination, not in the temporary directory**, because a rename
+// is only a rename within one filesystem, and nothing says the destination is on the same one as
+// `/tmp`. `make_temp_dir` is the right place to build something that will be *read* there; it is the
+// wrong place to build something that will be *moved*.
+//
+// **Two writers must never agree on a pending name**, or one of them publishes the other's
+// half-written file. So the name carries a token drawn once per process and a count taken once per
+// call: two processes differ in the first, two calls of one process -- on one thread or on two -- in
+// the second. It is not a process id, which not every platform has to give.
+
+/** The token that sets this process's pending names apart from every other process's, zero until the
+ * first name is asked for.
+ */
+private var publish_token: Atomic[u64] = Atomic(0)
+
+/** How many pending names this process has handed out. */
+private var publish_minted: Atomic[u64] = Atomic(0)
+
+/** A name beside `target` that no other call -- in this process or in any other -- will answer.
+ *
+ * Write there, then hand both names to `publish_file` or `publish_dir`. It is the target with a
+ * suffix, so it is in the target's directory and on the target's filesystem, and a directory listing
+ * says which entry it was going to become.
+ */
+pending_name(target: string) -> string = s"$target.pending-${pending_token()}-${publish_minted.add(1) + 1}"
+
+/** Moves a finished file from `pending` onto `target`, replacing whatever was there.
+ *
+ * **A failure leaves nothing behind**: the pending file is removed, so a full disk or a read-only
+ * directory leaves the previous entry and no debris beside it. The error is the rename's, read before
+ * the removal could overwrite it. The permission bits travel with the rename, so a binary linked under
+ * the pending name is still one when it arrives.
+ */
+publish_file(pending: string, target: string) -> Result[unit, IoError] = rename(pending, target) match
+    Ok(_) -> Ok(())
+    Err(e) ->
+        remove_file(pending).unwrap_or(())
+        Err(e)
+
+/** Moves a finished directory from `pending` onto `target` -- unless another writer got there first.
+ *
+ * **Losing that race is success, not failure.** Two writers of one entry are building the same thing,
+ * and the one that finished first has already put a whole directory there; a rename refuses to
+ * replace a directory that holds anything, so the winner is never disturbed. The loser removes its own
+ * copy and answers as though it had written the one that is there. Only a rename that failed with no
+ * directory at `target` afterwards is reported.
+ *
+ * **An empty directory at `target` is replaced**, which is `rename(2)`'s rule and is not a race being
+ * lost: nothing was published there.
+ *
+ * It is POSIX-only because clearing away the losing copy is `remove_dir_all`, which walks a tree.
+ */
+#if posix
+publish_dir(pending: string, target: string) -> Result[unit, IoError] = rename(pending, target) match
+    Ok(_) -> Ok(())
+    Err(e) ->
+        remove_dir_all(pending).unwrap_or(())
+        if is_dir(target) then Ok(()) else Err(e)
+#endif
+
+/** Writes the bytes to `path` by way of a pending name, so a reader of `path` sees the whole of the
+ * previous file or the whole of this one and never a prefix of either.
+ *
+ * On any failure -- the write, the close or the rename -- the pending file is removed and the first
+ * error is the answer, so `path` is exactly what it was before the call. A directory that is not
+ * there answers `NotFound` and leaves nothing anywhere.
+ */
+write_bytes_atomic(path: string, bytes: []const u8) -> Result[unit, IoError]
+    val pending = pending_name(path)
+
+    write_bytes(pending, bytes) match
+        Ok(_) -> publish_file(pending, path)
+        Err(e) ->
+            remove_file(pending).unwrap_or(())
+            Err(e)
+end write_bytes_atomic
+
+/** `write_bytes_atomic` for text. */
+write_text_atomic(path: string, text: string) -> Result[unit, IoError] = write_bytes_atomic(path, text.bytes)
+
+/** This process's token, drawn the first time it is asked for.
+ *
+ * Two threads asking at once may both draw one, and the compare-and-swap keeps whichever landed
+ * first, so every name the process ever hands out carries the same token. It is never zero, zero
+ * being what says nothing has been drawn yet.
+ */
+private pending_token() -> u64
+    val held = publish_token.load()
+
+    if held != 0 then return held
+
+    val fresh = drawn_token() | 1
+    val before = publish_token.cas(0, fresh)
+
+    if before == 0 then fresh else before
+end pending_token
+
+/** Sixty-four bits from the kernel's entropy pool, which two live processes share about as often as
+ * a disk returns the wrong sector. **Where the host will not supply them the wall clock stands in**,
+ * in microseconds -- two processes starting in the same microsecond would then agree, which is the
+ * one case the count cannot separate, and is why the kernel is asked first.
+ */
+#if posix
+private drawn_token() -> u64 = seed_from_os().unwrap_or(u64(now().us))
+#else
+private drawn_token() -> u64 = u64(now().us)
+#endif

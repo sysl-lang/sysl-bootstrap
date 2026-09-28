@@ -1,0 +1,161 @@
+module sysl.fs
+@requires(os)
+@tests
+
+import sysl.buf.{Buf, buf}
+import sysl.path.{join, parent}
+import sysl.text.Search
+
+// Publishing through a pending name. What each test asserts is what a READER of the directory would
+// see afterwards -- the whole entry and nothing beside it -- since that is the only promise the
+// functions make.
+
+private published_scratch(tag: string) -> string = make_temp_dir("sysl-fs-publish-" + tag).unwrap()
+
+private listed(dir: string) -> usize = entries(dir).unwrap().len()
+
+// -- pending_name ---------------------------------------------------------------------------------
+
+@test("a pending name is the target with a suffix, so it is in the target's directory")
+pending_name_sits_beside_the_target()
+    val target = "/some/dir/entry.bin"
+    val p = pending_name(target)
+
+    assert(p.starts_with(target + ".pending-"))
+    assert_eq(parent(p), parent(target))
+end pending_name_sits_beside_the_target
+
+/** Two names drawn by one process share the token and differ in the count, so the prefix up to the
+ * last `-` is the same and the whole name is not.
+ */
+@test("every pending name one process hands out is different, and all of them carry one token")
+pending_names_are_unique()
+    var names: Buf[string] = buf()
+
+    for _ in 0..<300 do names.push(pending_name("/d/t"))
+
+    val first = names.at(0)
+    val cut = first.last_index_of_byte(u8('-')).unwrap()
+
+    for i in 0..<names.len()
+        val n = names.at(i)
+
+        assert_eq(n.slice(0, cut), first.slice(0, cut))
+
+        for j in (i + 1)..<names.len() do assert(n != names.at(j), "two calls answered one name")
+end pending_names_are_unique
+
+// -- write_text_atomic / write_bytes_atomic -------------------------------------------------------
+
+@test("an atomic write leaves the complete file under its name and nothing else beside it")
+atomic_write_leaves_only_the_file()
+    val dir = published_scratch("whole")
+
+    defer remove_dir_all(dir).unwrap_or(())
+
+    val f = join(dir, "f.txt")
+
+    write_text_atomic(f, "hello, world").unwrap()
+
+    assert_eq(read_text(f).unwrap(), "hello, world")
+    assert_eq(listed(dir), 1)
+end atomic_write_leaves_only_the_file
+
+@test("an atomic write over a longer file leaves the new one whole, with none of the old tail")
+atomic_write_replaces_a_longer_file()
+    val dir = published_scratch("shorter")
+
+    defer remove_dir_all(dir).unwrap_or(())
+
+    val f = join(dir, "f.bin")
+
+    write_text(f, "a considerably longer original than what replaces it").unwrap()
+    write_bytes_atomic(f, [u8('o'), u8('k')]).unwrap()
+
+    assert_eq(read_text(f).unwrap(), "ok")
+    assert_eq(listed(dir), 1)
+end atomic_write_replaces_a_longer_file
+
+@test("a write into a directory that is not there reports it and leaves no pending file")
+atomic_write_into_nothing_leaves_nothing()
+    val dir = published_scratch("missing")
+
+    defer remove_dir_all(dir).unwrap_or(())
+
+    write_text_atomic(join(dir, "absent/f.txt"), "x") match
+        Ok(_) -> assert(false, "a write into a missing directory answered")
+        Err(e) -> assert(e == NotFound, "expected NotFound")
+
+    assert_eq(listed(dir), 0)
+end atomic_write_into_nothing_leaves_nothing
+
+// -- publish_file ---------------------------------------------------------------------------------
+
+@test("a file that cannot be published is removed rather than left under its pending name")
+failed_publish_removes_the_pending_file()
+    val dir = published_scratch("nowhere")
+
+    defer remove_dir_all(dir).unwrap_or(())
+
+    val target = join(dir, "absent/f.txt")
+    val staged = join(dir, "staged")
+
+    write_text(staged, "x").unwrap()
+
+    publish_file(staged, target) match
+        Ok(_) -> assert(false, "a publish into a missing directory answered")
+        Err(_) -> ()
+
+    assert(!exists(staged), "the pending file was left behind")
+    assert_eq(listed(dir), 0)
+end failed_publish_removes_the_pending_file
+
+// -- publish_dir ----------------------------------------------------------------------------------
+
+/** The loser of a race is told it succeeded, and what it built is gone -- while the winner's
+ * directory is exactly what the winner put there.
+ */
+@test("a second publisher of a directory succeeds and leaves the first one's untouched")
+publish_dir_race_keeps_the_winner()
+    val dir = published_scratch("race")
+
+    defer remove_dir_all(dir).unwrap_or(())
+
+    val target = join(dir, "entry")
+
+    val first = pending_name(target)
+
+    make_dir(first).unwrap()
+    write_text(join(first, "who"), "winner").unwrap()
+    publish_dir(first, target).unwrap()
+
+    val second = pending_name(target)
+
+    make_dir(second).unwrap()
+    write_text(join(second, "who"), "loser").unwrap()
+    publish_dir(second, target).unwrap()
+
+    assert_eq(read_text(join(target, "who")).unwrap(), "winner")
+    assert(!exists(second), "the losing copy was left behind")
+    assert_eq(listed(dir), 1)
+end publish_dir_race_keeps_the_winner
+
+@test("a directory that cannot be published with nothing at the target is reported and removed")
+publish_dir_onto_a_file_is_refused()
+    val dir = published_scratch("ontofile")
+
+    defer remove_dir_all(dir).unwrap_or(())
+
+    val target = join(dir, "entry")
+    val staged = pending_name(target)
+
+    write_text(target, "a file, not a directory").unwrap()
+    make_dir(staged).unwrap()
+
+    publish_dir(staged, target) match
+        Ok(_) -> assert(false, "a directory replaced a file")
+        Err(_) -> ()
+
+    assert(!exists(staged), "the pending directory was left behind")
+    assert_eq(read_text(target).unwrap(), "a file, not a directory")
+end publish_dir_onto_a_file_is_refused

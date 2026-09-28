@@ -268,8 +268,13 @@ class StdSelfTests extends AnyFreeSpec with Matchers {
    * Raised to **844** for `sysl.process`'s deadline: `run` and `capture` timing out a child that
    * never ends, the boundary between a signal and a timeout, and the argument checks around the
    * new parameter. The tree collects 844 against the prior floor of 824.
+   *
+   * Raised to **875** for `sysl.fs`'s publishing through a pending name (8): the names, the atomic
+   * write, a failed publish leaving nothing, and the directory race. The runner collected **867**
+   * before a case was written, against a floor of 844, so the drift was twenty-three and the number
+   * here is the tree's exact count again.
    */
-  private val floor = 844
+  private val floor = 875
 
   /** The library, compiled as a **test build of itself**.
    *
