@@ -49,6 +49,18 @@ import io.github.edadma.cross_platform.*
  */
 object Std {
 
+  /** The installed library cannot be made into a standard module: its directory holds no source,
+   * a file of it does not parse, or a `c const` of it cannot be measured.
+   *
+   * **It is raised where the library is read and caught in `Stdlib.resolve`, which answers it as a
+   * refusal like any other.** The readers sit under memo tables and behind signatures that answer a
+   * `Stdlib` rather than an `Either`, and every road a compiling command takes to them goes through
+   * `resolve` — so one catch there turns what used to reach the user as a stack trace into
+   * `sysl: error:` and an exit status of 1. A caller embedding the compiler that asks
+   * `Stdlib.fromSource` directly gets this exception, and its message is the same sentence.
+   */
+  final class Unusable(message: String) extends Exception(message)
+
   /** The **auto-imported** module, and the root of the library's tree: every other module the
    * library carries is below it. A constant so that nothing has to parse to ask which module the
    * free names are in; which modules there are in total is `Library.modules`, read off the headers.
@@ -171,18 +183,23 @@ object Std {
   private val read = collection.mutable.Map.empty[Os, List[Source]]
 
   private def collect(os: Os): List[Source] = root match
-    case Right(dir) =>
-      val found = Project.collect(dir, Some(os)).sortBy(place)
+    case Right(dir) => collectAt(dir, os)
+    case Left(err)  => throw Unusable(err)
 
-      // A directory that answers the search and holds nothing readable is a *different* failure from
-      // not finding one, and it has to say so: every program would otherwise fail at its first free
-      // name — `undefined function 'print'` — which points at the program rather than at the empty
-      // library that caused it. Reachable through a truncated install, or a `SYSL_LIB` aimed one
-      // level too high.
-      if found.isEmpty then sys.error(s"the library at $dir holds no sysl source files")
+  /** The library's files under `dir`, for one operating system — [[sources]] without the memo and
+   * without the search, so a test can hand it a directory of its own.
+   */
+  private[sysl] def collectAt(dir: String, os: Os): List[Source] =
+    val found = Project.collect(dir, Some(os)).sortBy(place)
 
-      found.map(named)
-    case Left(err) => sys.error(err)
+    // A directory that answers the search and holds nothing readable is a *different* failure from
+    // not finding one, and it has to say so: every program would otherwise fail at its first free
+    // name — `undefined function 'print'` — which points at the program rather than at the empty
+    // library that caused it. Reachable through a truncated install, or a `SYSL_LIB` naming a root
+    // whose `sysl` directory is empty.
+    if found.isEmpty then throw Unusable(s"the library at $dir holds no sysl source files")
+
+    found.map(named)
 
   /** A library file under the name a **diagnostic** should call it: the library root's own name and
    * the file's place below it, never the path it was read from.
@@ -317,16 +334,42 @@ object Std {
       cache.get(target) match
         case Some(programs) => programs
         case None =>
-          val programs = sources(target.os).map(s =>
-            SyslParser.parse(s, target) match
-              case Right(p) => p
-              case Left(e)  => sys.error(s"the standard module does not parse: $e"),
-          )
+          val programs = parsedFrom(sources(target.os), target)
 
           cache.clear()
           cache(target) = programs
           programs
     }
+
+  /** The library's files parsed for a target — [[parsed]] without the memo, so a test can hand it
+   * files of its own. Every file is parsed and all of their diagnostics are reported together,
+   * since two broken files are two things for whoever is repairing the library to find.
+   */
+  private[sysl] def parsedFrom(files: List[Source], target: Target): List[Program] =
+    val results = files.map(SyslParser.checked(_, target))
+
+    results.collect { case Left(found) => found }.flatten match
+      case Nil   => results.collect { case Right(p) => p }
+      case found => throw Unusable(unparsed(found))
+
+  /** What a library that does not parse is reported as: one sentence saying whose fault it is, and
+   * the parser's own diagnostics under it, located as they would be for any file.
+   *
+   * **The directory is named because the diagnostics cannot name it.** A library file is reported
+   * as `library/sysl/…` whatever it was read from ([[named]] says why), which is right for a message
+   * about the library and leaves no way to find the file when the library is not the one installed
+   * — a `SYSL_LIB` pointed at an edited copy is exactly the case this refusal is for.
+   *
+   * **It stands on its own rather than inside `Stdlib.rebuildFailure`**, whose advice is to build
+   * the artifact with `build-lib library --std` or to compile the source in with `--no-std-lib`. Both
+   * parse this same library, so both fail the same way, and a sentence recommending them would send
+   * the reader round a loop.
+   */
+  private def unparsed(found: List[Diagnostic]): String =
+    val where = root.fold(_ => "", dir => s" at $dir")
+
+    s"the standard module does not parse, so nothing can be compiled against it — the mistake is " +
+      s"in the library$where, not in the program\n${Diagnostic.report(found)}"
 
   /** **Locked, and it is not decoration.** This was a `lazy val` before it took a target, and a
    * `lazy val` is initialized exactly once however many threads reach it. A bare mutable `Map` is
