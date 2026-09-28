@@ -319,6 +319,63 @@ class ImportTests extends AnyFreeSpec with CodegenSupport with RunSupport with P
     }
   }
 
+  // Two modules declaring one spelling to different effect, so what a program prints says which one
+  // a name inside a closure reached. The file imports `a`'s; every block below imports `b`'s.
+  private def rivals(main: String): Seq[(String, String, String)] =
+    Seq(("", "main.sysl", main), ("a", "a.sysl", "module a\nf() -> int = 1"), ("b", "b.sysl", "module b\nf() -> int = 2"))
+
+  "a closure written inside a block reads names as that block does" - {
+    "its named import" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    import b.f\n    val g = () -> f()\n    g()\nprint(use())")*) shouldBe
+        "2\n"
+    }
+
+    "its wildcard" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    import b.*\n    val g = () -> f()\n    g()\nprint(use())")*) shouldBe
+        "2\n"
+    }
+
+    "an enclosing block's import, from a nested block" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    import b.f\n    if true\n        val g = () -> f()\n" +
+        "        return g()\n    0\nprint(use())")*) shouldBe "2\n"
+    }
+
+    "and the inner block's before the outer one's" in {
+      runIn(rivals("use() -> int =\n    import b.*\n    if true\n        import a.*\n        val g = () -> f()\n" +
+        "        return g()\n    0\nprint(use())")*) shouldBe "1\n"
+    }
+
+    "a closure written as an argument" in {
+      runIn(rivals("import a.f\napply(h: &Fn() -> int) -> int = h()\nuse() -> int =\n    import b.f\n" +
+        "    apply(() -> f())\nprint(use())")*) shouldBe "2\n"
+    }
+
+    "a closure stored, and called after the block that imported has closed" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    var g: &Fn() -> int = () -> 0\n    if true\n        import b.f\n" +
+        "        g = () -> f()\n    g()\nprint(use())")*) shouldBe "2\n"
+    }
+
+    "a closure returned out of the function whose block imported" in {
+      runIn(rivals("import a.f\nmake() -> &Fn() -> int =\n    import b.f\n    () -> f()\nprint(make()())")*) shouldBe
+        "2\n"
+    }
+
+    "a nested function written below the import" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    import b.f\n    h() -> int = f()\n    h()\nprint(use())")*) shouldBe
+        "2\n"
+    }
+
+    "while a closure outside any importing block still reads the file's" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    val g = () -> f()\n    g()\nprint(use())")*) shouldBe "1\n"
+    }
+
+    "including one written after the importing block has closed" in {
+      runIn(rivals("import a.f\nuse() -> int =\n    if true\n        import b.f\n        val k = () -> f()\n" +
+        "        print(k())\n" +
+        "    val g = () -> f()\n    g()\nprint(use())")*) shouldBe "2\n1\n"
+    }
+  }
+
   "an import runs nothing" - {
     "so two files may each import and neither becomes the one that starts the program" in {
       runIn(

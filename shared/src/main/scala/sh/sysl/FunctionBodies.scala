@@ -99,6 +99,11 @@ trait FunctionBodies extends ModuleStorage {
       resetFunction()
       currentFunctionName = savedFuncName
       currentMemberName = savedMember
+      // A body written inside a block reads names as that block does, so the imports of every
+      // block it sits in stay in scope beneath the body's own (`reference/modules.md § Imports`).
+      // The reset handed it only the file's, which made a call in a closure reach a different
+      // function from the same call written beside it.
+      importStack = Imports.empty :: savedImports
       currentOwner = owner
       inTestBody = savedInTest
       retTy = declaredResult.getOrElse(Type.Unknown)
