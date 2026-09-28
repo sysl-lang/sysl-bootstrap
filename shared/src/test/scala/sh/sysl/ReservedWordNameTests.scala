@@ -226,6 +226,115 @@ class ReservedWordNameTests extends AnyFreeSpec with ParseSupport with CodegenSu
           |print(1)
           |""".stripMargin)._1 should include("'for' is a reserved word")
     }
+
+    "which itself opens a declaration, and is still told about the word" - {
+      val words = List("type", "struct", "enum", "trait", "impl", "extern", "val", "var", "const",
+                       "ref", "static", "import", "private", "override", "module")
+
+      // Each shape is a program with the member on the given line, at column 5.
+      val shapes: List[(String, String => String, Int)] = List(
+        ("in a struct's body", w => s"struct S\n    n: int\n    $w(self) -> int = self.n\n\nprint(1)\n", 3),
+        ("in an enum's body", w => s"enum E\n    A\n    $w(self) -> int = 1\n\nprint(1)\n", 3),
+        ("in a trait, as a signature", w => s"trait T\n    $w(self) -> int\n\nprint(1)\n", 2),
+        ("in a trait, as a default", w => s"trait T\n    $w(self) -> int = 1\n\nprint(1)\n", 2),
+        ("in an 'impl' block", w =>
+          s"trait T\n    f(self) -> int\nstruct S\n    n: int\nimpl T for S\n    $w(self) -> int = 1\n\nprint(1)\n", 6),
+      )
+
+      for (where, program, line) <- shapes; w <- words do
+        s"$where: '$w'" in {
+          val (msg, at) = refusal(program(w))
+          msg should include(s"'$w' is a reserved word, so it cannot stand as a member's name")
+          msg should include(s"`$w`")
+          at shouldBe s"<input>:$line:5"
+        }
+
+      "as a property" in {
+        val (msg, at) = refusal("trait T\n    static -> int\n\nprint(1)\n")
+        msg should include("'static' is a reserved word, so it cannot stand as a member's name")
+        at shouldBe "<input>:2:5"
+      }
+
+      "with type parameters" in {
+        refusal("trait T\n    type[U](self, u: U) -> int\n\nprint(1)\n")._1 should
+          include("'type' is a reserved word, so it cannot stand as a member's name")
+      }
+
+      "under an annotation" in {
+        val (msg, at) = refusal(
+          """trait T
+            |    f(self, x: int) -> int
+            |struct S
+            |    n: int
+            |impl T for S
+            |    @crossing(x)
+            |    private(self, x: int) -> int = x
+            |
+            |print(1)
+            |""".stripMargin)
+        msg should include("'private' is a reserved word, so it cannot stand as a member's name")
+        at shouldBe "<input>:7:5"
+      }
+
+      "and the backticked name it advises is a member like any other" in {
+        run(
+          """trait T
+            |    `type`(self) -> int
+            |    `static`(self) -> int = 2
+            |struct S
+            |    n: int
+            |    `private`(self) -> int = self.n
+            |impl T for S
+            |    `type`(self) -> int = 10
+            |
+            |val s = S(3)
+            |print(s.`type`() + s.`static`() + s.`private`())
+            |""".stripMargin) shouldBe "15\n"
+      }
+
+      "while every form those words open in a body still reads as itself" in {
+        run(
+          """trait Holds
+            |    type Item
+            |    type Key: Eq
+            |    static zero -> int
+            |    first(self) -> Self::Item
+            |    key(self) -> Self::Key
+            |struct Box
+            |    private n: int
+            |    m: int
+            |    static seven -> int = 7
+            |    private get(self) -> int = self.n
+            |    total(self) -> int = self.get() + self.m
+            |    set level(v)
+            |        self.n = v
+            |    level -> int = self.n
+            |impl Holds for Box
+            |    type Item = int
+            |    type Key = int
+            |    static zero -> int = 0
+            |    first(self) -> int = self.total()
+            |    key(self) -> int = 1
+            |
+            |var b = Box(1, 2)
+            |b.level = 4
+            |print(b.first() + b.key() + Box.seven + Box.zero)
+            |""".stripMargin) shouldBe "14\n"
+      }
+
+      "and a scoped visibility, whose bracket reads like type parameters, is still a visibility" in {
+        val decls = prog(
+          """struct P
+            |    private[geom] x: int
+            |    private[geom] get(self) -> int = self.x
+            |    private[geom] sum[T](self, t: T) -> int = self.x
+            |end P
+            |""".stripMargin)
+        val s = decls.collectFirst { case s: StructDecl => s }.get
+        s.members.map(m => (m.name, m.vis)) shouldBe
+          List("get" -> Visibility.Scoped("geom"), "sum" -> Visibility.Scoped("geom"))
+      }
+    }
   }
 
   "a binding named with one" - {
