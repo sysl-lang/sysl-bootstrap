@@ -181,9 +181,22 @@ trait DeclParser extends ExprParser {
    * those declarations is caught by it: none of them is a reserved word followed by a parameter list
    * of `name: type`s and then a function body — `val (a, b) = pair` binds untyped names, `type T = int`
    * and `struct Box[T]` have a name after the word.
+   *
+   * **Where it declines it records nothing**, which is why the success is built here rather than by
+   * `opt`: a declined lookahead is an absence, and `opt` would carry its `reserved word expected`
+   * forward, where it ties with — and, being last, beats — the real complaint about a line that
+   * opens badly (`)` at a file's head was told a reserved word was expected).
    */
-  protected lazy val reservedFuncHead: Parser[Unit] =
-    opt(reservedName("a function's name", funcShape)) ^^^ (())
+  protected lazy val reservedFuncHead: Parser[Unit] = {
+    lazy val look = reservedName("a function's name", funcShape)
+
+    Parser { in =>
+      look(in) match {
+        case e: Error => e
+        case _        => Success((), in)
+      }
+    }
+  }
 
   /** A member's name, or the refusal a reserved word written there is owed — `ref(self) -> int`.
    *
