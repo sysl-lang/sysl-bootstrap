@@ -242,9 +242,11 @@ private def buildForC(cfg: Config, compiled: Compiled, target: Target, named: Op
  * that rescued `emit-llvm` did nothing for this.
  */
 private def prove(cfg: Config, sources: List[Source], libraries: List[Program], target: Target,
-                  std: Stdlib, provides: Set[String], paths: SearchPaths): Int = {
+                  std: Stdlib, provides: Set[String], paths: SearchPaths, packages: Packages,
+                  librarySources: List[Source]): Int = {
   val (typed, ownModules) =
-    Compiler.typedWith(sources, libraries, target, Some(std), provides, paths) match
+    Compiler.typedWith(sources, libraries, target, Some(std), provides, paths, packages,
+      librarySources) match
     case Left(err)  => return report(err)
     case Right(out) => out
 
@@ -274,9 +276,11 @@ private def prove(cfg: Config, sources: List[Source], libraries: List[Program], 
  * reported exactly as any other compiling command reports one, with nothing on standard output.
  */
 private def emitTyped(cfg: Config, sources: List[Source], libraries: List[Program], target: Target,
-                      std: Stdlib, provides: Set[String], paths: SearchPaths): Int = {
+                      std: Stdlib, provides: Set[String], paths: SearchPaths, packages: Packages,
+                      librarySources: List[Source]): Int = {
   val (typed, _) =
-    Compiler.typedWith(sources, libraries, target, Some(std), provides, paths) match
+    Compiler.typedWith(sources, libraries, target, Some(std), provides, paths, packages,
+      librarySources) match
     case Left(err)  => return report(err)
     case Right(out) => out
 
