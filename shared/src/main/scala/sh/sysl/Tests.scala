@@ -191,12 +191,27 @@ object Tests {
    * complete, and it can catch nothing else: an `impl` may not sit in a `@tests` file, so the only
    * slot a dropped name can fill is a closure's own.
    */
-  def strip(program: TProgram): TProgram = {
+  def strip(program: TProgram): TProgram = stripWhere(program, _ => true)
+
+  /** `strip`, applied to every module but the compilation's **own** — the tree a consumer is handed
+   * by a dependency or a `--lib` root, with the program's own tests left where they are.
+   *
+   * It is what `emit-typed` and `sysl prove` read (`Compiler.typedWith`): they stop before a build
+   * strips anything, which is right for the program's own `@test` functions — they are part of what
+   * the module declares, and part of what somebody may want printed or proved — and wrong for a
+   * dependency's, which no build of this program ever keeps. Before this, both commands showed a
+   * package's test scaffolding as though the consumer had written it.
+   */
+  def stripHanded(program: TProgram, own: Set[String]): TProgram =
+    stripWhere(program, name => !own(Modules.moduleOf(name)))
+
+  /** The removal both of the above make, of the scaffolding whose name `drop` accepts. */
+  private def stripWhere(program: TProgram, drop: String => Boolean): TProgram = {
     val tests = program.tests.map(_.func).toSet
     // A hook goes with the tests it brackets, and is read from the program rather than from the
     // tests for the reason `TProgram.hooks` records: a module may declare one and no tests, and a
     // hook left behind is a function nothing calls in a build that runs nothing.
-    val gone  = tests ++ program.hooks.map(_.func) ++ program.testOnly
+    val gone  = (tests ++ program.hooks.map(_.func) ++ program.testOnly).filter(drop)
 
     if gone.isEmpty then program
     else
@@ -205,9 +220,9 @@ object Tests {
         funcs = program.funcs.filterNot(f => gone(f.name)),
         vals = program.vals.filterNot(v => gone(v.symbol)),
         externs = program.externs.filterNot(e => gone(e.name)),
-        tests = Nil,
-        hooks = Nil,
-        testOnly = Set.empty,
+        tests = program.tests.filterNot(t => gone(t.func)),
+        hooks = program.hooks.filterNot(h => gone(h.func)),
+        testOnly = program.testOnly.filterNot(gone),
       )
   }
 

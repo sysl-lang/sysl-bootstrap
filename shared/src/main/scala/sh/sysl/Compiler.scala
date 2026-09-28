@@ -195,16 +195,31 @@ object Compiler {
    * project binding an installed library needs the include paths exactly as a build does — without
    * them it failed with `'uv.h' file not found` on a project that builds, and `--include-path` was
    * ignored rather than insufficient, since there was nothing here for it to reach (card `0325`).
+   *
+   * **It assembles the compilation exactly as `compiledWith` does — the same `packages`, the same
+   * `librarySources` handed separately — and that used to be untrue.** The driver passed a
+   * dependency's sources in with the program's own and no `packages`, so every module a package
+   * declared was analyzed under its *written* name (`sh.sysl.fft`) where the build names it by its
+   * canonical prefix (`github.com.sysl-lang.fft.sh.sysl.fft`), and was counted as the program's own
+   * besides. Two commands answering about one program disagreed about what it was.
+   *
+   * **A handed module's tests are stripped, and the program's own are not** (`Tests.stripHanded`).
+   * The build strips every test after analysis; this stops before that, and the program's own
+   * `@test` functions are part of what it declares. A dependency's never are, in any build of this
+   * program.
    */
   def typedWith(sources: List[Source], libraries: List[Program], target: Target = Target.default,
                 std: Option[Stdlib] = None, provides: Set[String] = Capability.core.toSet,
-                paths: SearchPaths = SearchPaths.none)
+                paths: SearchPaths = SearchPaths.none, packages: Packages = Packages.none,
+                librarySources: List[Source] = Nil)
       : Either[String, (TProgram, Set[String])] = rendered {
-    val parsed = sources.map(SyslParser.checked(_, target))
+    val supplied = librarySources.map(SyslParser.checked(_, target))
+    val parsed   = sources.map(SyslParser.checked(_, target))
 
-    parsed.collect { case Left(e) => e } match
+    (supplied ::: parsed).collect { case Left(e) => e } match
       case Nil =>
         val mine = parsed.collect { case Right(p) => p }
+        val own  = mine.map(moduleOf).toSet
 
         // **Which modules are the program's own travels back beside the tree**, because nothing in
         // the tree says. `TProgram.mainModule` names the file that carries the statements, and a
@@ -212,9 +227,10 @@ object Compiler {
         // have found nothing to translate. The sources given are what the reader meant by "this
         // module", and they are only known here — which is the same fact the analyzer is handed, for
         // the same reason.
-        Analyzer.analyze(libraries ::: mine, std = carried(std, target), target = target,
-                         provides = provides, paths = paths, own = ownModules(mine))
-          .map((_, mine.map(moduleOf).toSet))
+        Analyzer.analyze(libraries ::: supplied.collect { case Right(p) => p } ::: mine,
+                         std = carried(std, target), target = target, provides = provides,
+                         packages = packages, paths = paths, own = Some(own))
+          .map(typed => (Tests.stripHanded(typed, own), own))
       case errs => Left(errs.flatten)
   }
 

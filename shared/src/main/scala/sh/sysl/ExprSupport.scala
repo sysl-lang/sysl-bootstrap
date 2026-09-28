@@ -76,10 +76,19 @@ trait ExprSupport extends SpecialForms with PatternAnalysis with StmtAnalysis {
    * This used to hold a **second** copy of `inPackage`'s ordering, deciding on the head alone before
    * the package layer was reached at all. That is the shape the ordering fixed, and having it written
    * twice is why fixing it in one place left the other half of the same defect standing.
+   *
+   * **A chain whose head is already a key is not a written path, and is not folded again.** What this
+   * hands back is re-analyzed, and a `Call` or a `Field` over it asks this question a second time —
+   * of `sysl.text$ParseError.BadBase`, whose dotted reading is `sysl` then `text$ParseError`. Where a
+   * module named by the key's leading segment exists, which `sysl` always does, that reading folds
+   * the key into a second key naming nothing (`sysl$text$24ParseError`), and the qualified variant
+   * of every standard-library enum was refused over a name nobody wrote. A key carries the module
+   * separator and nothing written in source can, so the head says which of the two this is.
    */
   protected def throughModule(e: Expr): Option[Expr] =
     for
-      written <- chain(e) if written.length > 1 && lookupOpt(written.head).isEmpty
+      written <- chain(e)
+      if written.length > 1 && written.head.indexOf(Modules.sep.toInt) < 0 && lookupOpt(written.head).isEmpty
       whole = written.mkString(".")
       path = importedModule(written.head).map(_.split('.').toList ::: written.tail)
                .getOrElse(inPackage(whole).split('.').toList)
