@@ -137,7 +137,7 @@ trait DeclParser extends ExprParser {
       ^^ (CallConv("interrupt", _)))
 
   protected lazy val funcDecl: PackratParser[Stmt] =
-    opt(callConv) ~ ident ~ opt(boundedTypeParams) >> { case conv ~ name ~ tps =>
+    opt(callConv) ~ funcName ~ opt(boundedTypeParams) >> { case conv ~ name ~ tps =>
       val tp = tps.getOrElse(TypeParams.none)
       (op("(") ~> paramList <~ op(")")) ~ opt(op("->") ~> resultRef) ~ whereOn(tp) ~ funcBody <~
         endName(name) ^^ {
@@ -146,6 +146,36 @@ trait DeclParser extends ExprParser {
                    tvalues = tpw.values, tpacks = tpw.packs, conv = conv)
       }
     }
+
+  /** A function's name, or the refusal a reserved word written there is owed — `loop() -> int = 1`.
+   *
+   * The lookahead is the **whole** rest of a declaration, body included, because a function stands
+   * where a statement does and several statements open with a reserved word and a parenthesis:
+   * `return (x: int) -> x + 1` reads as far as a result type before anything tells it from a
+   * declaration, and only the missing body does. `reservedName` says why a looser lookahead would
+   * refuse correct programs.
+   *
+   * A word that opens a declaration tried *before* this one — `type`, `struct`, `val`, `const` —
+   * keeps that declaration's complaint: it reads further along the line than this rule's word, and
+   * a `Failure` further along outranks an `Error` raised back here.
+   */
+  private lazy val funcName: Parser[String] =
+    reservedName("a function's name", funcShape) | ident
+
+  private lazy val funcShape: Parser[Any] =
+    opt(boundedTypeParams) >> { tps =>
+      (op("(") ~> paramList <~ op(")")) ~ opt(op("->") ~> resultRef) ~
+        whereOn(tps.getOrElse(TypeParams.none)) ~ funcBody
+    }
+
+  /** A member's name, or the refusal a reserved word written there is owed — `ref(self) -> int`.
+   *
+   * A type's body is not a statement list, so the only lines that open with a reserved word are the
+   * ones read above this rule (`static`, `type`, `private`, `override`); a reserved word followed by
+   * what a member's name is followed by can only have been meant as one.
+   */
+  protected lazy val memberName: Parser[String] =
+    reservedName("a member's name", op("(") | op("[") | op("->")) | ident
 
   /** `extern name(params) -> ret` — a header with no body at all, which is what tells it from a
    * function declaration — or `extern name: type`, the same seam pointed at a variable the other
@@ -404,7 +434,7 @@ trait DeclParser extends ExprParser {
   protected lazy val member: PackratParser[MethodDecl] =
     at(
       staticProperty |
-        (ident ~ opt(boundedTypeParams) >> { case name ~ tps =>
+        (memberName ~ opt(boundedTypeParams) >> { case name ~ tps =>
           methodTail(name, tps.getOrElse(TypeParams.none)) |
             (if tps.isEmpty then propertyTail(name)
              else failure("a property takes no type parameters"))
@@ -766,7 +796,7 @@ trait DeclParser extends ExprParser {
    */
   protected lazy val methodSig: PackratParser[MethodDecl] =
     at(
-      ident ~ opt(boundedTypeParams) ~ (op("(") ~> methodParams <~ op(")")) ~ opt(op("->") ~> resultRef) ^^ {
+      memberName ~ opt(boundedTypeParams) ~ (op("(") ~> methodParams <~ op(")")) ~ opt(op("->") ~> resultRef) ^^ {
         case name ~ tps ~ ((recv, params, variadic)) ~ ret =>
           val tp = tps.getOrElse(TypeParams.none)
           MethodDecl(name, recv, isProperty = false, tp.names, params, ret, Nil, tp.bounds, tp.defaults,
@@ -776,7 +806,7 @@ trait DeclParser extends ExprParser {
 
   /** A property signature — `name -> type` with neither a parameter list nor a body. */
   protected lazy val propertySig: PackratParser[MethodDecl] =
-    at(ident ~ (op("->") ~> (opaqueRef | typeRef)) ^^ { case name ~ ret =>
+    at(memberName ~ (op("->") ~> (opaqueRef | typeRef)) ^^ { case name ~ ret =>
       MethodDecl(name, None, isProperty = true, Nil, Nil, Some(ret), Nil)
     })
 
