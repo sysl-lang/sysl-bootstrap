@@ -626,6 +626,62 @@ class VariantNamespaceTests extends AnyFreeSpec with RunSupport with CodegenSupp
             |print(s.b)
             |""".stripMargin)) shouldBe "4\n"
     }
+
+    // `reference/modules.md § Visibility`: "A name a file may not reach is not a candidate for it."
+    // A sibling file's `private struct` is out of reach for every other file of the module, so it
+    // is passed over and the variant answers — it used to be reported as private instead.
+    "a sibling file's private struct is not a candidate either" - {
+      val sibling =
+        ("shapes", "other.sysl",
+          """module shapes
+            |private struct Circle
+            |    x: int
+            |private dummy(c: Circle) -> int = c.x
+            |""".stripMargin)
+
+      def shapes(tail: String) =
+        ("shapes", "shape.sysl",
+          """module shapes
+            |enum Shape
+            |    Circle(r: int)
+            |    Square(s: int)
+            |area(s: Shape) -> int = s match
+            |    Circle(r) -> r * r
+            |    Square(x) -> x * x
+            |""".stripMargin + tail)
+
+      "where the expected type names the enum" in {
+        runIn(sibling, shapes("unit_circle() -> Shape = Circle(1)\n"),
+          ("", "main.sysl", "import shapes.*\nprint(area(unit_circle()))\n")) shouldBe "1\n"
+      }
+
+      "and where nothing is expected at all" in {
+        runIn(sibling, shapes("two() -> int\n    val c = Circle(2)\n    area(c)\n"),
+          ("", "main.sysl", "import shapes.*\nprint(two())\n")) shouldBe "4\n"
+      }
+
+      "and from an importing module, where the struct was never a candidate" in {
+        runIn(sibling, shapes(""),
+          ("", "main.sysl", "import shapes.*\nval s: Shape = Circle(3)\nprint(area(s), area(Circle(1)))\n")) shouldBe
+          "9 1\n"
+      }
+
+      // Inside the file that declares the struct both are in reach, and the rule the rest of this
+      // group pins still holds: the struct with nothing expected, the variant where the expected
+      // type names its enum.
+      "while in the declaring file both are candidates, and the ordinary rule chooses" in {
+        runIn(
+          ("shapes", "other.sysl",
+            """module shapes
+              |private struct Circle
+              |    x: int
+              |raw() -> int = Circle(7).x
+              |wrapped() -> int = area(Circle(5))
+              |""".stripMargin),
+          shapes(""),
+          ("", "main.sysl", "import shapes.*\nprint(raw(), wrapped())\n")) shouldBe "7 25\n"
+      }
+    }
   }
 
   // The advice used to be "write it as 'Segment'", printed under a line already reading

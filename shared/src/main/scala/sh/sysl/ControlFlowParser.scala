@@ -122,7 +122,8 @@ trait ControlFlowParser extends StmtParser {
   private lazy val quantifierKind: Parser[Boolean] =
     softWord("all") ^^^ true | softWord("some") ^^^ false
 
-  protected lazy val forExpr: PackratParser[Expr] = constForExpr | cForExpr | forCommaNames | forInExpr
+  protected lazy val forExpr: PackratParser[Expr] =
+    forReservedName | constForExpr | cForExpr | forCommaNames | forInExpr
 
   /** `for const i in 0..<A.len` — the loop the compiler unrolls (`reference/generics.md § A
    * parameter may stand for a list of types`).
@@ -186,6 +187,16 @@ trait ControlFlowParser extends StmtParser {
    */
   private lazy val forBinding: Parser[Either[Pattern, String]] =
     destructuring ^^ (Left(_)) | ident ^^ (Right(_))
+
+  /** `for loop in xs` — a reserved word as the name a `for` binds, refused as the word it is.
+   *
+   * **It is the first of the four forms rather than a part of `forInExpr`**, because the three-clause
+   * loop is tried before that one and reads `loop in 0..<3` as a statement for its init clause — the
+   * `loop` statement gets as far as the `in` before failing, and a `Failure` there outranks an `Error`
+   * raised later back at the word. Reached first, the `Error` is what the alternation returns.
+   */
+  private lazy val forReservedName: Parser[Expr] =
+    loopLabel ~> op("for") ~> reservedName("the name a 'for' binds", op("in")) ~> failure("unreachable")
 
   /** `for k, v in pairs` — the comma spelling, parsed so that it can be refused with the form that
    * works.

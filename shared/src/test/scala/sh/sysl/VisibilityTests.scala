@@ -88,9 +88,27 @@ class VisibilityTests extends AnyFreeSpec with CodegenSupport with RunSupport wi
     }
 
     // The argument is a simple name, not a path: a visibility scope is always an enclosing module,
-    // and there is no way to name an unrelated one (`reference/modules.md § Visibility`).
-    "but the scope argument is one segment, not a path" in {
-      progError("private[a.b] f() -> int = 1") should include("']'")
+    // and there is no way to name an unrelated one (`reference/modules.md § Visibility`). The
+    // refusal says so, at the first dot, rather than `']' expected` — which reads as a bracket left
+    // open — and offers the last segment, the one innermost-outward resolution would have matched.
+    "but the scope argument is one segment, not a path" - {
+      "two segments" in {
+        val out = progError("module geo.flat\nprivate[geo.flat] helper() -> int = 1\n")
+        out should include("names one enclosing module by its simple name rather than by a path")
+        out should include("write 'private[flat]'")
+        out should not include "']' expected"
+        out should include("<input>:2:12")
+      }
+
+      "three segments, where the offer is still the last" in {
+        val out = progError("module a.b.c\nprivate[a.b.c] struct S\n    n: int\n")
+        out should include("write 'private[c]'")
+        out should include("<input>:2:10")
+      }
+
+      "and in front of an 'impl', which reads the modifier only to refuse it" in {
+        progError("private[a.b] impl T for S\n") should include("write 'private[b]'")
+      }
     }
   }
 

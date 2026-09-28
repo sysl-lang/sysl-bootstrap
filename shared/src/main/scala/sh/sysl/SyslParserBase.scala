@@ -400,9 +400,27 @@ trait SyslParserBase extends PackratParsers {
    * called `val`. Without this the reader is told a name was expected at a place where they wrote
    * one, and the only thing wrong with it is that the language had already spent the word.
    */
-  protected def reservedBinding(what: String): Parser[String] =
+  protected def reservedBinding(what: String): Parser[String] = reservedName(what, op(":"))
+
+  /** The same refusal at every other position a name is **bound** — a function's, a member's, a
+   * `val`'s, a pattern's — with `after` as the lookahead that says the word can only have been meant
+   * as that name.
+   *
+   * **What `after` has to be is decided by what else may begin where the word stands.** After `val`,
+   * `var`, `const` or `ref` nothing but a name may follow, so the word alone is enough and `after` is
+   * `success(())`. At a statement's head the declaration grammar is tried before the statements, so
+   * `if`, `while` and `return` all arrive here first, and the lookahead there is the whole rest of a
+   * function declaration: `return (x: int) -> x + 1` is a statement, and nothing short of a body
+   * after the result type tells the two apart. The `Error` this raises aborts every alternation above
+   * it, so a lookahead that matched a statement would refuse a correct program.
+   *
+   * Everything `reservedBinding` says about positions holds here: the failure is re-based onto `in`,
+   * and the ordinary name rule is written after this one so a missing name keeps its own message.
+   */
+  protected def reservedName(what: String, after: => Parser[Any]): Parser[String] =
+    lazy val look = guard(reservedWord ~ after)
     Parser { in =>
-      guard(reservedWord ~ op(":"))(in) match
+      look(in) match
         case Success(w ~ _, _) =>
           Error(
             s"'$w' is a reserved word, so it cannot stand as $what — write it '`$w`' if that is " +
