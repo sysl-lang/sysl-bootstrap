@@ -123,11 +123,29 @@ object Stdlib {
    * artifact against a fingerprint of it — so a compiler that cannot find its library fails here,
    * once, with the diagnostic naming where it looked, rather than at whichever branch happened to
    * touch `Std.sources` first, where it would arrive as an exception.
+   *
+   * **A library that is found and cannot be used is answered here too**, for the same reason: an
+   * empty directory, a file that does not parse and a `c const` that cannot be measured are each
+   * discovered deep inside whichever branch first reads the source, and each is raised there as
+   * `Std.Unusable` and caught here as a `Left`. None of them is memoized — the library may be fixed
+   * before the next ask — and none of them passes through `rebuildFailure`, whose advice is to
+   * rebuild from the very source that just failed.
    */
   def resolve(choice: Choice, target: Target, allocator: Allocator = Allocator.c,
               cc: Option[String] = None, level: String = Toolchain.defaultOptimization,
               pipeline: Pipeline = Pipeline.none): Either[String, Resolved] =
-    Std.root.flatMap: _ =>
+    Std.root.flatMap(_ => refusing(chosen(choice, target, allocator, cc, level, pipeline)))
+
+  /** A library that could not be used, answered as the refusal `resolve` returns — and nothing else,
+   * since any other exception is a defect in the compiler and hiding it behind a sentence would
+   * make it one nobody reports.
+   */
+  private[sysl] def refusing[T](body: => Either[String, T]): Either[String, T] =
+    try body
+    catch case e: Std.Unusable => Left(e.getMessage)
+
+  private def chosen(choice: Choice, target: Target, allocator: Allocator, cc: Option[String],
+                     level: String, pipeline: Pipeline): Either[String, Resolved] =
       choice match
         case Choice.FromSource      => Right(Resolved(fromSource(target, cc), Set.empty, None))
         case Choice.Artifact(named) => load(named, target, allocator)
@@ -312,24 +330,29 @@ object Stdlib {
    *
    * A probe that fails is `Std.parsed`'s kind of failure rather than a diagnostic: the standard
    * module is the compiler's own, so a header it cannot read is a broken installation and not
-   * something a program did.
+   * something a program did. Both raise `Std.Unusable`, which `resolve` answers as a refusal.
    */
   def fromSource(target: Target, cc: Option[String] = None): Stdlib =
     cache.synchronized {
       cache.get((target, cc)) match
         case Some(std) => std
         case None =>
-          val units = CProbe.lower(Tests.stripSource(Std.parsed(target)), target,
-                                   SearchPaths(cc = cc)) match
-            case Right(lowered) => lowered
-            case Left(e)        => sys.error(s"the standard module's 'c const' could not be measured: $e")
-
-          val std = new Stdlib(units)
+          val std = new Stdlib(lowered(Tests.stripSource(Std.parsed(target)), target, cc))
 
           cache.clear()
           cache((target, cc)) = std
           std
     }
+
+  /** The library's units with their `c const` blocks measured — separate from [[fromSource]] so a
+   * test can hand it units of its own. The diagnostic is rendered with its location, as the
+   * program's own would be.
+   */
+  private[sysl] def lowered(units: List[Program], target: Target, cc: Option[String]): List[Program] =
+    CProbe.lower(units, target, SearchPaths(cc = cc)) match
+      case Right(done) => done
+      case Left(e)     =>
+        throw Std.Unusable(s"the standard module's 'c const' could not be measured\n${e.rendered}")
 
   /** Locked for the reason `Std.parsed`'s is: this was a `lazy val`, which is initialized once
    * however many threads reach it, and a bare mutable `Map` is not.
