@@ -15,7 +15,8 @@ package sh.sysl
  * call and read like one, and the only thing separating it from the forms above it is that the
  * parser has already taken its operand as a type.
  */
-trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStorage with Atomics {
+trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStorage with Atomics
+    with GatedModules {
 
   /** A call, or one of the two call-shaped forms, at the position the dispatch found it.
    *
@@ -230,8 +231,14 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
       err(s"'$name' is ${show(lookupOpt(name).get._2)} and is not callable — a callable is a " +
         "closure, or a value of a type that implements the call trait")
 
+    // A name reached through its module arrives here as a key — `host$size` — so it is quoted the way
+    // the call wrote it, `host.size`: the `$` is the compiler's module separator and no source holds
+    // one. And a module this reference may not reach at all has already earned the refusal that says
+    // why, so an absence that follows from it is not reported a second time (`gatedAway`).
     case Call(Ident(name), _) =>
-      err(s"undefined function '$name'")
+      if gatedAway(Modules.moduleOf(name)) then poisoned()
+
+      err(s"undefined function '${Modules.show(name)}'")
 
     // A member reached through the module it belongs to (`reference/modules.md § Imports`): the
     // chain is rewritten with the module folded into the name it qualifies, and what is left is the
