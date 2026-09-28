@@ -419,13 +419,9 @@ object Stdlib {
 
                     Project.parentOf(out).foreach(Project.makeDirectories)
 
-                    // Beside its destination rather than in the staging directory, because a rename
-                    // is only a rename within one filesystem and the system's temporary directory
-                    // need not be on the same one as the cache. The unique part of the name is the
-                    // staging directory's own, which the system has already made unique — two
-                    // builds racing for one artifact must not agree on a pending name either, or
-                    // one of them would publish the other's half-written archive.
-                    val pending = s"$out.${Project.basename(staging)}"
+                    // Beside its destination rather than in the staging directory, and unique to
+                    // this build — `Publish` says why both matter.
+                    val pending = Publish.pending(out)
 
                     val outcome =
                       for
@@ -446,7 +442,8 @@ object Stdlib {
                                  Toolchain.compileC(entry._1.name, entry._2, target, level,
                                                     named = cc, pipeline = pipeline)))
                         _ <- Toolchain.archive(code :: metadata :: objects.map(_._2), pending, archiver)
-                        _ <- publish(pending, out)
+                        _ <- Publish.file(pending, out).left.map(e =>
+                               s"cannot put the standard module at $out: $e")
                       yield ()
 
                     (code :: metadata :: objects.map(_._2) ::: List(staging, pending))
@@ -454,12 +451,4 @@ object Stdlib {
                     outcome
                   }
     yield ()
-
-  /** The rename itself, as an answer rather than an exception: everything else in the build reports
-   * what went wrong by returning it, and a full disk or a read-only cache directory is the ordinary
-   * way this step fails.
-   */
-  private def publish(pending: String, out: String): Either[String, Unit] =
-    try Right(moveFile(pending, out))
-    catch case e: Exception => Left(s"cannot put the standard module at $out: ${e.getMessage}")
 }

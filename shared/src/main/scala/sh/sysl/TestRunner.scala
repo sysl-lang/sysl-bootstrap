@@ -106,24 +106,26 @@ object TestRunner {
       Console.err.println(s"no test matches '${opts.filter.getOrElse("")}' — ${tests.length} to choose from")
       return 0
 
-    // Linked straight into the cache slot where there is one, for `run`'s reason: a copy would have
-    // to reproduce the executable bit, and the linker already knows how.
-    val keeping = cacheKey.flatMap(RunCache.reserve)
-    val exe     = keeping.getOrElse(createTempFile("sysl-test-", ""))
+    // Linked beside the cache slot under a name of this run's own and renamed into it, for `run`'s
+    // reason — a concurrent suite must never execute a binary the linker is still writing — with the
+    // test list published after it the same way (`RunCache.keep`).
+    val keeping = cacheKey.flatMap(key => RunCache.reserve(key).map(key -> _))
+    val linked  = keeping.fold(createTempFile("sysl-test-", ""))((_, slot) => Publish.pending(slot))
 
     // `--verbose` traces the command line here as it does for every other command that links. It was
     // the one build that did not, so a suite was the one place a reader could not ask what clang was
     // handed — and a suite is where a question about the link is most likely to start.
-    Toolchain.build(built.ir, exe, target, archives, cfg.optimization, built.links, objects, paths,
-                    cfg.verbose, cfg.pipeline) match
-      case Left(err) => Project.discard(exe); fail(err)
-      case Right(_) =>
-        // **The sidecar is written after the binary exists**, so a hit that finds both finds a pair
-        // that was made together. A failure to write it costs a rebuild next time and nothing else.
-        for key <- cacheKey if keeping.isDefined; path <- RunCache.tests(key) do
-          try writeFile(path, RunCache.encode(tests))
-          catch case _: Exception => ()
+    val linking =
+      for
+        _   <- Toolchain.build(built.ir, linked, target, archives, cfg.optimization, built.links, objects,
+                               paths, cfg.verbose, cfg.pipeline)
+        exe <- keeping.fold[Either[String, String]](Right(linked))((key, slot) =>
+                 RunCache.keep(key, linked, slot, Some(tests)).map(_ => slot))
+      yield exe
 
+    linking match
+      case Left(err) => Project.discard(linked); fail(err)
+      case Right(exe) =>
         val outcomes = execute(exe, selected, opts, tests.length - selected.length, emitLine)
 
         if keeping.isEmpty then Project.discard(exe)
