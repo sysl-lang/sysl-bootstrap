@@ -326,7 +326,9 @@ trait CallAnalysis extends OperatorCalls {
             (targs, Some(provisional))
 
     val s   = instantiateStruct(name, targs)
-    val nnew = TStructNew(s, checkArgs(s.name, s.fields, args, pre))
+    // A field's mismatch names the struct as a reader writes it — `b.T`, `b.G[int]` — never by its
+    // key, whose `$` is the compiler's module separator and appears in no source.
+    val nnew = TStructNew(s, checkArgs(show(s), s.fields, args, pre))
 
     // A struct with `invariant` clauses is checked the moment it is built: every construction site —
     // `var a: T = T(…)`, `a = T(…)` — flows through here, so one wrap covers them all. A generic one

@@ -449,7 +449,7 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
     val ty = rt(NamedType(written, targs.map(typeArgWritten(_, atCall = true))))
 
     typeKey(written) match
-      case Some(k) if structDecls.contains(k) => constructStruct(written, args, Some(ty))
+      case Some(k) if structDecls.contains(k) => constructStruct(k, args, Some(ty))
       case _ =>
         err(s"'$written' is an enum, so it is not built by calling its name — a variant is what " +
           s"carries a value, as '$written[…].Name(…)'")

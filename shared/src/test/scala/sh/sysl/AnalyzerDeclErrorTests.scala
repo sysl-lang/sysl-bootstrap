@@ -6,7 +6,7 @@ import org.scalatest.freespec.AnyFreeSpec
  * construction, enums and their variants, generic type-argument arity and inference, and the
  * conversions between a simple enum and an integer.
  */
-class AnalyzerDeclErrorTests extends AnyFreeSpec with CodegenSupport {
+class AnalyzerDeclErrorTests extends AnyFreeSpec with CodegenSupport with RunSupport {
 
   "a call with the wrong number of arguments" in {
     err("add(a: int, b: int) -> int = a + b\nprint(add(1))") should include("takes 2 arguments")
@@ -353,5 +353,82 @@ class AnalyzerDeclErrorTests extends AnyFreeSpec with CodegenSupport {
         e should include("1 | enum Colour: u8")
       }
     }
+  }
+
+  // A struct from another module is known to the analyzer by its key, whose `$` separates the
+  // module from the name. Neither a construction nor its refusals may show that key: the call finds
+  // the declaration through it, and a message names the struct the way a reader writes it.
+  "constructing a struct declared in another module" - {
+    val lib = "b.sysl" -> """|module b
+                             |
+                             |struct T
+                             |    x: int
+                             |
+                             |struct G[A]
+                             |    x: A
+                             |    y: int
+                             |
+                             |mk() -> T = T("s")
+                             |""".stripMargin
+
+    val plain = "b.sysl" -> """|module b
+                               |
+                               |struct T
+                               |    x: int
+                               |
+                               |struct G[A]
+                               |    x: A
+                               |    y: int
+                               |""".stripMargin
+
+    "a generic one imported by name is built at a written instantiation" in {
+      runOf(
+        "b.sysl"    -> """|module b
+                          |
+                          |struct G[T]
+                          |    x: T
+                          |""".stripMargin,
+        "main.sysl" -> """|import b.G
+                          |
+                          |val g = G[int](1)
+                          |val h = G[string]("two")
+                          |print(g.x)
+                          |print(h.x)
+                          |""".stripMargin,
+      ) shouldBe "1\ntwo\n"
+    }
+
+    "a field's mismatch names it qualified, reached through its module" in {
+      errOf(plain, "main.sysl" -> "import b\n\nprint(b.T(\"s\").x)\n") should
+        include("'x' of 'b.T' is int, but string was given")
+    }
+
+    "and the same when it was imported by name" in {
+      errOf(plain, "main.sysl" -> "import b.T\n\nprint(T(\"s\").x)\n") should
+        include("'x' of 'b.T' is int, but string was given")
+    }
+
+    "and the same where a field is given by name" in {
+      errOf(plain, "main.sysl" -> "import b\n\nprint(b.T(x = \"s\").x)\n") should
+        include("'x' of 'b.T' is int, but string was given")
+    }
+
+    "and the same inside the module that declares it" in {
+      errOf(lib, "main.sysl" -> "import b\n\nprint(b.mk().x)\n") should
+        include("'x' of 'b.T' is int, but string was given")
+    }
+
+    "a generic one's mismatch names it at its instantiation" in {
+      errOf(plain, "main.sysl" -> "import b\n\nprint(b.G(1, \"s\").x)\n") should
+        include("'y' of 'b.G[int]' is int, but string was given")
+    }
+
+    "no refusal shows the module separator" in {
+      errOf(plain, "main.sysl" -> "import b\n\nprint(b.T(\"s\").x)\n") should not include "$"
+    }
+  }
+
+  "a struct declared in the entry file is named bare" in {
+    err("struct L\n    x: int\nprint(L(\"s\").x)") should include("'x' of 'L' is int, but string was given")
   }
 }
