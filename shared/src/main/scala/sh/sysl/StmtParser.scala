@@ -520,7 +520,7 @@ trait StmtParser
    * followed by a name, which says nothing about why there is no name to follow it with.
    */
   private lazy val implVisibility: Parser[Nothing] =
-    op("private") ~ opt(op("[") ~> ident <~ op("]")) ~ guard(op("impl")) ~> err(
+    op("private") ~ opt(scopeName) ~ guard(op("impl")) ~> err(
       "an 'impl' block carries no visibility of its own — it declares no name for one to restrict, " +
         "and what it supplies is reached at the reach of the trait that asked for it",
     )
@@ -543,10 +543,29 @@ trait StmtParser
    * one that writes nothing.
    */
   protected lazy val visibility: Parser[Visibility] =
-    op("private") ~> opt(op("[") ~> ident <~ op("]")) ^^ {
+    op("private") ~> opt(scopeName) ^^ {
       case Some(m) => Visibility.Scoped(m)
       case None    => Visibility.File
     } | success(Visibility.Public)
+
+  /** The `[M]` of `private[M]` — one enclosing module, named by its **simple** name
+   * (`reference/modules.md § Visibility`: *"The argument is a simple name, not a path"*).
+   *
+   * A dotted path is refused at its first dot and told why, since the grammar's own complaint there
+   * is `']' expected`, which reads as a bracket left open rather than as a rule. The name is resolved
+   * innermost-outward against the modules enclosing the declaration, so the last segment of the path
+   * is the one the reader meant, and the sentence offers it.
+   */
+  private lazy val scopeName: Parser[String] =
+    op("[") ~> ident <~ (op("]") | dottedScope)
+
+  private lazy val dottedScope: Parser[Nothing] =
+    guard(rep1(op(".") ~> ident)) >> { rest =>
+      val last = rest.last
+      err(s"'private[…]' names one enclosing module by its simple name rather than by a path — the " +
+        s"name is matched against the modules around this declaration, innermost first, so write " +
+        s"'private[$last]'")
+    }
 
   protected def restrict(v: Visibility, d: Stmt): Stmt = d match
     case s: StructDecl    => s.copy(vis = v).setPos(s.pos)
@@ -569,7 +588,7 @@ trait StmtParser
   protected lazy val varDecl: PackratParser[Stmt] =
     multiDecl("var", mutable = true) |
       patternDecl("var", mutable = true) |
-      op("var") ~> ident ~ opt(op(":") ~> typeRef) ~ opt(op("=") ~> initializer) ^^ {
+      op("var") ~> boundName("the name a 'var' binds") ~ opt(op(":") ~> typeRef) ~ opt(op("=") ~> initializer) ^^ {
         case n ~ t ~ e => VarDecl(n, t, e.map(Placeholders.lift))
       }
 
@@ -652,7 +671,7 @@ trait StmtParser
    * something knows what `f` and `xs` are.
    */
   protected lazy val refDecl: PackratParser[Stmt] =
-    op("ref") ~> ident ~ (op("=") ~> expression) ^^ { case n ~ p => RefDecl(n, Placeholders.lift(p)) }
+    op("ref") ~> boundName("the name a 'ref' binds") ~ (op("=") ~> expression) ^^ { case n ~ p => RefDecl(n, Placeholders.lift(p)) }
 
   /** `val a, b = …` / `var a, b = …` — a binding that names several things (`reference/expressions.md § Several places at once`).
    *
@@ -662,9 +681,20 @@ trait StmtParser
    * — inference covers what the form is for, and there is no spelling yet for the case it does not.
    */
   protected def multiDecl(keyword: String, mutable: Boolean): PackratParser[Stmt] =
-    (op(keyword) ~> ident <~ op(",")) ~ rep1sep(ident, op(",")) ~ (op("=") ~> rep1sep(expression, op(","))) ^^ {
+    lazy val name = boundName(s"the name a '$keyword' binds")
+    (op(keyword) ~> name <~ op(",")) ~ rep1sep(name, op(",")) ~ (op("=") ~> rep1sep(expression, op(","))) ^^ {
       case first ~ rest ~ values => MultiDecl(first :: rest, mutable, values)
     }
+
+  /** A name a `val`, `var`, `const` or `ref` binds, or the refusal a reserved word there is owed.
+   *
+   * Nothing but a name may follow any of the four keywords — a destructuring pattern opens with a
+   * name or a parenthesis, never a reserved word — so the word alone is the whole lookahead
+   * (`SyslParserBase.reservedName`), and `val type = 3` is told about `type` rather than that an
+   * identifier was expected where one was written.
+   */
+  protected def boundName(what: String): Parser[String] =
+    reservedName(what, success(())) | ident
 
   /** `const name: type = value` (`reference/modules.md § const — a value`). Both halves are mandatory, which is what tells it apart
    * from a `var` at a glance as well as to the parser: a constant with no value is not a
@@ -677,7 +707,7 @@ trait StmtParser
    * rather than with the rule.
    */
   protected lazy val constDecl: PackratParser[Stmt] =
-    op("const") ~> ident ~ (op(":") ~> typeRef) ~ (op("=") ~> initializer) ^^ {
+    op("const") ~> boundName("a constant's name") ~ (op(":") ~> typeRef) ~ (op("=") ~> initializer) ^^ {
       case n ~ t ~ v => ConstDecl(n, t, v)
     }
 
@@ -803,7 +833,7 @@ trait StmtParser
   protected lazy val valDecl: PackratParser[Stmt] =
     multiDecl("val", mutable = false) |
       patternDecl("val", mutable = false) |
-      op("val") ~> ident ~ opt(op(":") ~> typeRef) ~ (op("=") ~> initializer) ^^ {
+      op("val") ~> boundName("the name a 'val' binds") ~ opt(op(":") ~> typeRef) ~ (op("=") ~> initializer) ^^ {
         case n ~ t ~ v => ValDecl(n, t, Placeholders.lift(v))
       }
 
