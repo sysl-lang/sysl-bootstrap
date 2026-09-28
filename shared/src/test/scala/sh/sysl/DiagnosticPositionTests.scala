@@ -108,6 +108,62 @@ class DiagnosticPositionTests extends AnyFreeSpec with CodegenSupport {
     "the second 'null'" in {
       location("var p: *int = null\nprint(1 + null)") shouldBe (2, 11)
     }
+
+    "the second '()'" in {
+      location("val ok = ()\nprint(1 + ())") shouldBe (2, 11)
+    }
+
+    "the second 'self', in another method" in {
+      val src =
+        """struct S
+          |    n: int
+          |
+          |    a(self) -> int = self.n
+          |    b(self) -> int = 1 + self
+          |""".stripMargin
+
+      location(src) shouldBe (5, 26)
+    }
+  }
+
+  /** A hole in an interpolated string is lexed and parsed as a source of its own, and until its nodes
+   * were placed back in the file a complaint about one pointed at line 1, column 1 of a file named
+   * `<file> (interpolation)` — quoting the hole's text rather than the line it sits on.
+   */
+  "a complaint about what is inside an interpolation's hole points into the hole" - {
+
+    /** The `-->` line itself, which names the file as well as the place. */
+    def arrow(src: String): String = {
+      val rendered = err(src)
+
+      rendered.linesIterator.find(_.trim.startsWith("-->")).getOrElse(fail(rendered)).trim
+    }
+
+    "a braced hole, after another one on the same line" in {
+      val src = "val a = 1\nprint(s\"x ${a} y ${nope} z\")"
+
+      location(src) shouldBe (2, 20)
+      arrow(src) should not include "(interpolation)"
+    }
+
+    "a bare '$name' hole" in {
+      location("print(s\"x $nope\")") shouldBe (1, 12)
+    }
+
+    "a hole inside a hole" in {
+      location("print(s\"a ${s\"b ${nope}\"}\")") shouldBe (1, 19)
+    }
+
+    // A text block strips its lines' indentation out of the *value*; the hole's column is still
+    // the one it was written at.
+    "a hole in a text block, on the block's own line and column" in {
+      val src =
+        "print(s\"\"\"\n" +
+          "    x ${nope}\n" +
+          "    \"\"\")\n"
+
+      location(src) shouldBe (2, 9)
+    }
   }
 
   "what deliberately keeps the older convention" - {

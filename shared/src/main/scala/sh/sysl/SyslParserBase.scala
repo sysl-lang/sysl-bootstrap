@@ -40,8 +40,10 @@ trait SyslParserBase extends PackratParsers {
   /** A line and column counted in this parser's text, as a line and column in `home`.
    *
    * The text's first line begins part-way along the enclosing file's line, so only its columns are
-   * shifted; every later line of it is a whole line of the file. Line 0 is the reader's "no position
-   * at all" and is left as it is.
+   * shifted; every later line of it is a whole line of the file. A hole never reaches a second line
+   * today — the lexer refuses a line break inside one as an unterminated interpolation — so the
+   * second case is what makes the mapping true of any piece rather than of one shape. Line 0 is the
+   * reader's "no position at all" and is left as it is.
    */
   protected final def placed(line: Int, col: Int): (Int, Int) = origin match
     case Some(o) if line == 1 => (o.line, o.col + col - 1)
@@ -666,6 +668,13 @@ trait SyslParserBase extends PackratParsers {
    */
   protected def quantifier: PackratParser[Expr]
 }
+
+/** Where a piece of text parsed on its own begins in the file it was cut from: `file`, and the
+ * 1-based line and column of its first character. An interpolation's hole is the case — it is
+ * lexed and parsed as a source of its own, and without this every node in it would say it stood at
+ * line 1 of a file named after the hole rather than where the reader wrote it.
+ */
+final case class SourceOrigin(file: Source, line: Int, col: Int)
 
 /** A token's position, which is a **span**: a token occupies characters rather than sitting at one,
  * and both a diagnostic that underlines it and an editor that resolves a cursor to it need to know

@@ -31,8 +31,13 @@ import scala.util.parsing.input.Position
  * yields is missing whatever it skipped. It is a separate instance rather than a flag flipped
  * part-way through because packrat memoization is per instance, and a cache filled by the
  * non-recovering pass would answer the recovering one.
+ *
+ * `origin` says the source is a piece of another file — an interpolation's hole — and where in it
+ * that piece begins, so every position this parser stamps names the enclosing file and the place
+ * the reader wrote the text rather than a line of the piece.
  */
-class SyslParser(val source: Source, val recovering: Boolean = false) extends ControlFlowParser {
+class SyslParser(val source: Source, val recovering: Boolean = false,
+                 override val origin: Option[SourceOrigin] = None) extends ControlFlowParser {
 
   /** A whole file's — or a whole block's — worth of statements, in one of two spellings.
    *

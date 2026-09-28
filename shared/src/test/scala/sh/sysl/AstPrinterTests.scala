@@ -167,6 +167,16 @@ class AstPrinterTests extends AnyFreeSpec with Matchers {
       positionless(src) shouldBe empty
     }
 
+    // A hole is parsed as a source of its own, and its nodes used to report where they stood in
+    // *that* — line 1, from column 1 — rather than where the hole was written.
+    "and the nodes inside a hole are where the hole was written" in {
+      val printed = AstPrinter.print(parsed("val n = 1\nval s = s\"a${n}b${n + 1}c\"\n"), spans = true)
+
+      printed should include("Ident 2:14-2:15")
+      printed should include("Binary 2:19-2:24")
+      printed should not include "Ident 1:1-1:2"
+    }
+
     // Each `elif` is a nested `if` in the else branch of the one before it, and the outer `if` is
     // the only node the rule's own `at` reaches.
     "an if/elif/else chain is positioned throughout" in {
