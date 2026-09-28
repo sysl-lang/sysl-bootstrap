@@ -520,16 +520,16 @@ class ArgumentTests
     // default` guards the type-level form of this with a set of what is being filled; the
     // value-level form needs the same guard or none at all.
     "a default that calls its own declaration is refused rather than recursed into" in {
-      err("""|loop(n: int = loop()) -> int = n
-             |print(loop())
-             |""".stripMargin) should not be empty
+      err("""|again(n: int = again()) -> int = n
+             |print(again())
+             |""".stripMargin) should include("filling this default calls something that asks for it again")
     }
 
     "and one that reaches itself through a second declaration is too" in {
       err("""|ping(n: int = pong()) -> int = n
              |pong(n: int = ping()) -> int = n
              |print(ping())
-             |""".stripMargin) should not be empty
+             |""".stripMargin) should include("filling this default calls something that asks for it again")
     }
 
     // Names are placed before the generic solve reads the arguments, so inference sees them in
