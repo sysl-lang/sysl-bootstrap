@@ -241,6 +241,63 @@ class PackageBuildTests extends PackageCacheSupport {
     }
   }
 
+  /** `sysl test` over a project with dependencies, which has to assemble the compilation exactly as
+   * `sysl run` does — the canonical prefix on every dependency's modules, and none of a dependency's
+   * own tests. Both halves differed until the test build was handed `packages` and stripped what it
+   * was handed.
+   */
+  private def tested(root: String): (Int, String) = {
+    val out    = new java.io.ByteArrayOutputStream
+    val status = Console.withOut(out)(
+      Console.withErr(out)(sh.sysl.execute(Config(command = "test", file = root))))
+
+    (status, out.toString)
+  }
+
+  "a test build of a project with dependencies" - {
+
+    // The same two packages `run` builds above. Without the canonical prefix both are the module
+    // `json` here, and the second 'tag' is refused as already declared.
+    "keeps two packages wanting one name apart, as a mount does in a build" in {
+      val one = packageOf("one", "json", "tag() -> int = 40")
+      val two = packageOf("two", "json", "tag() -> int = 2")
+      val root = app(
+        """print(json.tag() + other.json.tag())
+          |
+          |@test
+          |first()
+          |    assert_eq(json.tag(), 40)
+          |
+          |@test
+          |second()
+          |    assert_eq(other.json.tag(), 2)
+          |""".stripMargin,
+        s"""a { path = "$one" }, b { path = "$two", mount = "other" }""")
+
+      val (status, out) = tested(root)
+
+      withClue(out) {
+        status shouldBe 0
+        out should include("2 passed")
+      }
+    }
+
+    "runs the project's own tests and not a dependency's" in {
+      val one = packageOf("one", "json", "tag() -> int = 40", "",
+        "json/tests.sysl" -> "module json\n@tests\n\n@test\nfails_if_run()\n    assert_eq(1, 2)\n")
+      val root = app("print(json.tag())\n\n@test\nforty()\n    assert_eq(json.tag(), 40)\n",
+        s"""a { path = "$one" }""")
+
+      val (status, out) = tested(root)
+
+      withClue(out) {
+        status shouldBe 0
+        out should include("1 passed")
+        out should not include "fails_if_run"
+      }
+    }
+  }
+
   /** The convention `reference/packages.md § What a dependency's modules are called` recommends,
    * from the consuming side — and the case it was recommended *for*.
    *

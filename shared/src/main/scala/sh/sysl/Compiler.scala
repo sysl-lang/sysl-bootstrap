@@ -297,12 +297,24 @@ object Compiler {
    * package built on `c const`: the driver printed every `--include-path` it had been given and then
    * analyzed without them. The default stays because a dozen in-tree callers legitimately have no
    * paths to give.
+   *
+   * **It assembles the compilation exactly as `compiledWith` does — the same `packages`, the same
+   * `librarySources` handed apart from the program's own — and that used to be untrue.** With no
+   * `packages` every module a dependency declared was analyzed under its *written* name where the
+   * build names it by the canonical prefix, so two dependencies each declaring `json` — which a
+   * `mount` makes legal, and which `sysl run` builds — collided here as one module declaring `tag`
+   * twice. And every dependency's `@test` functions ran in the consumer's suite, a failing one
+   * failing it, though no build of the consumer ever keeps them.
+   *
+   * **So a handed module's tests are stripped after analysis and the program's own are not**
+   * (`Tests.stripHanded`), which is what `typedWith` does for the same reason. A package's suite is
+   * run by `sysl test` over the package.
    */
   def compileTests(sources: List[Source], libraries: List[Program], target: Target = Target.default,
                    precompiled: Set[String] = Set.empty, std: Option[Stdlib] = None,
                    building: Set[String] = Set.empty, paths: SearchPaths = SearchPaths.none,
                    allocator: Allocator = Allocator.c, librarySources: List[Source] = Nil,
-                   devModules: Set[String] = Set.empty)
+                   devModules: Set[String] = Set.empty, packages: Packages = Packages.none)
       : Either[String, (Compiled, List[TTest])] = rendered {
     val supplied = librarySources.map(SyslParser.checked(_, target))
     val parsed   = sources.map(SyslParser.checked(_, target))
@@ -314,14 +326,16 @@ object Compiler {
         val handed = libraries ::: supplied.collect { case Right(p) => p }
         val units  = handed ::: mine
         val whole  = carried(std, target)
+        val own    = mine.map(moduleOf).toSet
 
         for
           // **Before the analysis, because it is about what a *consumer* would compile.** A dev
           // dependency is in scope for the whole of this build, so an ordinary module importing one
           // type-checks here and is refused for everybody else (`Tests.checkDevImports`).
           _        <- Tests.checkDevImports(mine, devModules)
-          typed    <- Analyzer.analyze(units, building, whole, target, paths = paths,
-                        own = ownModules(mine))
+          analyzed <- Analyzer.analyze(units, building, whole, target, packages = packages,
+                        paths = paths, own = Some(own))
+          typed     = Tests.stripHanded(analyzed, own)
           promoted <- Escape.check(typed)
           _        <- TailCalls.check(typed)
           _        <- TailJumps.check(typed, target)
@@ -336,9 +350,9 @@ object Compiler {
           // `analyzed`. The question is about the emitted program's symbol table, so what to read is
           // whatever *this* compilation emits — and a test build is the one build where a `@test`
           // file's `@export` is a definition rather than something dropped.
-          _        <- Exports.check(Tests.only(typed, ownModules(mine)), target, ownModules(mine))
+          _        <- Exports.check(Tests.only(typed, Some(own)), target, Some(own))
         yield
-          val kept = Tests.only(typed, ownModules(mine))
+          val kept = Tests.only(typed, Some(own))
 
           // A test binary is linked like any other, so it needs the same libraries. It is a
           // different compilation from the one above rather than a variant of it, which is why the

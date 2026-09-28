@@ -560,11 +560,12 @@ class DeadCodeTests extends AnyFreeSpec with CodegenSupport with RunSupport {
 
   /** The same rule asked of a **test build**, which is the one build whose roots are not the program.
    *
-   * `sysl test` keeps every `@test` in the tree — a dependency's as readily as the project's — so a
-   * package's own suite runs inside a consumer's test binary. That makes the package's modules
-   * contributors of roots to this compilation, which is what `Tests.only` has to widen `own` by: the
-   * program's module graph reaches neither the package nor its tests, so before the widening the
-   * release hook the package's suite needed was emitted against a body pruned out from under it.
+   * `sysl test` keeps the project's own `@test` functions and strips a handed package's, as every
+   * other build of the project does (`Tests.stripHanded`). It once kept the package's suite as well,
+   * which ran it inside a consumer's test binary and made the package's modules contributors of roots
+   * — the release hook that suite needed was emitted against a body pruned out from under it. The
+   * cases below pin both halves: the package's suite is gone, and a destructor the project's own
+   * test reaches is emitted whole.
    */
   private val stdDrop =
     Seq(
@@ -613,10 +614,15 @@ class DeadCodeTests extends AnyFreeSpec with CodegenSupport with RunSupport {
    * build is *handed* are exactly the ones `Compiler.ownModules` does not name.
    */
   private def testIrAgainst(pkg: Seq[(String, String, String)])(fs: (String, String)*): String =
+    testBuildAgainst(pkg)(fs*)._1
+
+  /** The IR beside the names of the tests the build would run. */
+  private def testBuildAgainst(pkg: Seq[(String, String, String)])(fs: (String, String)*)
+      : (String, List[String]) =
     Compiler.compileTests(files(fs*), standInTree(pkg*)._1,
       std = Some(standInTree(stdDrop*)._2)) match {
-      case Right((built, _)) => built.ir
-      case Left(e)           => fail(e)
+      case Right((built, tests)) => (built.ir, tests.map(_.func))
+      case Left(e)               => fail(e)
     }
 
   /** Every symbol the module defines, by name. */
@@ -628,20 +634,30 @@ class DeadCodeTests extends AnyFreeSpec with CodegenSupport with RunSupport {
 
   "a root a handed package supplies to a test build" - {
 
-    // The shape a reader met: `clang` refused the test binary with `use of undefined value
+    // The shape a reader once met: `clang` refused the test binary with `use of undefined value
     // '@sh.sysl.brotli$Decoder.drop'` — out of a package the project had not imported, for a value
-    // only that package's own suite ever made. The call and the definition are asserted together
-    // because either alone passes for a compiler that emitted neither.
-    "is emitted where the package's own tests are the only thing that reaches it" in {
-      val out = testIrAgainst(suite)("main.sysl" -> "mark(1)\n")
+    // only that package's own suite ever made. That suite is no longer in the consumer's build, so
+    // neither is anything only it made.
+    "is not the package's own suite, which a consumer's test build does not run" in {
+      val (out, tests) = testBuildAgainst(suite)("main.sysl" -> "mark(1)\n\n@test\nmine()\n    mark(2)\n")
+
+      tests shouldBe List("mine")
+      out should not include "makes_one"
+      defines(out) should not contain "pkg$Handle.drop"
+    }
+
+    // The call and the definition are asserted together because either alone passes for a compiler
+    // that emitted neither.
+    "is emitted where the project's own test is what reaches it" in {
+      val out = testIrAgainst(suite)(
+        "main.sysl" -> "mark(1)\n\n@test\nopens()\n    val h = pkg.open(1)\n    pkg.release(h.id)\n")
 
       out should include("call void @pkg$Handle.drop")
       defines(out) should contain("pkg$Handle.drop")
     }
 
-    // The widening is by the modules whose tests run and by nothing else, so a handed module with no
-    // test in it is pruned exactly as it was — the control that keeps the test above from passing for
-    // a compiler that simply stopped qualifying a root.
+    // The control that keeps the test above from passing for a compiler that simply stopped
+    // qualifying a root.
     "while a handed module holding no test of its own is pruned as before" in {
       val out = testIrAgainst(suite :+ ("spare", "spare.sysl",
         """module spare
