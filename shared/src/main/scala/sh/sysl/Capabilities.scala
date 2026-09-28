@@ -269,8 +269,18 @@ trait Capabilities extends AnalyzerBase {
         else err(s"'${cs.head.name}' is declared twice, and the second says nothing the first did not")
       })
 
-  /** The module a file contributes to — its header, or the anonymous root module (`reference/modules.md`). */
-  private def declaredModule(u: Program): String = u.module.map(_.show).getOrElse(Modules.root)
+  /** The module a file contributes to — its header, or the anonymous root module
+   * (`reference/modules.md`) — under the canonical prefix of the package it came from, which is the
+   * name every edge of the module graph and every later question uses.
+   *
+   * **The prefix is the whole of what makes a dependency's clauses count.** Keyed by the header
+   * alone, a path or git dependency's `demo.probe` recorded its `requires posix` under a name no
+   * reference ever reaches — the edge goes to `demo.demo.probe` — so a program on a machine without
+   * POSIX, or one that gave POSIX up, reached it and built. A `--lib` root has no prefix, which is
+   * why it was refused all along.
+   */
+  private def declaredModule(u: Program): String =
+    Packages.qualify(packages.prefixOf(u.source), u.module.map(_.show).getOrElse(Modules.root))
 
   /** A set of clauses as the capabilities they cover, with each one's implications folded in: a
    * module requiring `posix` requires `os`, and one that gave `os` up gave `posix` up with it.
