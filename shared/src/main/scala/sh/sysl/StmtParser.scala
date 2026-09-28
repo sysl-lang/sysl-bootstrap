@@ -24,7 +24,7 @@ trait StmtParser
   // --- statements ----------------------------------------------------------------------
 
   lazy val statement: PackratParser[Stmt] =
-    at(
+    reservedFuncHead ~> at(
       misplacedHeaderAttr | importDecl | implDecl | declaration | varDecl | refDecl | returnStmt |
         becomeStmt |
         breakStmt | continueStmt | deferStmt | asmStmt | requireStmt | ensureStmt | invariantStmt |
@@ -39,7 +39,7 @@ trait StmtParser
    * comma as the *branch's* result list and leave the function one value.
    */
   protected lazy val inlineStatement: PackratParser[Stmt] =
-    at(
+    reservedFuncHead ~> at(
       importDecl | implDecl | declaration | varDecl | refDecl | returnStmt |
         becomeStmt |
         breakStmt | continueStmt | deferStmt | requireStmt | ensureStmt | multiAssign | exprStmt,
@@ -144,8 +144,8 @@ trait StmtParser
       implVisibility |
       misplacedOverride |
       staticDecl |
-      visibility ~ (structDecl | enumDecl | typeDecl | traitDecl | externDecl | cConstDecl |
-        cTypeDecl | constDecl | valDecl | varDecl | funcDecl) ^^ {
+      visibility ~ (reservedFuncHead ~> (structDecl | enumDecl | typeDecl | traitDecl | externDecl | cConstDecl |
+        cTypeDecl | constDecl | valDecl | varDecl | funcDecl)) ^^ {
         case Visibility.Public ~ d => d
         case v ~ d                 => restrict(v, d)
       }
@@ -163,7 +163,7 @@ trait StmtParser
    * answered with the sentence rather than with the list of forms the grammar could still have read.
    */
   protected lazy val attributedDecl: PackratParser[Stmt] =
-    rep1(attribute <~ skipNewlines) >> { as =>
+    (rep1(attribute <~ skipNewlines) <~ reservedFuncHead) >> { as =>
       // Once an attribute has been read the statement is committed to being an attributed
       // declaration, which is what `>>` buys: everything after it is read against that, so a
       // declaration that cannot carry one is answered with the sentence below rather than with the

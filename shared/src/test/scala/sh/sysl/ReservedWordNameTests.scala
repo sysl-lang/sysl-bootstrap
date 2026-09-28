@@ -111,6 +111,85 @@ class ReservedWordNameTests extends AnyFreeSpec with ParseSupport with CodegenSu
     "and with type parameters" in {
       refusal("then[T](x: T) -> T = x\nprint(1)\n")._1 should include("'then' is a reserved word")
     }
+
+    /** The words that open a declaration of their own, tried before a function is. Each of those
+     * reads past the word and complained about what followed it — `identifier expected` after
+     * `type`, `a pattern expected` after `val`, `quoted identifier expected` after `module` — and
+     * that complaint, being further along, outranked the function-name refusal.
+     */
+    "which itself opens a declaration, and is still told about the word" - {
+      val words = List("type", "struct", "enum", "trait", "impl", "extern", "val", "var", "const",
+                       "ref", "static", "import", "private", "override", "module")
+
+      for w <- words do
+        s"'$w'" in {
+          val (msg, where) = refusal(s"$w() -> int = 1\nprint(1)\n")
+          msg should include(s"'$w' is a reserved word, so it cannot stand as a function's name")
+          msg should include(s"`$w`")
+          where shouldBe "<input>:1:1"
+        }
+
+      "with parameters and a block body" in {
+        val (msg, where) = refusal("print(1)\nstruct(x: int) -> int\n    x\n")
+        msg should include("'struct' is a reserved word, so it cannot stand as a function's name")
+        where shouldBe "<input>:2:1"
+      }
+
+      "with type parameters" in {
+        refusal("type[T](x: T) -> T = x\nprint(1)\n")._1 should include("'type' is a reserved word")
+      }
+
+      "after a visibility" in {
+        val (msg, where) = refusal("module m\n\nprivate type() -> int = 1\n")
+        msg should include("'type' is a reserved word")
+        where shouldBe "<input>:3:9"
+      }
+
+      "after an annotation" in {
+        val (msg, where) = refusal("@inline\nval(x: int) -> int = x\nprint(1)\n")
+        msg should include("'val' is a reserved word")
+        where shouldBe "<input>:2:1"
+      }
+
+      "inside a function's body" in {
+        val (msg, where) = refusal("main()\n    const(x: int) -> int = x\n    print(1)\n")
+        msg should include("'const' is a reserved word")
+        where shouldBe "<input>:2:5"
+      }
+
+      "and the backticked name it advises is a function like any other" in {
+        run("`type`() -> int = 7\n`struct`(x: int) -> int = x + 1\nprint(`type`() + `struct`(1))\n") shouldBe "9\n"
+      }
+
+      // The refusal is asked before these declarations are, so each of their own forms that opens
+      // with the word and a bracket has to keep reading as itself.
+      "while every form of those declarations still reads as itself" in {
+        run(
+          """type Id = int
+            |type Pair = (int, int)
+            |struct Box[T]
+            |    v: T
+            |enum Shape
+            |    Dot
+            |    Line(n: int)
+            |trait Sized
+            |    size(self) -> int
+            |impl[T] Sized for Box[T]
+            |    size(self) -> int = 1
+            |const k: int = 2
+            |extern "abs" c_abs(n: i32) -> i32
+            |val (a, b) = (3, 4)
+            |var (c, d) = (5, 6)
+            |c += 1
+            |val p: Pair = (a, b)
+            |val (e, f) = p
+            |val id: Id = int(c_abs(-8))
+            |ref r = c
+            |r += 1
+            |print(Box(1).size() + k + e + f + c + d + id)
+            |""".stripMargin) shouldBe "31\n"
+      }
+    }
   }
 
   "a method named with one" - {
