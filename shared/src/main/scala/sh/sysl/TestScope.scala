@@ -28,6 +28,11 @@ import scala.collection.mutable
  * name into `testOnlyDecls` when the enclosing body is one a test build keeps. That makes the
  * exemption and the drop the same fact rather than two that have to agree.
  *
+ * **A generic's instantiation is judged by the file its declaration is in**, for the same reason: it
+ * is filed under a mangled name no file wrote. `instantiateFunc` puts that name into `testOnlyDecls`
+ * wherever the generic's is, so a helper taking a callable may call the helper beside it, and an
+ * ordinary file calling such a generic is told so at its own call rather than inside the test file.
+ *
  * That the two halves agree is what makes the drop safe rather than lucky: every reference into a
  * test file comes from something dropped in exactly the builds the file is, so a tree that has been
  * stripped can hold no reference to anything that went with it.
@@ -122,7 +127,7 @@ trait TestScope extends AnalyzerBase {
   private def report(where: Option[Pos], key: String): Unit =
     if where.forall(reported.add) then
       recover(())(at(where)(err(
-        s"'${Modules.show(key)}' is declared in a file that said '@tests', so it is there for the " +
+        s"'${Modules.show(funcOrigin.getOrElse(key, key))}' is declared in a file that said '@tests', so it is there for the " +
           "module's tests and no build but 'sysl test' keeps it — only another such file, or a " +
           "'@test' function, may name it")))
 }

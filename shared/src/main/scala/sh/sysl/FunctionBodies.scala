@@ -435,6 +435,11 @@ trait FunctionBodies extends ModuleStorage {
       // itself is about to be thrown away with the rest of that walk, so its name is the only thing
       // left pointing at the generic that was called.
       if abstractPass then abstractInsts(name) = f.name
+      // An instantiation belongs to the file its declaration is in, so one of a generic a `@tests`
+      // file wrote is scaffolding under its mangled name too. Without it `checkTestScope` held the
+      // instantiation's body to the ordinary rule — refusing the generic's own call to a helper
+      // beside it — and let an ordinary file's call to the generic through unreported.
+      if testOnlyDecls(f.name) then testOnlyDecls += name
 
     // The signature being made real is the declaration's, so it is resolved in the declaration's
     // module however far from it the call that asked for this instantiation was written.

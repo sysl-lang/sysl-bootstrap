@@ -159,6 +159,63 @@ class TestFileTests extends AnyFreeSpec with CodegenSupport with RunSupport {
     }
   }
 
+  /** A generic is instantiated under a mangled name no file wrote, so the rule has to follow the
+   * declaration it was made from. Both directions are pinned: the generic's own body may name the
+   * helper beside it, and an ordinary file naming the generic is still refused — at its own call.
+   */
+  "a generic in such a file is judged by the file it was declared in" - {
+
+    "a helper taking a bare-arrow callable may call the helper beside it" in {
+      val ran = ranIn(
+        ("", "main.sysl", "import m.*\nprint(double(21))"),
+        ("m", "m.sysl", "module m\n\ndouble(n: int) -> int = n * 2"),
+        ("m", "tests.sysl",
+         "module m\n@tests\n\nshout(s: string) -> string = s + \"!\"\n\n" +
+           "with_shout(f: string -> unit) = f(shout(\"hi\"))\n\n" +
+           "@test\nhanded_the_shout() =\n    with_shout((s) -> assert(s == \"hi!\"))\n"),
+      )
+
+      ran.map(o => o.test.display -> o.passed) shouldBe List("handed_the_shout" -> true)
+    }
+
+    "and so may one with an explicit type parameter" in {
+      val ran = ranIn(
+        ("", "main.sysl", "import m.*\nprint(double(21))"),
+        ("m", "m.sysl", "module m\n\ndouble(n: int) -> int = n * 2"),
+        ("m", "tests.sysl",
+         "module m\n@tests\n\nquadruple(n: int) -> int = double(double(n))\n\n" +
+           "first_quadrupled[T](n: int, x: T) -> int = quadruple(n)\n\n" +
+           "@test\nthrough_a_generic() =\n    assert(first_quadrupled(3, \"x\") == 12)\n"),
+      )
+
+      ran.map(o => o.test.display -> o.passed) shouldBe List("through_a_generic" -> true)
+    }
+
+    "while an ordinary file calling the generic is refused, and told at its own call" in {
+      val e = errIn(
+        ("", "main.sysl", "import m.*\nprint(use_it(21))"),
+        ("m", "m.sysl",
+         "module m\n\ndouble(n: int) -> int = n * 2\n\nuse_it(n: int) -> int = first_quadrupled(n, 1)"),
+        ("m", "tests.sysl",
+         "module m\n@tests\n\nquadruple(n: int) -> int = double(double(n))\n\n" +
+           "first_quadrupled[T](n: int, x: T) -> int = quadruple(n)"),
+      )
+
+      e should include("'m.first_quadrupled' is declared in a file that said '@tests'")
+      e should include("only another such file, or a '@test' function, may name it")
+      e should not include "'m.quadruple'"
+    }
+
+    "and an ordinary generic calling a helper is refused exactly as a plain function is" in {
+      errIn(
+        ("", "main.sysl", "import m.*\nprint(use_it(21, 1))"),
+        ("m", "m.sysl",
+         "module m\n\ndouble(n: int) -> int = n * 2\n\nuse_it[T](n: int, x: T) -> int = quadruple(n)"),
+        ("m", "tests.sysl", "module m\n@tests\n\nquadruple(n: int) -> int = double(double(n))"),
+      ) should include("'m.quadruple' is declared in a file that said '@tests'")
+    }
+  }
+
   /** A closure is lowered to a function of its own under a name no reader wrote, so the rule has to
    * follow the body it was written in rather than the name it was filed under. Both directions are
    * pinned here, because a fix that only widened the exemption would pass the first three and lose
