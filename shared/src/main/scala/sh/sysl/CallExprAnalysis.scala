@@ -302,11 +302,11 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
     // type's own name undefined: the one reading guaranteed not to help, since the name is defined
     // and is a type. Both spellings arrive as different nodes, one argument as an `Index` and a list
     // as a `TypeArgs`.
-    case Call(Field(Index(Ident(written), targ), sel), args) if genericTypeName(written) =>
-      typeArgsAtSelection(written, List(targ), sel, args)
+    case Call(Field(Index(h, targ), sel), args) if genericTypeHead(h).isDefined =>
+      typeArgsAtSelection(genericTypeHead(h).get, List(targ), sel, args)
 
-    case Call(Field(TypeArgs(Ident(written), targs), sel), args) if genericTypeName(written) =>
-      typeArgsAtSelection(written, targs, sel, args)
+    case Call(Field(TypeArgs(h, targs), sel), args) if genericTypeHead(h).isDefined =>
+      typeArgsAtSelection(genericTypeHead(h).get, targs, sel, args)
 
     case Call(Field(recv, mname), args) =>
       callMethod(recv, mname, args, expected)
@@ -364,11 +364,12 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
     // ordinary indexed value, and reading its author's subscript as a type argument would be worse
     // than any message.
     // Two cases rather than one alternative, because a pattern alternative may bind no variable.
-    case Call(Index(Ident(written), targ), args) if genericTypeName(written) =>
-      constructWritten(written, List(targ), args)
+    // A qualified name — `b.Pair[int, real](…)` — reaches it too, through `genericTypeHead`.
+    case Call(Index(h, targ), args) if genericTypeHead(h).isDefined =>
+      constructWritten(genericTypeHead(h).get, List(targ), args)
 
-    case Call(TypeArgs(Ident(written), targs), args) if genericTypeName(written) =>
-      constructWritten(written, targs, args)
+    case Call(TypeArgs(h, targs), args) if genericTypeHead(h).isDefined =>
+      constructWritten(genericTypeHead(h).get, targs, args)
 
     // A special form written with type arguments. **`va_arg[int](ap)` is the one this is for**, and
     // `reference/ffi.md § Variadic functions` named it as the strongest case for the syntax:
@@ -411,6 +412,26 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
   protected def genericTypeName(written: String): Boolean =
     lookupOpt(written).isEmpty && typeKey(written).exists(k => nominalTparams(k).nonEmpty)
 
+  /** The head a type-argument list is written on, when it names a **generic** nominal type — as the
+   * name to resolve it by, beside the spelling a message quotes.
+   *
+   * A bare name is both at once. A **qualified** one — `b.G` in `b.G[int](1)`, `b.Maybe[int].Just(1)`
+   * — is folded by `throughModule` into the key the module keeps it under, exactly as `b.G(1)` is
+   * when nothing is written in brackets, and keeps its dotted spelling for the reader: a key carries
+   * the module separator, which nothing in source may contain. Without this the qualified spelling
+   * fell past every form that reads a list as type arguments, to the general complaint about a
+   * callee that is not a name (`reference/generics.md § Writing the type arguments`: a list is
+   * written the same way on a function, "qualified or not", and on a constructor and a variant).
+   */
+  protected def genericTypeHead(head: Expr): Option[(String, String)] = head match
+    case Ident(written) => Option.when(genericTypeName(written))((written, written))
+    case _ =>
+      for
+        written <- chain(head) if written.length > 1
+        key     <- throughModule(head).collect { case Ident(k) => k }
+        if typeKey(key).exists(k => nominalTparams(k).nonEmpty)
+      yield (key, written.mkString("."))
+
   /** Whether `recv.mname` names a **declared method** of the receiver's own type, which is what
    * decides that a bracket after it is a type-argument list rather than a subscript.
    *
@@ -445,10 +466,11 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
    * name is not a constructor at all, so what it is owed is the sentence about variants rather than
    * a type it cannot build.
    */
-  private def constructWritten(written: String, targs: List[Expr], args: List[Expr]): TExpr = {
-    val ty = rt(NamedType(written, targs.map(typeArgWritten(_, atCall = true))))
+  private def constructWritten(head: (String, String), targs: List[Expr], args: List[Expr]): TExpr = {
+    val (name, written) = head
+    val ty = rt(NamedType(name, targs.map(typeArgWritten(_, atCall = true))))
 
-    typeKey(written) match
+    typeKey(name) match
       case Some(k) if structDecls.contains(k) => constructStruct(k, args, Some(ty))
       case _ =>
         err(s"'$written' is an enum, so it is not built by calling its name — a variant is what " +
@@ -471,16 +493,17 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
    * what its type arguments are read off.
    */
   protected def typeArgsAtSelection(
-      written: String,
+      head: (String, String),
       targs: List[Expr],
       sel: String,
       args: List[Expr],
   ): TExpr = {
-    val tname = typeKey(written).get
+    val (name, written) = head
+    val tname = typeKey(name).get
 
     if enumDecls.get(tname).exists(_.variants.exists(_.name == sel)) then
       constructVariant(Modules.qualify(Modules.moduleOf(tname), sel), args,
-        Some(rt(NamedType(written, targs.map(typeArgWritten(_, atCall = true))))), Some(tname))
+        Some(rt(NamedType(name, targs.map(typeArgWritten(_, atCall = true))))), Some(tname))
     else
       err(s"'$written' cannot be given type arguments where '$sel' is selected from it; write the " +
         s"type on what receives the result — 'var x: $written[…] = …' — and select '$sel' from the " +

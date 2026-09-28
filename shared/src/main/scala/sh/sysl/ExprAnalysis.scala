@@ -624,11 +624,11 @@ trait ExprAnalysis
     // The same selection with nothing called — `Maybe[int].Nothing`, a variant that carries no
     // payload. It reaches `fieldExpr` rather than any call form, so it needs the case said again
     // here; without it the reader gets the same `undefined name` about a type that is declared.
-    case Field(Index(Ident(written), targ), sel) if genericTypeName(written) =>
-      typeArgsAtSelection(written, List(targ), sel, Nil)
+    case Field(Index(h, targ), sel) if genericTypeHead(h).isDefined =>
+      typeArgsAtSelection(genericTypeHead(h).get, List(targ), sel, Nil)
 
-    case Field(TypeArgs(Ident(written), targs), sel) if genericTypeName(written) =>
-      typeArgsAtSelection(written, targs, sel, Nil)
+    case Field(TypeArgs(h, targs), sel) if genericTypeHead(h).isDefined =>
+      typeArgsAtSelection(genericTypeHead(h).get, targs, sel, Nil)
 
     case e: Field    => fieldExpr(e, expected)
     case e: TypeAttr => typeAttrExpr(e)

@@ -256,6 +256,95 @@ class WrittenTypeArgsTests extends AnyFreeSpec with CodegenSupport with RunSuppo
     }
   }
 
+  // Every head above, written through the module that declares it. A list is written "on a function,
+  // qualified or not", on a constructor and on a variant (`reference/generics.md § Writing the type
+  // arguments`), and a qualified name reaches whatever the unqualified one does
+  // (`reference/modules.md § Imports`). The struct and the variant fell past every form that reads a
+  // list as type arguments, to the complaint about a callee that is not a name.
+  "written on a qualified name" - {
+    val lib = "b.sysl" -> """|module b
+                             |
+                             |struct G[T]
+                             |    x: T
+                             |    y: string
+                             |
+                             |struct Pair[K, V]
+                             |    key: K
+                             |    value: V
+                             |
+                             |enum Maybe[T]
+                             |    Just(v: T)
+                             |    Nothing
+                             |
+                             |struct Box[T]
+                             |    v: T
+                             |    of(x: T) -> Self = Box(x)
+                             |
+                             |f[T](x: T) -> usize = sizeof(T)
+                             |""".stripMargin
+
+    "a constructor takes one argument" in {
+      runOf(lib, "main.sysl" -> """|import b
+                                   |
+                                   |val g = b.G[int](1, "s")
+                                   |print(g.x, g.y)
+                                   |""".stripMargin) shouldBe "1 s\n"
+    }
+
+    "a constructor takes a list" in {
+      runOf(lib, "main.sysl" -> """|import b
+                                   |
+                                   |val p = b.Pair[u8, real](7, 2.5)
+                                   |print(p.key, p.value, sizeof(b.Pair[u8, real]))
+                                   |""".stripMargin) shouldBe "7 2.5 16\n"
+    }
+
+    "a free function, which already did" in {
+      runOf(lib, "main.sysl" -> """|import b
+                                   |
+                                   |print(b.f[u8](3), b.f[i64](3))
+                                   |""".stripMargin) shouldBe "1 8\n"
+    }
+
+    "a variant carrying a payload" in {
+      runOf(lib, "main.sysl" -> """|import b
+                                   |
+                                   |val m = b.Maybe[int].Just(3)
+                                   |val n = m match
+                                   |    b.Maybe.Just(v) -> v
+                                   |    b.Maybe.Nothing -> 0
+                                   |print(n)
+                                   |""".stripMargin) shouldBe "3\n"
+    }
+
+    "a variant carrying nothing" in {
+      runOf(lib, "main.sysl" -> """|import b
+                                   |
+                                   |val m = b.Maybe[string].Nothing
+                                   |val n = m match
+                                   |    b.Maybe.Just(v) -> v
+                                   |    b.Maybe.Nothing -> "none"
+                                   |print(n)
+                                   |""".stripMargin) shouldBe "none\n"
+    }
+
+    "the fields are checked against it" in {
+      errOf(lib, "main.sysl" -> "import b\n\nval g = b.G[real](1, \"s\")\nprint(g.x)\n") should
+        include("'x' of 'b.G[real]' is real, but int was given")
+    }
+
+    // The refusals quote what the reader wrote, never the key with its module separator.
+    "an enum name applied to arguments is refused by its written name" in {
+      errOf(lib, "main.sysl" -> "import b\n\nval m = b.Maybe[int](1)\nprint(1)\n") should
+        include("'b.Maybe' is an enum")
+    }
+
+    "an associated function is still asked for on the binding" in {
+      errOf(lib, "main.sysl" -> "import b\n\nval x = b.Box[int].of(1)\nprint(x.v)\n") should
+        include("'b.Box' cannot be given type arguments where 'of' is selected from it")
+    }
+  }
+
   "a method" - {
     "takes its own type argument written out" in {
       run("""struct Counter
