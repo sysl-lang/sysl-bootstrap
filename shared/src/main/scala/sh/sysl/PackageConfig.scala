@@ -135,8 +135,8 @@ case class PackageConfig(
       * every manifest because reading is one function, and consulted only where the build being
       * configured is the one the manifest belongs to (`Main`).
       *
-      * A level clang does not have is refused when the file is read rather than passed on, which is
-      * the one thing this does that `--optimize` does not (`Toolchain.levels` argues the asymmetry).
+      * A level clang does not have is refused when the file is read rather than passed on, and the
+      * set is narrower than `--optimize`'s (`Toolchain.levels` argues the asymmetry).
       */
     optimization: Option[String] = None,
     /** The `lto` key — whether this project's builds ask for link-time optimization, and in which
@@ -435,12 +435,10 @@ object PackageConfig {
    *
    * ==Why it is refused here rather than by clang==
    *
-   * `--optimize` passes whatever was typed and lets clang rule on it, which is the right division for
-   * a flag: the person who typed it is watching the build that stops. A manifest is written once and
-   * read by everything afterwards, including a consumer who did not write it, so the same mistake
-   * arrives from inside clang with nothing naming the file or the key — and `sysl run`, whose second
-   * invocation replays a cached binary, would not even reach clang to produce that. The set is
-   * `Toolchain.levels`, which is the six every clang has.
+   * A manifest is written once and read by everything afterwards, including a consumer who did not
+   * write it, so a mistake left to clang would arrive with nothing naming the file or the key — and
+   * `sysl run`, whose second invocation replays a cached binary, would not even reach clang to
+   * produce that. The set is `Toolchain.levels`, which is the six every clang has.
    *
    * **A number is taken as well as a string**, because `optimization = 2` is what somebody writes
    * before remembering the quotes and it says exactly one thing. HOCON keeps a number's literal text,

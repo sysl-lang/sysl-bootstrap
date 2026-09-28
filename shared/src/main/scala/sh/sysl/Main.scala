@@ -153,6 +153,16 @@ private[sysl] def execute(asked: Config): Int = {
       "--features/--no-default-features each say something narrower about the same set — a " +
       "compilation cannot ask for both")
 
+  // **A level on the command line is refused here, before anything reaches the cache.** The level
+  // names the standard module's cache directory, which a build makes before clang sees the flag —
+  // and clang answers `-O7` with a warning nobody is shown rather than a refusal
+  // (`Toolchain.commandLineLevels`). Here because every building command comes through this line.
+  cfg.optimize.filterNot(Toolchain.commandLineLevels.contains) match
+    case Some(level) =>
+      return fail(s"'-O$level' names no level clang has — it is one of " +
+        Toolchain.commandLineLevels.mkString(", "))
+    case None =>
+
   val project = readPackageConfig(cfg.file) match
     case Left(err) => return fail(err)
     case Right(p)  => p
