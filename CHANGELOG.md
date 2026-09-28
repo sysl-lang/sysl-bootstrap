@@ -7,6 +7,68 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.148 — 2026-09-28
+
+**a dependency's capability clauses are enforced, and a bad -O level is refused**
+
+### Behaviour change: a dependency's modules are held to the capability rules
+
+A module's `@requires`, `@no_alloc`, `@no_os` and `@no_posix` clauses were recorded under the name its header wrote, while every edge of the module graph uses the package-qualified name. So a **path or git dependency's** clauses were never reached: a program on a `capabilities { posix = false }` target, or one that wrote `@no_posix`, could call into a dependency's `@requires(posix)` module and build. The clauses are now recorded under the qualified name, so:
+
+```
+error: this reaches 'demo.demo.probe', which requires 'posix', and 'aarch64-macos' does not provide it — a target's capabilities are what 'package.hocon' declares, so either this reference cannot be made on this machine or the config is understating it
+```
+
+and a dependency's own `@no_*` clauses now count against what it reaches, exactly as the standard module's and a `--lib` root's always did (`reference/modules.md § Capabilities are a module property`). **Code that built before may now be refused** — where it is, the refusal is the rule that was always written down, and it lands at the line in your program that reaches the gated module.
+
+`sysl run`'s cache key now includes what the target provides, so a run after `package.hocon` took a capability away is refused rather than answered by the binary the previous run built.
+
+### Behaviour change: a bad `-O` level is refused before anything is built
+
+`-O`/`--optimize` passed its level straight to clang. So `-Ononsense` made a cache directory before clang refused it, and `-O7`, `-O4` and `-O-1` were **not refused at all**: clang warns that it is using `-O3` instead, and a whole standard module was compiled and cached under a key naming a level that does not exist. The level is now checked first, against the manifest's six plus the two a command line may also ask for:
+
+```
+sysl: error: '-O7' names no level clang has — it is one of 0, 1, 2, 3, s, z, fast, g
+```
+
+**`-O4` used to build and is now refused.** `-Ofast` and `-Og` still work on the command line; a manifest's `optimization` key still takes only the six.
+
+### A variant two wildcard imports both offer is settled by the expected type
+
+`sysl.args` and `sysl.encoding` each have a variant named `Short`. With both imported by wildcard, a bare `Short(4)` was refused wherever it appeared. It is now resolved by the expected type — an annotated binding, an argument or a declared return — exactly as two enums of one module already were (`reference/types.md § A variant belongs to its enum`):
+
+```sysl
+import sysl.args.*
+import sysl.encoding.*
+
+val e: DecodeError = Short(4)      // sysl.encoding's
+flag(Short('v'))                   // an Arg parameter: sysl.args's
+```
+
+With nothing expected, or an expected type that is neither enum, it is still refused, naming both imports.
+
+### Fixed
+
+- **A generic helper in a `@tests` file calling another helper of the same file** (a bare-arrow parameter, or an explicit `[T]`) was refused with *"declared in a file that said '@tests' … only another such file, or a '@test' function, may name it"* — the instantiation was filed under a mangled name no table associated with the test file. Instantiations of a `@tests` generic are now test-only wherever the generic is, and an ordinary file calling one is refused **at its own call**, naming the declaration rather than the mangled instantiation.
+- **Every cache write is published by rename from a name of its own** — `sysl run`/`sysl test` binaries, the `.tests` list beside them, a fetched package's clone and its `.hash`, and the standard module's artifact. A concurrent run of the same program could previously execute a binary the linker was still writing, read half a test list, or have two fetches of one package delete each other's clone.
+- **A type spelling refused while parsing points at where it begins** — `[4]const int` at the `[`, `<>f32` at the `<`, `some Display` as a field at `some`, `weak sync int` at `weak` — instead of wherever the reader stopped (the `=` after it, or the next line).
+
+### Tests
+
+- `PackageCapabilityTests` (new): a path and a git dependency's `@requires(posix)` module, refused on a `posix = false` target and from a `@no_posix` module, reached on a target that provides it, and a `sysl run` after the config narrowed not answered by the run before it.
+- `OptimizeCliTests`: `-O7`, `-O-1` and a non-level refused before the cache is touched; `PackageConfigTests` reads the shared level list.
+- `ImportTests`: the two-wildcard variant settled by an annotated binding, an argument and a declared return; still refused with no or an unrelated expected type.
+- `TestFileTests`: bare-arrow and explicit-`[T]` `@tests` helpers run under a test build; an ordinary file calling such a generic is refused at its call; an ordinary generic calling a helper is still refused.
+- `RunCacheTests`, `FetchTests`: the rename-publish of binaries, test lists, clones and hashes.
+- `ParseDiagnosticTests`: five line:col cases for the anchored type refusals.
+- `Fetch.usingCache` is thread-local, like `RunCache.usingCache`, so `RunCacheTests` and `VendorTests` no longer race in one JVM.
+
+### Verification
+
+Full Native gate on the released tree (`./run-gate.sh` on dev `f2490e42`; the tag is that sha plus the version bump): **GATE: GREEN, 11,892 passed, 0 failed**, 46:29, no retries, no timeouts. Warnings census, cleaned: zero compile warnings; `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
+The macOS tarball was extracted into a bare prefix and run through a symlink under a fresh `HOME` before upload: `sysl --version` answers `sysl 0.0.148`, the standard module builds from the shipped `share/sysl/library`, `sysl doc` reaches `sysl-doc`. A path dependency whose module says `@requires(posix)` runs (`32`) from a project that provides POSIX, and is refused at the reaching line from one with `capabilities { posix = false }` and from a module that wrote `@no_posix`. `sysl build . -O7` is refused with the level list and no `-O7` cache directory exists afterwards. With `sysl.args.*` and `sysl.encoding.*` both imported, `val e: DecodeError = Short(4)` and `flag(Short('v'))` print `4 v`, and an unannotated `var s = Short(4)` is refused naming both imports.
+
 ## 0.0.147 — 2026-09-28
 
 **an imported generic struct no longer crashes the compiler**
