@@ -80,7 +80,22 @@ trait PatternParser extends ExprParser {
       wildcard ^^^ WildcardPattern |
       quotedRef ^^ EqPattern.apply |
       qualifiedName ^^ IdentPattern.apply |
-      patternLit ^^ LitPattern.apply
+      patternLit ^^ LitPattern.apply |
+      reservedPatternName ^^ IdentPattern.apply
+
+  /** A reserved word written where a pattern binds a name — `Some(loop) -> …`, `loop @ Some(x)`,
+   * `Point{x, loop}` — refused as the word it is rather than as `a pattern expected`.
+   *
+   * It is the last alternative, so every pattern that may begin with a reserved word (`true`,
+   * `false`) has already been read, and it excludes the two value words that are not patterns at
+   * all (`null`, `self`), which are not names anybody meant to bind. The lookahead is what may follow
+   * a sub-pattern, since `else` opens a match arm the same way a pattern does and is read above this.
+   */
+  private lazy val reservedPatternName: Parser[String] =
+    not(op("null") | op("self")) ~> reservedName("a name a pattern binds", patternFollow)
+
+  private lazy val patternFollow: Parser[Any] =
+    op(")") | op(",") | op("}") | op("->") | op("|") | op("@") | op("if") | op("=") | op("in")
 
   /** A backtick-quoted name in pattern position, `` `limit` `` or `` sdl.`SCANCODE_A` `` — a
    * reference rather than a binding.
@@ -130,7 +145,9 @@ trait PatternParser extends ExprParser {
     }
 
   protected lazy val fieldPattern: Parser[(String, Pattern)] =
-    ident ~ opt(op(":") ~> pattern) ^^ { case n ~ p => (n, p.getOrElse(IdentPattern(n))) }
+    (reservedName("a name a pattern binds", op(",") | op("}")) | ident) ~ opt(op(":") ~> pattern) ^^ {
+      case n ~ p => (n, p.getOrElse(IdentPattern(n)))
+    }
 
   /** A pattern literal: any scalar literal, or a negated numeric literal. */
   protected lazy val patternLit: Parser[Expr] =

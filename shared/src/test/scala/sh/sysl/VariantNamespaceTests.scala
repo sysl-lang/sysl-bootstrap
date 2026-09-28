@@ -626,6 +626,62 @@ class VariantNamespaceTests extends AnyFreeSpec with RunSupport with CodegenSupp
             |print(s.b)
             |""".stripMargin)) shouldBe "4\n"
     }
+
+    // `reference/modules.md § Visibility`: "A name a file may not reach is not a candidate for it."
+    // A sibling file's `private struct` is out of reach for every other file of the module, so it
+    // is passed over and the variant answers — it used to be reported as private instead.
+    "a sibling file's private struct is not a candidate either" - {
+      val sibling =
+        ("shapes", "other.sysl",
+          """module shapes
+            |private struct Circle
+            |    x: int
+            |private dummy(c: Circle) -> int = c.x
+            |""".stripMargin)
+
+      def shapes(tail: String) =
+        ("shapes", "shape.sysl",
+          """module shapes
+            |enum Shape
+            |    Circle(r: int)
+            |    Square(s: int)
+            |area(s: Shape) -> int = s match
+            |    Circle(r) -> r * r
+            |    Square(x) -> x * x
+            |""".stripMargin + tail)
+
+      "where the expected type names the enum" in {
+        runIn(sibling, shapes("unit_circle() -> Shape = Circle(1)\n"),
+          ("", "main.sysl", "import shapes.*\nprint(area(unit_circle()))\n")) shouldBe "1\n"
+      }
+
+      "and where nothing is expected at all" in {
+        runIn(sibling, shapes("two() -> int\n    val c = Circle(2)\n    area(c)\n"),
+          ("", "main.sysl", "import shapes.*\nprint(two())\n")) shouldBe "4\n"
+      }
+
+      "and from an importing module, where the struct was never a candidate" in {
+        runIn(sibling, shapes(""),
+          ("", "main.sysl", "import shapes.*\nval s: Shape = Circle(3)\nprint(area(s), area(Circle(1)))\n")) shouldBe
+          "9 1\n"
+      }
+
+      // Inside the file that declares the struct both are in reach, and the rule the rest of this
+      // group pins still holds: the struct with nothing expected, the variant where the expected
+      // type names its enum.
+      "while in the declaring file both are candidates, and the ordinary rule chooses" in {
+        runIn(
+          ("shapes", "other.sysl",
+            """module shapes
+              |private struct Circle
+              |    x: int
+              |raw() -> int = Circle(7).x
+              |wrapped() -> int = area(Circle(5))
+              |""".stripMargin),
+          shapes(""),
+          ("", "main.sysl", "import shapes.*\nprint(raw(), wrapped())\n")) shouldBe "7 25\n"
+      }
+    }
   }
 
   // The advice used to be "write it as 'Segment'", printed under a line already reading
@@ -717,6 +773,66 @@ class VariantNamespaceTests extends AnyFreeSpec with RunSupport with CodegenSupp
     // naming the enum: it is the conversion being complained about, which is now correct.
     "with the old refusal still reached where the alias really is what was named" in {
       err(aliased + "print(Eval(3))") should include("carries data")
+    }
+  }
+
+  // A module-qualified path is folded into the key its enum is filed under, and the node that comes
+  // back is analyzed again — so a head that was already a key used to be read as a path a second
+  // time. `sysl.text$ParseError` split at its dot is `sysl` and `text$ParseError`, `sysl` is a
+  // module, and the variant was refused as `undefined name 'sysl.text.24ParseError'`. A program's
+  // own `aa.text` never reproduced it, because no module is named `aa`; the standard library's
+  // root module is what made every one of its enums unreachable this way.
+  "a variant is reached through the module of a standard-library enum" - {
+    val describe =
+      """code(e: text.ParseError) -> int = e match
+        |    Empty -> 0
+        |    BadDigit(at) -> 100 + int(at)
+        |    Overflow -> 2
+        |    BadBase(b) -> 300 + b
+        |""".stripMargin
+
+    "carrying a payload, through the module's import" in {
+      run("import sysl.text\n" + describe +
+        """val e: text.ParseError = text.ParseError.BadBase(3)
+          |print(code(e), code(text.ParseError.BadDigit(7)))
+          |print(e)
+          |""".stripMargin) shouldBe "303 107\n3 is not a base between 2 and 36\n"
+    }
+
+    "carrying nothing, through the module's import" in {
+      run("import sysl.text\n" + describe +
+        """val e: text.ParseError = text.ParseError.Overflow
+          |print(code(e), code(text.ParseError.Empty))
+          |""".stripMargin) shouldBe "2 0\n"
+    }
+
+    "spelled in full under a wildcard import of the module" in {
+      run(
+        """import sysl.text.*
+          |val a: ParseError = sysl.text.ParseError.BadBase(5)
+          |val b = sysl.text.ParseError.Overflow
+          |print(a, b)
+          |""".stripMargin) shouldBe "5 is not a base between 2 and 36 value too large for its type\n"
+    }
+
+    "of another module's enum too" in {
+      run(
+        """import sysl.time
+          |val d = time.Weekday.Monday
+          |print(d == time.Weekday.Monday, d == time.Weekday.Friday)
+          |""".stripMargin) shouldBe "true false\n"
+    }
+
+    // The refusal for a name the enum genuinely lacks names the enum as a reader spells it, and
+    // never the key it is filed under nor an escaped copy of one.
+    "and a variant the enum lacks is named in the dotted spelling" in {
+      for src <- List("text.ParseError.Missing(3)", "text.ParseError.Missing") do
+        val out = err("import sysl.text\nval e: text.ParseError = " + src + "\nprint(e)\n")
+
+        out should include("sysl.text.ParseError")
+        out should include("Missing")
+        out should not include "$"
+        out should not include ".24"
     }
   }
 }
