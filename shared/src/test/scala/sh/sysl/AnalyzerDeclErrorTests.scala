@@ -431,4 +431,38 @@ class AnalyzerDeclErrorTests extends AnyFreeSpec with CodegenSupport with RunSup
   "a struct declared in the entry file is named bare" in {
     err("struct L\n    x: int\nprint(L(\"s\").x)") should include("'x' of 'L' is int, but string was given")
   }
+
+  // A call through a module to a function the module does not declare is resolved against the key
+  // `host$size`, and nothing about that key may reach the reader: the message quotes the name the
+  // way the call wrote it. Each case asserts the whole list, so a second complaint cannot hide.
+  "an undefined function reached through its module" - {
+    def errors(e: String): List[String] = e.linesIterator.filter(_.startsWith("error:")).toList
+
+    val host   = "host.sysl" -> "module host\n\nwidth() -> int = 3\n"
+    val nested = "b.sysl"    -> "module a.b\n\nwidth() -> int = 3\n"
+
+    "is named as written, with a dot rather than the key's separator" in {
+      errors(errOf(host, "main.sysl" -> "import host\n\nprint(host.size())\n")) shouldBe
+        List("error: undefined function 'host.size'")
+    }
+
+    "and the same when its result is used further" in {
+      errors(errOf(host, "main.sysl" -> "import host\n\nprint(host.size(1) + 1)\n")) shouldBe
+        List("error: undefined function 'host.size'")
+    }
+
+    "a nested module's path is dotted throughout" in {
+      errors(errOf(nested, "main.sysl" -> "import a.b\n\nprint(a.b.f())\n")) shouldBe
+        List("error: undefined function 'a.b.f'")
+    }
+
+    "and reached by its last segment it is still named by the whole path" in {
+      errors(errOf(nested, "main.sysl" -> "import a.b\n\nprint(b.f())\n")) shouldBe
+        List("error: undefined function 'a.b.f'")
+    }
+
+    "while one in the root module is named bare" in {
+      errors(err("width() -> int = 3\nprint(size())")) shouldBe List("error: undefined function 'size'")
+    }
+  }
 }
