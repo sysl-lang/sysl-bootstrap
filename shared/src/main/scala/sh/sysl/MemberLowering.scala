@@ -227,7 +227,14 @@ trait MemberLowering extends TypeResolution {
     // block supplying only the setter is supplying exactly what the trait left open.
     val inherited = home.fromTrait.toList.flatMap(tr => traitDecls.get(tr).toList.flatMap(_.methods))
 
-    for original <- pairSetters(members, home.label, inherited) do
+    // **Each member is refused on its own.** A member that collides with one the type already has,
+    // or breaks any other rule asked before it is filed, is reported and left out — and the rest of
+    // the list is still filed. Abandoning the whole list at the first refusal would leave every
+    // later member unregistered, so each call to one of them, a trait default's included, would be
+    // reported as a missing method: a second error for every member the block wrote correctly,
+    // landing wherever the call is, a dependency's source included. The member left out is the one
+    // that collided, so the name still reaches the member the type already had.
+    for original <- pairSetters(members, home.label, inherited) do recover(()):
       val m = callBounds(original.tparams, original.params).fold(original) { (tps, ps, bs) =>
         original.copy(tparams = tps, params = ps, bounds = original.bounds ++ bs).setPos(original.pos)
       }
