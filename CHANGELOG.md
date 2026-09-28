@@ -7,6 +7,29 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.146 — 2026-09-28
+
+**a closure inside a block reads that block's imports**
+
+### Behaviour change: a closure inside a block now reads that block's imports
+
+A closure's body, and a nested function's, is analyzed where it is written, but under a reset of the per-function state, and that reset used to replace the import stack with an empty one. So a name in the body was looked up through the **file's** imports alone.
+
+Two things followed, and the first one changes what an existing program means:
+
+- **A closure could call a different function from the code beside it.** With `import a.f` at the top of the file and `import b.f` inside a block, `f()` written directly in the block reached `b.f`, while `() -> f()` written on the next line reached `a.f`. It now reaches `b.f` in both places. A program that compiled before and relied on the closure seeing the file's `f` will now call the block's.
+- **A block import with no file import behind it left the name undefined inside a closure.** That program was refused, and now compiles.
+
+`FunctionBodies.analyzeNested` now starts the body with its own empty import scope on top of the enclosing blocks' stack, and restores the stack with the rest of the state afterwards. That is what `reference/modules.md § Where an import may stand` means by a block import lasting as long as the block's bindings: a closure written in the block is part of it, including one that is stored, passed as an argument, or returned and called after the block has closed.
+
+`ImportTests` gains ten cases: a named block import and a wildcard read from a closure; an enclosing block's import read from a nested block, and the inner block's import winning over the outer's; a closure passed as an argument; one stored and called after the importing block closed; one returned out of the function; a nested function declared below the import; and the file's imports still answering in a closure outside any importing block, and after one has closed. With the fix removed, the nine block cases fail and the file case passes.
+
+The reference page gains the sentence and a compiled example.
+
+### Verification
+
+Landing gate on dev `37d5fb57`: the full Native gate (`./run-gate.sh`), **GATE: GREEN, 11,837 passed, 0 failed**, 39:18. The release inherits it (dev = `37d5fb57` + the version bump). Warnings census, cleaned: `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository. The macOS tarball was extracted and run before upload: `sysl --version` answers `sysl 0.0.146`, a program builds and runs against the shipped `share/sysl/library`, and `sysl doc` reaches `sysl-doc`.
+
 ## 0.0.145 — 2026-09-27
 
 ### The standard library builds for WebAssembly again
