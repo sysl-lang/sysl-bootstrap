@@ -687,6 +687,11 @@ private[sysl] def execute(asked: Config): Int = {
       BuildInfo.version,
       target.name,
       s"${allocator.alloc}/${allocator.free}",
+      // **What the target provides, as the config narrowed it.** It decides whether a program
+      // compiles at all — a module reaching one that requires `posix` is refused where the config
+      // says `posix = false` — and nothing else in this key moves when only the config does, so a
+      // tree built once with POSIX was replayed, unrefused, after the config took POSIX away.
+      provides.toList.sorted.mkString(","),
       cfg.optimization,
       // **And everything asked of the optimizer beyond the level** (`Pipeline.key`). A cached
       // binary is replayed without reaching clang at all, so a run that added `--lto=thin` to an
