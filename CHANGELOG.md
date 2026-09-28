@@ -7,6 +7,66 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.149 — 2026-09-28
+
+**@test(ignore:), and publishing a file where somebody else is reading**
+
+### `@test(ignore: "why")` — a test that is compiled and checked, and not run
+
+A test for a known defect can now land with the assertion that *should* hold, rather than being left out or bent to match today's behaviour:
+
+```sysl
+@test(ignore: "the parser drops the second arm")
+keeps_both_arms()
+    assert(parse_arms(2) == 2, "both arms")
+```
+
+It composes with the rest of the annotation, in the order description, `should_trap`, `ignore` — `@test("both arms are kept", should_trap: "past the end", ignore: "why")` is one annotation.
+
+- **Checked, not run.** The function is compiled and type-checked like every test and held to the same shape (no parameters, no result), so it cannot quietly stop being valid code while it waits.
+- **The runner starts nothing for it** — not the test's process, not its module's `@setup`/`@teardown`; a module whose selected tests are all ignored runs no `_all` hooks. Its row reads `skip  <name>  ignored: <reason>`.
+- **The summary counts it**: `N passed, M failed, K ignored — Tms`. With no ignored test the line is exactly what it was, so anything that reads it keeps reading it.
+- **It fails nothing**: the exit status is unchanged, `--fail-fast` does not stop at it, and `--filter` selects it and reports it as ignored.
+- **The reason is required.** Bare `ignore`, a blank reason and a non-string reason are refused (*"'ignore' needs the reason the test is not run, written as a string — '@test(ignore: "the parser drops the second arm")'"*); `@ignore(...)` above a function is answered with the `@test` spelling; arguments out of order are told the order.
+
+Documented at `reference/attributes.md § A test may be written and not run`.
+
+### `sysl.fs`: publishing a file or a directory where somebody else is reading
+
+A path every reader computes the same way — a cache entry, a built binary, a config file — has no lock in front of it, so a file written there in place is half a file for as long as the write takes. The library now carries the pattern: write under a pending name beside the target, then `rename(2)` it on.
+
+```sysl
+pending_name(target: string) -> string
+publish_file(pending: string, target: string) -> Result[unit, IoError]
+publish_dir(pending: string, target: string) -> Result[unit, IoError]      // POSIX
+write_bytes_atomic(path: string, bytes: []const u8) -> Result[unit, IoError]
+write_text_atomic(path: string, text: string) -> Result[unit, IoError]
+```
+
+- A failure removes the pending entry and answers the first error.
+- A directory publish that loses a race — a finished directory is already at the target — removes its own copy and **succeeds**, since what the caller wanted is there.
+- The pending name is the target plus a per-process token and a per-call count. The token comes from `getentropy` on a POSIX host, with the wall clock standing in where the kernel will not answer and on a hosted target that is not POSIX. No process id is involved.
+- `copy_dir_all`'s documentation used to point a caller wanting atomicity at `make_temp_dir` plus a rename, which fails across filesystems; it now points at `pending_name` and `publish_dir`.
+
+Documented at `library/fs.md § Writing where somebody else is reading`.
+
+### Note: caches rebuild once
+
+The `sysl run`/`sysl test` cache's test list gained two fields (the ignore reason), so a cache written by an older compiler reads as absent and is rebuilt. `AstCodec` moved from version 58 to 59, since the test attribute is in the untyped tree a `.syslib` carries, so an older standard-module artifact or package `.syslib` is rebuilt on first use. Both are automatic and announced on stderr; nothing needs doing.
+
+### Tests
+
+- `TestAttributeTests`: the ignore form alone, after a description and after `should_trap`; bare, blank and non-string reasons refused; `@ignore` answered with the `@test` spelling; out-of-order arguments told the order; an ignored test still type-checked and still held to what a test may be.
+- `TestRunnerTests`, `TestCliTests`: an ignored test starts no process and no hooks (a body that would fail or would return under `should_trap` included), its `skip … ignored:` row, the summary with and without ignored tests, `--fail-fast` and `--filter`.
+- `RunCacheTests`, `AstCodecTests`: the reason round-trips through the sidecar and the codec; a sidecar written before `ignore` existed reads as no cache.
+- `library/sysl/fs/publish_tests.sysl`: eight `@test` cases — a pending name beside its target, unique names under one token, an atomic write leaving only the file, replacing a longer file with no old tail, a write into a missing directory leaving nothing, a failed publish removing its pending file, a directory race whose second publisher succeeds, and a directory refused onto a file. `StdSelfTests.floor` 844 → 875.
+
+### Verification
+
+Full Native gate on the released tree (`./run-gate.sh` on dev `905c86fb`; the tag is that sha plus the version bump): **GATE: GREEN, 11,914 passed, 0 failed**, 93:10, no retries, no timeouts. Warnings census, cleaned: zero compile warnings; `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
+The macOS tarball was extracted into a bare prefix and run through a symlink under a fresh `HOME` before upload: `sysl --version` answers `sysl 0.0.149`, the standard module builds from the shipped `share/sysl/library`, and `sysl doc` reaches `sysl-doc`. A package whose tests include `@test(ignore: "waiting on something")` prints `skip  later    ignored: waiting on something` and `1 passed, 0 failed, 1 ignored`. A program that calls `write_text_atomic` twice on one path and reads it back prints the second text.
+
 ## 0.0.148 — 2026-09-28
 
 **a dependency's capability clauses are enforced, and a bad -O level is refused**
