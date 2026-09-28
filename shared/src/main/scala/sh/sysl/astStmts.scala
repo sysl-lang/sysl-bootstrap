@@ -634,8 +634,8 @@ case class FuncDecl(
       * word from the file header's `@requires(…)`.
       */
     needs: List[String] = Nil,
-    /** `@noinline` — the definition must survive as a call (`reference/attributes.md § @noinline and
-      * @cold`). It lowers to LLVM's bare `noinline` function attribute.
+    /** `@noinline` — the definition must survive as a call (`reference/attributes.md § @noinline, @inline
+      * and @cold`). It lowers to LLVM's bare `noinline` function attribute.
       *
       * It is what lets a library keep a rare path out of a hot one. A `private` function lowers to
       * `internal`, so with a single call site the inliner folds it back into its caller and the
