@@ -187,6 +187,18 @@ class GrammarTests extends AnyFreeSpec with Matchers {
       styled("val x = area(3.0)", "area") should contain("entity.name.function.call.sysl")
     }
 
+    /** **A combining mark continues a name in the lexer, so it has to continue one here** — `café`
+      * spelled `e` + U+0301 is one identifier, and a class without `\p{M}` stops at the mark and
+      * styles `Cafe` while leaving the accent and everything after it bare.
+      */
+    "styles a name carrying a combining mark as one token" in {
+      val decomposed = "Cafés"
+      styled(s"struct $decomposed", decomposed) should contain("entity.name.type.sysl")
+      styled(s"val c: $decomposed = q", decomposed) should contain("entity.name.type.sysl")
+      styled(s"café(x: int) -> int = x", "café") should contain("entity.name.function.sysl")
+      styled("val x = café(3)", "café") should contain("entity.name.function.call.sysl")
+    }
+
     /** **A name whose FIRST letter is not ASCII is styled where the rule names a declaration and not
       * where it depends on case**, and that is a limit of the engine rather than a decision.
       *
