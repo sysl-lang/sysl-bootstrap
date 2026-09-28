@@ -345,4 +345,118 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
     }
   }
 
+  /** Two runs of one program compute one slot, so what lands there has to arrive whole: a binary
+   * linked straight into the slot could be executed half-written by the other run, and a test list
+   * written in place decodes cleanly to fewer tests than the suite has. `Publish` is how every cache
+   * write arrives, and these are its promises.
+   */
+  "publishing into the cache" - {
+    "a pending name is beside its target, and no two calls share one" in {
+      val dir    = createTempDirectory("sysl-publish-")
+      val target = s"$dir/slot"
+      val names  = List.fill(200)(Publish.pending(target))
+
+      names.flatMap(Project.parentOf).distinct shouldBe List(dir)
+      names.foreach(n => Project.basename(n) should startWith("slot."))
+      names.distinct.length shouldBe names.length
+    }
+
+    "and none shared between threads either" in {
+      val target = s"${createTempDirectory("sysl-publish-")}/slot"
+      val names  = new java.util.concurrent.ConcurrentLinkedQueue[String]
+      val pool   = List.fill(8)(new Thread(() => for _ <- 1 to 250 do names.add(Publish.pending(target))))
+
+      pool.foreach(_.start())
+      pool.foreach(_.join())
+      names.size shouldBe 2000
+      names.toArray.distinct.length shouldBe 2000
+    }
+
+    "a published file is exactly what was written, and nothing is left beside it" in {
+      val dir = createTempDirectory("sysl-publish-")
+
+      Publish.text(s"$dir/slot.tests", "one\ntwo\n") shouldBe Right(())
+      readFile(s"$dir/slot.tests") shouldBe "one\ntwo\n"
+      listFiles(dir).map(Project.basename).toList shouldBe List("slot.tests")
+    }
+
+    "publishing over an entry replaces the whole of it" in {
+      val dir = createTempDirectory("sysl-publish-")
+
+      Publish.text(s"$dir/slot", "a much longer first version of the entry\n")
+      Publish.text(s"$dir/slot", "short\n") shouldBe Right(())
+      readFile(s"$dir/slot") shouldBe "short\n"
+      listFiles(dir).length shouldBe 1
+    }
+
+    "a rename keeps the executable bit the linker gave the pending file" in {
+      val dir     = createTempDirectory("sysl-publish-")
+      val pending = Publish.pending(s"$dir/app")
+
+      writeFile(pending, "#!/bin/sh\necho kept\n")
+      exec(Seq("chmod", "+x", pending)).exitCode shouldBe 0
+      Publish.file(pending, s"$dir/app") shouldBe Right(())
+      isExecutable(s"$dir/app") shouldBe true
+      exists(pending) shouldBe false
+    }
+
+    "a publish that cannot land leaves no pending file behind" in {
+      val dir     = createTempDirectory("sysl-publish-")
+      val pending = Publish.pending(s"$dir/app")
+
+      writeFile(pending, "x")
+      // A directory with something in it cannot be replaced by a file, so the rename refuses.
+      createDirectories(s"$dir/app/occupied")
+      Publish.file(pending, s"$dir/app").isLeft shouldBe true
+      exists(pending) shouldBe false
+      listFiles(dir).map(Project.basename).toList shouldBe List("app")
+    }
+
+    "a text that cannot be written leaves nothing either" in {
+      val dir = createTempDirectory("sysl-publish-")
+
+      Publish.text(s"$dir/no/such/directory/slot", "x").isLeft shouldBe true
+      listFiles(dir).length shouldBe 0
+    }
+
+    "a reader racing a writer sees one whole version or the other, never a prefix" in {
+      val target  = s"${createTempDirectory("sysl-publish-")}/slot.tests"
+      val short   = "s\n" * 10
+      val long    = "l\n" * 200000
+      val seen    = new java.util.concurrent.ConcurrentLinkedQueue[String]
+      val writing = new java.util.concurrent.atomic.AtomicBoolean(true)
+
+      Publish.text(target, short)
+
+      val writer = new Thread(() =>
+        for i <- 1 to 40 do Publish.text(target, if i % 2 == 0 then short else long)
+        writing.set(false))
+      val reader = new Thread(() =>
+        while writing.get do
+          val text = readFile(target)
+          if text != short && text != long then seen.add(s"${text.length} bytes"))
+
+      writer.start(); reader.start()
+      writer.join(); reader.join()
+      seen.toArray.toList shouldBe Nil
+    }
+
+    // `RunCache`'s redirect alone: this test reaches no `Fetch` call, so there is nothing for
+    // `Fetch.usingCache` to move here.
+    val cache = createTempDirectory("sysl-runcache-")
+
+    "a kept test build puts the binary in its slot and the list beside it" in RunCache.usingCache(cache) {
+      val key     = "k"
+      val slot    = RunCache.reserve(key).get
+      val linked  = Publish.pending(slot)
+      val suite   = List(TTest("m$t", "a test", false, None, "m.sysl", 1))
+
+      writeFile(linked, "binary")
+      RunCache.keep(key, linked, slot, Some(suite)) shouldBe Right(())
+      readFile(slot) shouldBe "binary"
+      RunCache.tests(key).map(p => RunCache.decode(readFile(p))) shouldBe Some(Some(suite))
+      listFiles(s"$cache/sysl/run").map(Project.basename).toList.sorted shouldBe List("k", "k.tests")
+    }
+  }
+
 }

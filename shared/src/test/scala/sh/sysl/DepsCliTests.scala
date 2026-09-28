@@ -18,11 +18,12 @@ import io.github.edadma.cross_platform.*
  *
  * ==The graph is resolved rather than the driver being driven, for all but two cases==
  *
- * `Fetch.usingCache` is process-global and its own scaladoc says only one suite may hold it, which
- * `PackageBuildTests` does. So the cases with git dependencies in them build a graph against a cache
- * of their own — the same `Resolve.graph` the driver calls, one frame lower — and hand it to the
- * printer. The two that go through `execute` are the ones that need no cache at all: a project with
- * no dependencies, and one whose dependency is a directory.
+ * `Fetch.usingCache` redirects per thread, so holding it here would not collide with another suite
+ * holding it on its own thread — but this suite still has no reason to drive the whole compiler for
+ * a claim that is about the graph, not the build. So the cases with git dependencies in them build a
+ * graph against a cache of their own — the same `Resolve.graph` the driver calls, one frame lower —
+ * and hand it to the printer. The two that go through `execute` are the ones that need no cache at
+ * all: a project with no dependencies, and one whose dependency is a directory.
  */
 class DepsCliTests extends PackageCacheSupport {
 

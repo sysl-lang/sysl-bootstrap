@@ -191,8 +191,7 @@ class OptimizeCliTests extends AnyFreeSpec with Matchers {
       finally deleteFile(path)
     }
 
-    // A level clang has no answer for is clang's to report, and the driver's job is to fail rather
-    // than to carry on having quietly dropped it.
+    // A level clang has no answer for stops the build rather than being quietly dropped.
     "a level clang does not have stops the build" in {
       assume(Toolchain.clangAvailable, "clang not available")
 
@@ -206,6 +205,55 @@ class OptimizeCliTests extends AnyFreeSpec with Matchers {
 
         status.should(not).be(0)
         errs.toString should include("clang")
+      finally deleteFile(path)
+    }
+
+    // The standard module is cached under a key that names the level, so a level refused only by
+    // clang had already made its cache directory by then — and `7` and `-1` were not refused at all:
+    // clang warns that it is using `-O3` instead, the warning is never shown, and a whole standard
+    // module was built and kept under a key that says something else. So the level is refused
+    // before anything reaches the cache, on every command that would build the standard module.
+    for (command, level) <- List("build" -> "7", "run" -> "-1", "test" -> "nonsense",
+                                 "emit-llvm" -> "q", "build-lib" -> "9x")
+    do
+      s"'$command -O$level' is refused before the standard module's cache is touched" in {
+        val root = if command == "build-lib" then dependency("") else createTempDirectory("sysl-optimize-")
+        val file =
+          if command == "build-lib" then root
+          else
+            val source = s"$root/main.sysl"
+            writeFile(source, "main()\n    print(1)\n\n@test(\"one\")\none() =\n    assert(1 == 1)\n")
+            source
+
+        val dir = LibraryArtifact.stdDefault(Target.default, level = level).stripSuffix(
+          s"/std${LibraryArtifact.extension}")
+
+        Fetch.removeTree(dir)
+
+        try
+          val errs  = new java.io.ByteArrayOutputStream
+          val state = Console.withErr(errs)(cli(Config(command = command, file = file,
+            optimize = Some(level), output = Option.when(command == "build")(s"$root/out"))))
+
+          state.should(not).be(0)
+          errs.toString should include(s"'-O$level' names no level clang has")
+          isDirectory(dir) shouldBe false
+        finally Fetch.removeTree(dir)
+      }
+
+    // `fast` and `g` are clang's too, and the command line is where a person reaching for one gets
+    // it — so they are not refused, only the levels clang does not have.
+    "and the levels clang has beyond the manifest's six are not refused" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      val path = createTempFile("sysl-optimize-", ".sysl")
+      writeFile(path, "main()\n    print(1)\n")
+
+      try
+        for level <- List("fast", "g") do
+          withClue(level) {
+            cli(Config(command = "run", file = path, noStdLib = true, optimize = Some(level))) shouldBe 0
+          }
       finally deleteFile(path)
     }
   }

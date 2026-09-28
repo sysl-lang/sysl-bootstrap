@@ -33,7 +33,7 @@ object Fetch {
    * reasoning, and the same root, as the standard module's prebuilt artifact.
    */
   def cacheRoot(projectRoot: String = ""): Either[String, String] =
-    override_.map(Right(_)).getOrElse {
+    override_.get.map(Right(_)).getOrElse {
       val vendored = s"$projectRoot/${Project.VendorDir}"
 
       if projectRoot.nonEmpty && isDirectory(vendored) then Right(vendored)
@@ -44,21 +44,29 @@ object Fetch {
     }
 
 
-  private var override_ : Option[String] = None
+  /** **Per thread rather than per process** — the same reasoning as `RunCache`'s equivalent: a suite
+   * that redirects the package cache runs beside other suites driving the same compiler (`sysl test`
+   * inside sbt runs suites in parallel), and a process-wide override would be visible to every one of
+   * them. A thread-local is exact — the redirect covers only the calls the redirecting thread makes.
+   */
+  private val override_ = new ThreadLocal[Option[String]] {
+    override def initialValue(): Option[String] = None
+  }
 
   /** Runs `body` against a cache somewhere else — **for tests only**.
    *
    * A suite that drives the whole driver has no other way to keep its packages out of the machine's
    * own cache, and putting them there would make a test's answer depend on what had been built
-   * before it. The same shape and the same caveat as `AutoImport.including`: it is process-global,
-   * so only one suite may use it, and that suite's tests must not run in parallel with each other.
+   * before it. The same shape as `AutoImport.including`: only the redirecting thread sees it, so a
+   * suite's own tests still must not run in parallel *with each other* — a thread-local is per thread,
+   * not per test.
    */
   private[sysl] def usingCache[T](path: String)(body: => T): T = {
-    val saved = override_
+    val saved = override_.get
 
-    override_ = Some(path)
+    override_.set(Some(path))
     try body
-    finally override_ = saved
+    finally override_.set(saved)
   }
 
   /** Where this coordinate at this version sits, fetched or not. */
@@ -113,19 +121,22 @@ object Fetch {
 
   /** Clones at the tag, checks what arrived, and only then puts it where the build will read it.
    *
-   * The clone goes to a sibling directory and is moved into place, so nothing ever reads a directory
-   * that is half a package: an interrupted fetch leaves the partial one, which is refused on the
-   * next run rather than compiled. It is a sibling rather than a temporary somewhere else so that
-   * the move is a rename within one filesystem instead of a copy that can fail halfway.
+   * The clone goes to a sibling directory and is moved into place (`Publish`), so nothing ever
+   * reads a directory that is half a package. It is a sibling rather than a temporary somewhere else
+   * so that the move is a rename within one filesystem instead of a copy that can fail halfway.
+   *
+   * **The sibling's name is this fetch's own.** It was a fixed `<dir>.partial`, which two fetches of
+   * one package at one version — two builds starting at once on a cold cache — both cleared and
+   * cloned into, each deleting the other's clone under it. Now each clones apart, and the one that
+   * finishes second finds a whole package already in place, discards its copy and carries on.
    */
   private def clone(dep: Dependency, coordinate: String, version: Version, dir: String,
                     sums: Sums): Either[String, String] = {
-    val partial = s"$dir.partial"
+    val partial = Publish.pending(dir)
     val url     = Dependency.cloneUrl(coordinate)
 
     try
       Project.parentOf(dir).foreach(Project.makeDirectories)
-      removeTree(partial)
 
       Console.err.println(s"fetching $coordinate ${version.tag}")
 
@@ -139,17 +150,21 @@ object Fetch {
         removeTree(partial)
         return Left(s"cannot fetch $coordinate ${version.tag} from $url:\n${result.stderr.trim}")
 
-      for
-        hash <- Hashing.treeHash(partial)
-        _    <- sums.hashOf(coordinate, version) match
-                  case Some(want) if want != hash =>
-                    removeTree(partial)
-                    Left(mismatch(dep, coordinate, version, want, hash))
-                  case _ => Right(())
-      yield
-        writeFile(s"$dir.hash", s"$hash\n")
-        moveFile(partial, dir)
-        hash
+      val fetched =
+        for
+          hash <- Hashing.treeHash(partial)
+          _    <- sums.hashOf(coordinate, version) match
+                    case Some(want) if want != hash => Left(mismatch(dep, coordinate, version, want, hash))
+                    case _ => Right(())
+          // The hash first, so a directory is never there without what vouches for it — a reader
+          // finding one without the other refuses it (`verify`).
+          _    <- Publish.text(s"$dir.hash", s"$hash\n")
+          _    <- Publish.directory(partial, dir)
+        yield hash
+
+      // Whichever step refused, the clone is this fetch's alone and nobody else will clear it.
+      if fetched.isLeft then removeTree(partial)
+      fetched
     catch
       case e: Exception =>
         removeTree(partial)

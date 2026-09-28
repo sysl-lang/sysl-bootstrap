@@ -231,6 +231,34 @@ class ParseDiagnosticTests extends AnyFreeSpec with ParseSupport {
     }
   }
 
+  // A type the grammar reads whole and then refuses is refused as a whole, so the caret is on its
+  // first token. Raised after the read, each of these landed wherever the type reader stopped: the
+  // '=' after the type, or the start of the next line when the type ended one.
+  "a refused type spelling is reported where the type begins, not where the reader stopped" - {
+
+    "an array written 'const' points at its '['" in {
+      refusal("main()\n    val a: [4]const int = [1, 2, 3, 4]\n") shouldBe
+        ("'const' says a view refuses writes, and an array is storage rather than a view of one — " +
+          "read-only storage is declared with 'val', as 'val name: [N]int'", "<input>:2:12")
+    }
+
+    "and one nested in a slice points at its own '[', not the slice's" in {
+      refusal("main()\n    val b: []const [4]const u8 = []\n")._2 shouldBe "<input>:2:20"
+    }
+
+    "a vector with no lane count points at its '<'" in {
+      refusal("main()\n    val v: <>f32 = [1.0]\n")._2 shouldBe "<input>:2:12"
+    }
+
+    "a 'some' outside a result points at the 'some', not at the next line" in {
+      refusal("struct S\n    x: some Display\nprint(1)\n")._2 shouldBe "<input>:2:8"
+    }
+
+    "and 'weak sync' points at the 'weak', not at the type after it" in {
+      refusal("main()\n    val w: weak sync int = 1\n")._2 shouldBe "<input>:2:12"
+    }
+  }
+
   "what the change did not do" - {
 
     // The rename fires only where a rule refused *without consuming anything*. A rule that got

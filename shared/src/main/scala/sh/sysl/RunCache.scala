@@ -95,11 +95,11 @@ object RunCache {
    * counted entries in the developer's real cache would be measuring their morning, and one that
    * wrote into it would be spending their disk.
    */
-  /** **Per thread rather than per process**, which `Fetch`'s equivalent is not and which this one
-   * has to be: a suite that redirects the cache so it can count what lands in it runs beside other
-   * suites driving the same compiler, and a process-wide override would collect their entries as
-   * well as its own. A thread-local is exact — the redirect covers the calls the redirecting thread
-   * makes and no others — and costs a compilation nothing, since the ordinary answer is `None`.
+  /** **Per thread rather than per process**, the same shape `Fetch`'s equivalent uses: a suite that
+   * redirects the cache so it can count what lands in it runs beside other suites driving the same
+   * compiler, and a process-wide override would collect their entries as well as its own. A
+   * thread-local is exact — the redirect covers the calls the redirecting thread makes and no
+   * others — and costs a compilation nothing, since the ordinary answer is `None`.
    */
   private val override_ = new ThreadLocal[Option[String]] {
     override def initialValue(): Option[String] = None
@@ -133,12 +133,14 @@ object RunCache {
   /** The program built for this key, where one is there and is still executable. */
   def hit(key: String): Option[String] = slot(key).filter(p => isFile(p) && isExecutable(p))
 
-  /** Where to link, for a build that is about to happen: a path in the cache with the directory
+  /** Where a build that is about to happen will be kept: a path in the cache with the directory
    * already made, or nothing where there is no cache to write into.
    *
-   * The build links **straight into the slot** rather than to a temporary that is copied afterwards.
-   * A copy would have to reproduce the executable bit, which is a thing `cross_platform` does not
-   * offer and a thing to get wrong once per platform; linking there gets it from the linker.
+   * **The build does not link at this path.** It links at `Publish.pending(slot)`, beside it, and
+   * renames the result into the slot once the linker has finished ([[keep]]). Linking straight into
+   * the slot let a second `sysl run` of the same program find a file that was executable and not yet
+   * whole, and run it. The rename keeps what linking there was for: the executable bit comes from
+   * the linker and travels with the file, rather than being reproduced by a copy.
    */
   def reserve(key: String): Option[String] =
     slot(key).flatMap { path =>
@@ -147,6 +149,21 @@ object RunCache {
         evict(path, newest(path))
         Some(path)
       catch case _: Exception => None
+    }
+
+  /** A binary linked at `linked` (a `Publish.pending` name) put into `slot`, and — for a test build —
+   * its test list beside it, each by rename so no reader sees half of either.
+   *
+   * **The binary goes first**, so a hit that finds both finds a pair that was made together. The
+   * list is published the same way rather than written in place, because half a list is not an
+   * error: it decodes cleanly to fewer tests, and the suite would run fewer than it has and say it
+   * had passed. A list that cannot be kept costs a rebuild next time and nothing else. A binary that
+   * cannot be put in place has been removed with its pending name, so that is the one refusal.
+   */
+  def keep(key: String, linked: String, slot: String,
+           tests: Option[List[TTest]] = None): Either[String, Unit] =
+    Publish.file(linked, slot).map { _ =>
+      for list <- tests; sidecar <- this.tests(key) do Publish.text(sidecar, encode(list))
     }
 
   /** Entries past [[Keep]] that are also older than [[Stale]], removed. A failure here is not a

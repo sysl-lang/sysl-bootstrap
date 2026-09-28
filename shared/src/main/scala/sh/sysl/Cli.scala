@@ -94,7 +94,8 @@ import scopt.OParser
  * reaches every object a build produces rather than only the link. The default is `1` rather than
  * nothing at all, which is what it used to be: `-O0` is a different instruction selector, it is the
  * mode a back end's own suite covers least, and a miscompile was found living there
- * (`Toolchain.defaultOptimization` has the case). A level clang does not have is clang's to report.
+ * (`Toolchain.defaultOptimization` has the case). A level clang does not have is refused before the
+ * build begins (`Toolchain.commandLineLevels` says why clang is not left to report it).
  *
  * **A project states its own level in its manifest** (`PackageConfig.optimization`), and the flag
  * beats the key for the invocation that carries it: a project built at `2` is still profiled at `0`
