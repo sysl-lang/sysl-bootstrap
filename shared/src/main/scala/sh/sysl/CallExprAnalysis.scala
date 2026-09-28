@@ -77,9 +77,16 @@ trait CallExprAnalysis extends ExprCoercion with MemberExprAnalysis with RawStor
     // names a built-in they were not reaching for and sends them to count arguments. The conversion
     // is reachable in any case wherever the name is not a declaration's: that is what `u8(x)` is,
     // and a module that takes the name still spells it `u8` in every other file.
+    //
+    // **The declared type is asked about with `typeInScope`, quietly, for the reason the variant arm
+    // below gives**: this guard is the compiler asking itself whether a type claims the name, and
+    // `typeKey` raises on a candidate the site may not name. A sibling file's `private struct Circle`
+    // made every `Circle(1)` in the rest of its module a refusal naming that struct, before the
+    // variant arm was ever reached — where `reference/modules.md § Visibility` says a name a file may
+    // not reach is not a candidate for it.
     case Call(Ident(name), args) if lookupOpt(name).isEmpty &&
         (tsubst.contains(name) ||
-          (typeKey(name).isEmpty && !funcInScope(name) && scalarType(name).isDefined)) =>
+          (!typeInScope(name) && !funcInScope(name) && scalarType(name).isDefined)) =>
       convertAt(typeNamed(name).get, name, args)
 
     // A bare variant name in call position — `Circle(3)` — with the enum taken from the expected
