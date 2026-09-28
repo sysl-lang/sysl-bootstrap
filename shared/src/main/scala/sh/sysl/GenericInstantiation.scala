@@ -523,9 +523,14 @@ trait GenericInstantiation extends ConstFolding {
     // stand for a list of types`). It is `[N]T` reading a length off an argument one kind up:
     // nothing is written at the call, and a tuple of three parts and a tuple of five each solve the
     // one parameter.
+    //
+    // It writes only where the map is silent, as a scalar parameter does: where one pack stands in
+    // two parameters, the first argument fixes its arity and a later one that disagrees is the
+    // argument blamed, rather than the last argument quietly re-binding the pack and the first being
+    // reported against an arity nobody wrote there.
     case TupleType(List(PackType(n)), _) =>
       actual match
-        case t: Type.Tuple if tparams(n) => sub(n) = Type.Pack(t.targs)
+        case t: Type.Tuple if tparams(n) => sub.getOrElseUpdate(n, Type.Pack(t.targs))
         case _                           => ()
     case TupleType(parts, _) =>
       actual match

@@ -212,9 +212,48 @@ class TypePackTests extends AnyFreeSpec with RunSupport with CodegenSupport {
             |print(zip_len((1, 2), (3, 4)))""".stripMargin) shouldBe "2\n"
     }
 
-    "and refuses two arities for one pack" in {
-      err("""zip_len[..A: Display](x: (..A), y: (..A)) -> usize = A.len
-            |print(zip_len((1, 2), (3, 4, 5)))""".stripMargin) should not be empty
+    /** A pack binds from the first argument that names it and the later one is blamed, exactly as
+     * `same[T](x: T, y: T)` handed `(1, "a")` blames `y`: unification writes only where the map is
+     * silent. The pack used to be re-bound by every argument, so the last one won and the first was
+     * reported against an arity it never had.
+     */
+    "and refuses two arities for one pack, blaming the later argument" in {
+      val e = err("""zip_len[..A: Display](x: (..A), y: (..A)) -> usize = A.len
+                    |print(zip_len((1, 2), (3, 4, 5)))""".stripMargin)
+      e should include("'y' of 'zip_len' is (int, int), but (int, int, int) was given")
+      e should include("<input>:2:24")
+    }
+
+    "binds a pack from the first of three arguments, whichever later one disagrees" in {
+      val src = """zip3[..A: Display](x: (..A), y: (..A), z: (..A)) -> usize = A.len
+                  |""".stripMargin
+      run(src + "print(zip3((1, 2), (3, 4), (5, 6)))") shouldBe "2\n"
+      val third = err(src + "print(zip3((1, 2), (3, 4), (5, 6, 7)))")
+      third should include("'z' of 'zip3' is (int, int), but (int, int, int) was given")
+      third should include("<input>:2:29")
+      val second = err(src + "print(zip3((1, 2), (3, 4, 5), (6, 7)))")
+      second should include("'y' of 'zip3' is (int, int), but (int, int, int) was given")
+      second should include("<input>:2:21")
+    }
+
+    "binds a pack beside a scalar parameter by the same rule" in {
+      val src = """tagged[T: Display, ..A: Display](k: T, x: (..A), j: T, y: (..A)) -> usize = A.len
+                  |""".stripMargin
+      run(src + """print(tagged("k", (1, true), "j", (2, false)))""") shouldBe "2\n"
+      err(src + """print(tagged("k", (1, 2), "j", (3, 4, 5)))""") should include(
+        "'y' of 'tagged' is (int, int), but (int, int, int) was given")
+      err(src + """print(tagged("k", (1, 2), 7, (3, 4)))""") should include(
+        "'j' of 'tagged' is string, but int was given")
+    }
+
+    /** Where the first argument is not a tuple at all it binds nothing, so the pack is read off the
+     * second and the first is the one blamed — for being no tuple, which is the true complaint.
+     */
+    "blames a first argument that is no tuple, against the arity the second gave" in {
+      val e = err("""zip_len[..A: Display](x: (..A), y: (..A)) -> usize = A.len
+                    |print(zip_len(5, (3, 4)))""".stripMargin)
+      e should include("'x' of 'zip_len' is (int, int), but int was given")
+      e should include("<input>:2:15")
     }
 
     /** Every part is counted, so the parts of a tuple rendered through the pack's block are retained
