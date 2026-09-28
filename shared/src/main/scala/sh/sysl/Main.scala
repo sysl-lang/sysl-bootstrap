@@ -791,13 +791,16 @@ private[sysl] def execute(asked: Config): Int = {
   // `@ghost` erasure, because the predicates a specification is written in are exactly what the
   // lowering drops.
   if cfg.command == "prove" then
-    return prove(cfg, librarySources ::: sources, libraryTrees, target, std, provides, paths)
+    return prove(cfg, sources, libraryTrees, target, std, provides, paths, packages, librarySources)
 
   // `emit-typed` stops at the same typed tree `prove` does, for the same reason: no pruning, no
   // lowering, no codegen. It differs only in what it does with the tree once it has it — print it,
-  // rather than translate it to WhyML.
+  // rather than translate it to WhyML. Both are handed the compilation's parts exactly as
+  // `compiledWith` is below — `packages`, and the handed sources apart from the program's own — so
+  // a dependency has the name here that it has in the build.
   if cfg.command == "emit-typed" then
-    return emitTyped(cfg, librarySources ::: sources, libraryTrees, target, std, provides, paths)
+    return emitTyped(cfg, sources, libraryTrees, target, std, provides, paths, packages,
+      librarySources)
 
   // One compilation, whatever the subcommand does with it. The notes come back beside the IR
   // rather than being printed from inside the compiler, which has no business writing to a console.
