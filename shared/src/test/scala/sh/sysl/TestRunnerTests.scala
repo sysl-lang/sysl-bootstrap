@@ -421,6 +421,91 @@ class TestRunnerTests extends AnyFreeSpec with CodegenSupport with TestFramework
     }
   }
 
+  "'ignore' compiles a test and does not run it" - {
+    // Each body below fails if it runs, so a pass here is the absence of a run rather than a run
+    // that happened to succeed.
+    "an ignored test whose body would fail is reported as ignored, with its reason" in {
+      val ran = outcomes("""@test(ignore: "the parser drops the second arm")
+                           |known_bug() =
+                           |    assert(false, "this must not run")
+                           |""".stripMargin)
+
+      ran.map(o => (o.test.display, o.ignored, o.detail)) shouldBe
+        List(("known_bug", Some("the parser drops the second arm"), None))
+      ran.head.passed shouldBe true
+    }
+
+    // Composed with `should_trap`, a run that returns would be the failure — so the only way this
+    // stays clean is for nothing to have been started.
+    "composed with 'should_trap', a body that returns is not run either" in {
+      val ran = outcomes("""@test(should_trap: "past the end", ignore: "the check is not emitted yet")
+                           |unchecked() =
+                           |    assert(true, "returns")
+                           |""".stripMargin)
+
+      ran.map(o => (o.ignored, o.detail)) shouldBe List((Some("the check is not emitted yet"), None))
+    }
+
+    // `@setup` fails here, and every test it brackets would be reported against it — except the one
+    // that was never run, because there was no process for the hook to run in.
+    "an ignored test starts no process, its module's hooks included" in {
+      val ran = outcomes("""@setup
+                           |up() =
+                           |    assert(false, "setup ran")
+                           |
+                           |@setup_all
+                           |boot() =
+                           |    assert(false, "setup_all ran")
+                           |
+                           |@test(ignore: "waiting")
+                           |t() =
+                           |    assert(true, "fine")
+                           |""".stripMargin)
+
+      ran.map(o => (o.test.display, o.ignored, o.detail)) shouldBe List(("t", Some("waiting"), None))
+    }
+
+    "the tests beside an ignored one run as they always did" in {
+      verdicts("""@test
+                 |first() =
+                 |    assert(false, "down")
+                 |
+                 |@test(ignore: "waiting")
+                 |second() =
+                 |    assert(false, "never")
+                 |
+                 |@test
+                 |third() =
+                 |    assert(true, "up")
+                 |""".stripMargin).view.mapValues(_.isDefined).toMap shouldBe
+        Map("first" -> true, "second" -> false, "third" -> false)
+    }
+
+    "a filter selects an ignored test, and it is reported as ignored" in {
+      val ran = outcomes("""@test(ignore: "waiting")
+                           |alpha() =
+                           |    assert(false, "never")
+                           |
+                           |@test
+                           |beta() = 0
+                           |""".stripMargin, TestRunner.Options(filter = Some("alph")))
+
+      ran.map(o => (o.test.display, o.ignored)) shouldBe List(("alpha", Some("waiting")))
+    }
+
+    "fail-fast does not stop at an ignored test" in {
+      val ran = outcomes("""@test(ignore: "waiting")
+                           |first() =
+                           |    assert(false, "never")
+                           |
+                           |@test
+                           |second() = 0
+                           |""".stripMargin, TestRunner.Options(failFast = true))
+
+      ran.map(_.test.display) shouldBe List("first", "second")
+    }
+  }
+
   "each test runs in a process of its own" - {
     // The reason the runner does not call them in a loop: the first trap would end the run, and
     // every test after it would have no verdict rather than a failing one.
@@ -556,6 +641,22 @@ class TestRunnerTests extends AnyFreeSpec with CodegenSupport with TestFramework
 
     "a filtered run says how many it did not run" in {
       TestRunner.rendered(ran, 5, ran.length) should include("running 2 tests of 7")
+    }
+
+    // Other readers parse this line — the self-hosted compiler's own runner pins it, and pages on
+    // the site quote it — so a run that ignored nothing prints exactly what it always printed.
+    "a run that ignored nothing keeps the summary it always had" in {
+      TestRunner.rendered(ran, 0, ran.length) should include("\n1 passed, 1 failed — 3ms\n")
+    }
+
+    "an ignored test gets a row naming its reason, and the summary counts it" in {
+      val withIgnored = ran :+ TestRunner.Outcome(
+        TTest("c", "waits", false, None, "m.sysl", 11, ignored = Some("the parser drops the second arm")),
+        None, "", 0, Some("the parser drops the second arm"))
+      val text = TestRunner.rendered(withIgnored, 0, withIgnored.length)
+
+      text should include("  skip  waits   ignored: the parser drops the second arm\n")
+      text should include("\n1 passed, 1 failed, 1 ignored — 3ms\n")
     }
 
     "tests are shown under the file they were written in, in source order" in {

@@ -699,8 +699,15 @@ case class ExportAttr(symbol: Option[String]) extends Positioned
  * that does not hold each end in `llvm.trap`, which no program survives to report anything about.
  * `expected` narrows it to a run whose output holds a given substring, which is what tells a trap
  * from the *right* trap where the failure prints something first.
+ *
+ * `ignored` is the reason a test is written and not run — `@test(ignore: "…")`. The function is
+ * compiled and checked like any other, so a test for a known defect stays valid code while it waits;
+ * only the run is withheld, and the runner reports it with the reason rather than leaving it out.
+ * The reason is required, because an ignored test nobody can say why is how one comes to be
+ * forgotten.
  */
-case class TestAttr(display: Option[String], shouldTrap: Boolean, expected: Option[String]) extends Positioned
+case class TestAttr(display: Option[String], shouldTrap: Boolean, expected: Option[String],
+                    ignored: Option[String] = None) extends Positioned
 
 /** Which of the four moments under `sysl test` a hook function is called at
  * (`reference/attributes.md § The hooks a module may write`).

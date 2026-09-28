@@ -44,8 +44,14 @@ object TestRunner {
    * the hook standing in for the test: a hook that runs alone has no test to hang its failure on,
    * and what a row needs is a name, a file and a line, which a hook has. So the report grows a row
    * rather than a second kind of row, and the header counts the tests instead of counting the rows.
+   *
+   * **An ignored test is one of these too, and it never ran**: `ignored` holds the reason, `detail`
+   * is absent and `millis` is zero. It fails nothing — the exit status reads `passed`, which an
+   * ignored test does not spoil — and it is counted apart in the summary, so a run that ignored
+   * something says so in the line a reader looks at last.
    */
-  case class Outcome(test: TTest, detail: Option[String], output: String, millis: Long) {
+  case class Outcome(test: TTest, detail: Option[String], output: String, millis: Long,
+                     ignored: Option[String] = None) {
     def passed: Boolean = detail.isEmpty
   }
 
@@ -191,7 +197,9 @@ object TestRunner {
     emit(header(tests.length, filtered))
 
     for (_, group) <- byModule(tests) if !stop do
-      val hooks = group.head.hooks
+      // A module whose selected tests are all ignored runs nothing at all, its `_all` hooks
+      // included: they bracket the runs, and there are none to bracket.
+      val hooks = if group.forall(_.ignored.isDefined) then THooks() else group.head.hooks
 
       // `@setup_all` is a run of its own, before anything else in the module. Where it does not come
       // back it gets a row of its own and the module's tests do not run: there is no test to hang
@@ -207,7 +215,9 @@ object TestRunner {
           if opts.failFast then stop = true
         case _ =>
           for t <- group if !stop do
-            val outcome = one(exe, t)
+            // An ignored test starts no process — not the test's, and not its `@setup` or
+            // `@teardown` either, since those bracket a run and there is none.
+            val outcome = t.ignored.fold(one(exe, t))(why => Outcome(t, None, "", 0, Some(why)))
 
             done += outcome
             streamOne(outcome)
@@ -410,7 +420,13 @@ object TestRunner {
   private def row(o: Outcome, width: Int): String = {
     val out = new StringBuilder
 
-    out ++= s"  ${if o.passed then "ok  " else "FAIL"}  ${o.test.display.padTo(width, ' ')}  ${o.millis}ms\n"
+    o.ignored match
+      case Some(why) =>
+        // The reason stands where the time would, on the row itself: an ignored test has no run to
+        // time, and the reason is the one thing its reader is owed.
+        out ++= s"  skip  ${o.test.display.padTo(width, ' ')}  ignored: $why\n"
+      case None =>
+        out ++= s"  ${if o.passed then "ok  " else "FAIL"}  ${o.test.display.padTo(width, ' ')}  ${o.millis}ms\n"
 
     for detail <- o.detail do
       out ++= s"        $detail\n"
@@ -420,12 +436,21 @@ object TestRunner {
     out.toString
   }
 
-  /** The closing line: how many of the rows passed, against how long the whole run took. */
+  /** The closing line: how many of the rows passed, against how long the whole run took — and how
+   * many were ignored, where any were.
+   *
+   * **The ignored count appears only when it is not zero**, so a run that ignored nothing prints the
+   * line it always has, `N passed, M failed — Tms`, and whatever reads that line keeps reading it.
+   * Where something was ignored the count is never left out: an ignored test is a known defect
+   * waiting, and the summary is the line a reader is sure to see.
+   */
   private def summary(outcomes: List[Outcome]): String = {
-    val failed = outcomes.count(!_.passed)
-    val total  = outcomes.map(_.millis).sum
+    val failed  = outcomes.count(!_.passed)
+    val ignored = outcomes.count(_.ignored.isDefined)
+    val total   = outcomes.map(_.millis).sum
+    val skipped = if ignored > 0 then s", $ignored ignored" else ""
 
-    s"\n${outcomes.length - failed} passed, $failed failed — ${total}ms\n"
+    s"\n${outcomes.length - failed - ignored} passed, $failed failed$skipped — ${total}ms\n"
   }
 
   private def fail(msg: String): Int = {

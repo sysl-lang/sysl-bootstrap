@@ -196,7 +196,7 @@ object RunCache {
 
   /** The **test list** beside a cached test binary, which is the one thing `sysl test` needs that
    * the executable does not carry: what to call, what to report it as, whether it should trap and
-   * what it should have printed on its way out.
+   * what it should have printed on its way out, and why it is not run where it is ignored.
    *
    * A sidecar rather than a second cache, so the two cannot come apart — the binary is written
    * first, and a hit needs both.
@@ -210,7 +210,8 @@ object RunCache {
   def encode(ts: List[TTest]): String =
     ts.map(t => (List(t.func, t.display, t.shouldTrap.toString, t.expected.getOrElse(""),
                       if t.expected.isDefined then "1" else "0", t.file, t.line.toString) :::
-                 HookKind.values.toList.flatMap(k => hookFields(t.hooks, k)))
+                 HookKind.values.toList.flatMap(k => hookFields(t.hooks, k)) :::
+                 List(t.ignored.getOrElse(""), if t.ignored.isDefined then "1" else "0"))
              .mkString("\u0000")).mkString("\n")
 
   /** One hook as three fields, empty where the module declared none. Three flat fields rather than
@@ -224,7 +225,8 @@ object RunCache {
 
   def decode(text: String): Option[List[TTest]] =
     val lines = text.linesIterator.filter(_.nonEmpty).toList
-    val marks = 6 + HookKind.values.length * 3
+    val marks = 8 + HookKind.values.length * 3
+    val ig    = 7 + HookKind.values.length * 3
 
     Option.when(lines.forall(_.count(_ == '\u0000') == marks))(
       lines.map { line =>
@@ -239,7 +241,7 @@ object RunCache {
         }
 
         TTest(f(0), f(1), f(2) == "true", Option.when(f(4) == "1")(f(3)), f(5), f(6).toInt,
-              THooks.of(hooks))
+              THooks.of(hooks), Option.when(f(ig + 1) == "1")(f(ig)))
       },
     )
 

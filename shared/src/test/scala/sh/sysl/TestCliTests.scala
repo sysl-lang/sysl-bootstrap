@@ -118,6 +118,26 @@ class TestCliTests extends AnyFreeSpec with Matchers {
       out should include("1 passed, 1 failed")
     }
 
+    // End to end: the ignored test's body would fail if it ran, the exit status says nothing failed,
+    // and both the row and the summary say something was ignored and why.
+    "an ignored test is reported with its reason, counted, and fails nothing" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      val (status, out, _) = ran(Config(command = "test", file = program(
+        """@test
+          |holds() =
+          |    assert(1 + 1 == 2, "two")
+          |
+          |@test(ignore: "the parser drops the second arm")
+          |known_bug() =
+          |    assert(false, "this must not run")
+          |""".stripMargin)))
+
+      status shouldBe 0
+      out should include("skip  known_bug  ignored: the parser drops the second arm")
+      out should include("1 passed, 0 failed, 1 ignored —")
+    }
+
     "a filter narrows both the run and the count" in {
       assume(Toolchain.clangAvailable, "clang not available")
 

@@ -59,6 +59,32 @@ class TestAttributeTests extends AnyFreeSpec with CodegenSupport with RunSupport
         TestAttr(Some("an index past the end is refused"), true, Some("past the end"))
     }
 
+    "'ignore' carries the reason the test is not run" in {
+      attrOf("""@test(ignore: "the parser drops the second arm")
+               |t() = 0
+               |""".stripMargin) shouldBe TestAttr(None, false, None, Some("the parser drops the second arm"))
+    }
+
+    "'ignore' follows a description" in {
+      attrOf("""@test("two arms are both kept", ignore: "the parser drops the second arm")
+               |t() = 0
+               |""".stripMargin) shouldBe
+        TestAttr(Some("two arms are both kept"), false, None, Some("the parser drops the second arm"))
+    }
+
+    // Ignoring is about whether the test runs; `should_trap` is about what a run means. A test for a
+    // check that does not fire yet is exactly the pair, so they compose rather than exclude.
+    "'ignore' follows 'should_trap', with or without its text" in {
+      attrOf("""@test(should_trap, ignore: "the check is not emitted yet")
+               |t() = 0
+               |""".stripMargin) shouldBe TestAttr(None, true, None, Some("the check is not emitted yet"))
+
+      attrOf("""@test("an index past the end is refused", should_trap: "past the end", ignore: "not yet")
+               |t() = 0
+               |""".stripMargin) shouldBe
+        TestAttr(Some("an index past the end is refused"), true, Some("past the end"), Some("not yet"))
+    }
+
     "a test may be private, which is what tests of a module's own internals need" in {
       val decls = parsed("""@test
                            |private t() = 0
@@ -315,6 +341,48 @@ class TestAttributeTests extends AnyFreeSpec with CodegenSupport with RunSupport
       err("""@test(should_trap
             |t() = 0
             |""".stripMargin) should include("there is no ')' here to end them")
+    }
+
+    // The reason is the whole of what an ignored test tells its reader, so a form without one is
+    // refused rather than read as an ignore with nothing to say — the rot this form exists to avoid.
+    "'ignore' with no reason is refused, and says what to write" in {
+      err("""@test(ignore)
+            |t() = 0
+            |""".stripMargin) should include(
+        "'ignore' needs the reason the test is not run, written as a string — " +
+          "'@test(ignore: \"the parser drops the second arm\")'")
+    }
+
+    "'ignore' after a description with no reason is the same refusal" in {
+      err("""@test("what holds", ignore)
+            |t() = 0
+            |""".stripMargin) should include("'ignore' needs the reason the test is not run")
+    }
+
+    "a reason that is not a string is the same refusal" in {
+      err("""@test(ignore: 3)
+            |t() = 0
+            |""".stripMargin) should include("'ignore' needs the reason the test is not run")
+    }
+
+    "an empty reason says nothing, and is refused like a missing one" in {
+      err("""@test(ignore: "  ")
+            |t() = 0
+            |""".stripMargin) should include("'ignore' needs the reason the test is not run")
+    }
+
+    "'@ignore' on its own is answered with the spelling that works" in {
+      err("""@ignore("the parser drops the second arm")
+            |t() = 0
+            |""".stripMargin) should include("an ignored test is written '@test(ignore: \"why it is not run\")'")
+    }
+
+    // The order is fixed — description, 'should_trap', 'ignore' — so a list written the other way
+    // round is told what the order is rather than that a parenthesis went missing somewhere.
+    "the arguments out of order are told the order" in {
+      err("""@test(ignore: "not yet", should_trap)
+            |t() = 0
+            |""".stripMargin) should include("the description, 'should_trap' and 'ignore' go between parentheses, in that order")
     }
 
     "one attribute to a declaration" in {
@@ -579,6 +647,29 @@ class TestAttributeTests extends AnyFreeSpec with CodegenSupport with RunSupport
         case Left(e)  => e should include("undefined name 'undefined_name'")
         case Right(_) => fail("expected the broken test to be reported")
       }
+    }
+
+    // The point of ignoring rather than deleting or commenting out: the test goes on being checked
+    // against the code it will one day run on, so it cannot quietly stop compiling while it waits.
+    "an ignored test is still checked, in a test build and in an ordinary one" in {
+      val src = """@test(ignore: "waiting on a fix")
+                  |t() =
+                  |    print(undefined_name)
+                  |""".stripMargin
+
+      err(src) should include("undefined name 'undefined_name'")
+
+      Compiler.compileTests(List(Source("<input>", src)), Nil) match {
+        case Left(e)  => e should include("undefined name 'undefined_name'")
+        case Right(_) => fail("expected the broken ignored test to be reported")
+      }
+    }
+
+    "an ignored test is still held to what a test may be" in {
+      err("""@test(ignore: "waiting on a fix")
+            |takes_one(n: int)
+            |    assert(n > 0, "positive")
+            |""".stripMargin) should include("a '@test' function takes no parameters")
     }
   }
 }
