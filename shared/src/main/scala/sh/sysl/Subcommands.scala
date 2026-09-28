@@ -62,7 +62,7 @@ private def weave(cfg: Config, sources: List[Source]): Int =
 
                   if code != 0 then code else write(s"$dir/${Weave.documentName(src.name)}", html)
                 }
-              catch case e: Exception => fail(s"cannot write $dir: ${e.getMessage}")
+              catch case IoFailure(e) => fail(s"cannot write $dir: ${IoFailure.describe(e)}")
 
 /** `tangle`: the program a literate source holds, with the prose stripped (`Literate.tangle`).
  *
@@ -90,15 +90,13 @@ private def tangle(cfg: Config, sources: List[Source]): Int =
             case None       => stdout(text); 0
 
 /** A rendered thing written where it was asked for, or the reason it could not be. */
-private def write(path: String, text: String): Int = {
-  Project.parentOf(path).foreach(Project.makeDirectories)
-
+private def write(path: String, text: String): Int =
   try
+    Project.parentOf(path).foreach(Project.makeDirectories)
     writeFile(path, text)
     Console.err.println(s"wrote $path")
     0
-  catch case e: Exception => fail(s"cannot write $path: ${e.getMessage}")
-}
+  catch case IoFailure(e) => fail(s"cannot write $path: ${IoFailure.describe(e)}")
 
 /** `sysl build-c` — the static archive and the C header a C project is handed (`reference/ffi.md §
  * @export`).

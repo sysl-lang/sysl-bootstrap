@@ -284,7 +284,7 @@ private def collectPackages(graph: Resolve.Graph, os: Os): Either[String, Packag
   // the only part worth having.
   catch
     case e: SelectionError => Left(e.getMessage)
-    case e: Exception      => Left(s"cannot read a package: ${e.getMessage}")
+    case e: Exception      => Left(s"cannot read a package: ${IoFailure.describe(e)}")
 }
 
 private def readSums(root: String): Either[String, Sums] = {
@@ -293,14 +293,14 @@ private def readSums(root: String): Either[String, Sums] = {
   if !isFile(path) then Right(Sums.empty)
   else
     try Sums.read(readFile(path))
-    catch case e: Exception => Left(s"cannot read $path: ${e.getMessage}")
+    catch case e: Exception => Left(s"cannot read $path: ${IoFailure.describe(e)}")
 }
 
 private def writeSums(root: String, sums: Sums): Unit =
   try writeFile(s"$root/${Sums.FileName}", sums.render)
   catch
     case e: Exception =>
-      Console.err.println(s"warning: cannot write ${Sums.FileName}: ${e.getMessage}")
+      Console.err.println(s"warning: cannot write ${Sums.FileName}: ${IoFailure.describe(e)}")
 
 /** The project root: the directory the driver was given, or the one holding the file it was given.
  *
@@ -395,7 +395,7 @@ private def readPackageConfig(file: String): Either[String, PackageConfig] = {
       // or from anywhere else. This is also what a `--lib` root's own manifest goes through, since
       // both roads read a dependency the same way (`libDependencies` calls this too).
       yield config.resolvingLocalPaths(root)
-    catch case e: Exception => Left(s"cannot read $path: ${e.getMessage}")
+    catch case e: Exception => Left(s"cannot read $path: ${IoFailure.describe(e)}")
 }
 
 /** `sysl deps` — the resolved graph, and who asked for each version (`reference/packages.md § Which
@@ -452,7 +452,7 @@ private def vendorAll(cfg: Config, project: PackageConfig, roots: List[String]):
   val dir  = s"$root/${Project.VendorDir}"
 
   try Project.makeDirectories(dir)
-  catch case e: Exception => return fail(s"cannot make '$dir': ${e.getMessage}")
+  catch case e: Exception => return fail(s"cannot make '$dir': ${IoFailure.describe(e)}")
 
   val listed =
     for

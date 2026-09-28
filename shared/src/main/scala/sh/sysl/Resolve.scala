@@ -600,7 +600,7 @@ object Resolve {
           // levels deep still resolves its `path` entries against the directory it was written in.
           config.resolvingLocalPaths(root)
         }
-      catch case e: Exception => Left(s"cannot read $path: ${e.getMessage}")
+      catch case e: Exception => Left(s"cannot read $path: ${IoFailure.describe(e)}")
   }
 
   /** Every item, or the first thing wrong — the same shape the config parser uses, and for the same

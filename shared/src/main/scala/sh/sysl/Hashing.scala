@@ -69,7 +69,7 @@ object Hashing {
     }
 
     val found = try walk(root)
-    catch case e: Exception => return Left(s"cannot read $root: ${e.getMessage}")
+    catch case e: Exception => return Left(s"cannot read $root: ${IoFailure.describe(e)}")
 
     // A name holding a newline would be indistinguishable from two entries once the listing is a
     // text file, and the digest utility's own output has the same problem one step earlier. Refused
@@ -128,7 +128,7 @@ object Hashing {
   private def run(command: List[String], batch: List[String]): Either[String, List[String]] = {
     val result =
       try exec(command ::: batch)
-      catch case e: Exception => return Left(s"cannot run '${command.head}': ${e.getMessage}")
+      catch case e: Exception => return Left(s"cannot run '${command.head}': ${IoFailure.describe(e)}")
 
     if result.exitCode != 0 then
       return Left(s"'${command.head}' failed (exit ${result.exitCode}):\n${result.stderr.trim}")
@@ -151,7 +151,7 @@ object Hashing {
     try
       writeFile(file, text)
       digestsOf(List(file)).map(_.head)
-    catch case e: Exception => Left(s"cannot hash: ${e.getMessage}")
+    catch case e: Exception => Left(s"cannot hash: ${IoFailure.describe(e)}")
     finally Project.discard(file)
   }
 

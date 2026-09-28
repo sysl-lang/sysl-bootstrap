@@ -452,10 +452,15 @@ object Project {
    * into. A tolerance written against the first alone passes its own test and still fails in the
    * field, because the field is `makeDirectories` below, where the directory already there is one
    * another compilation has already put its artifact in.
+   *
+   * **A refusal that stands is raised as an `IoFailure.Refusal` naming the directory and the cause**,
+   * because the filesystem's own exception usually names neither: `FileAlreadyExistsException:
+   * p4/main.sysl` for a file sitting where a directory was wanted, and on Native a bare `IOException`
+   * for an unwritable parent.
    */
   def makeDirectory(dir: String): Unit =
     try createDirectory(dir)
-    catch case e: IOException => if !isDirectory(dir) then throw e
+    catch case e: IOException => if !isDirectory(dir) then throw IoFailure.cannotMake(dir, e)
 
   /** Makes a directory and everything above it, tolerating a compilation racing for the same one.
    *

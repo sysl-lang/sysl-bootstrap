@@ -276,7 +276,7 @@ object Stdlib {
   private def load(path: String, target: Target, allocator: Allocator): Either[String, Resolved] = {
     val bytes =
       try readBytes(path)
-      catch case e: Exception => return Left(s"cannot read $path: ${e.getMessage}")
+      catch case e: Exception => return Left(s"cannot read $path: ${IoFailure.describe(e)}")
 
     LibraryArtifact.metadataOf(path, bytes).flatMap(meta =>
       read(path, meta, target, allocator).map((std, symbols) => Resolved(std, symbols, Some(path))))

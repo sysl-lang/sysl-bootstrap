@@ -49,7 +49,7 @@ object Publish {
     catch
       case e: Exception =>
         Project.discard(pending)
-        Left(s"cannot put '$target' in place: ${e.getMessage}")
+        Left(s"cannot put '$target' in place: ${IoFailure.describe(e)}")
 
   /** `text` written to `target` by way of a pending name, so a reader never sees a prefix of it. */
   def text(target: String, text: String): Either[String, Unit] = {
@@ -61,7 +61,7 @@ object Publish {
     catch
       case e: Exception =>
         Project.discard(staged)
-        Left(s"cannot write '$target': ${e.getMessage}")
+        Left(s"cannot write '$target': ${IoFailure.describe(e)}")
   }
 
   /** A directory built at `pending`, renamed onto `target` — unless another writer got there first.
@@ -79,5 +79,5 @@ object Publish {
         Fetch.removeTree(pending)
 
         if isDirectory(target) then Right(())
-        else Left(s"cannot put '$target' in place: ${e.getMessage}")
+        else Left(s"cannot put '$target' in place: ${IoFailure.describe(e)}")
 }

@@ -168,7 +168,7 @@ object Fetch {
     catch
       case e: Exception =>
         removeTree(partial)
-        Left(s"cannot fetch $coordinate ${version.tag}: ${e.getMessage}")
+        Left(s"cannot fetch $coordinate ${version.tag}: ${IoFailure.describe(e)}")
   }
 
   /** The one diagnostic that says the fetch was not the package that was promised.

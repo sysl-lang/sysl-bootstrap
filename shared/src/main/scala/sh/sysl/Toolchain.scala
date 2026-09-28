@@ -799,7 +799,7 @@ object Toolchain {
    */
   def archive(objects: List[String], out: String, ar: String): Either[String, Unit] = {
     try if exists(out) then deleteFile(out)
-    catch case e: Exception => return Left(s"cannot replace $out: ${e.getMessage}")
+    catch case e: Exception => return Left(s"cannot replace $out: ${IoFailure.describe(e)}")
 
     val result = exec(ar :: "rcs" :: out :: objects)
 

@@ -72,8 +72,18 @@ private def subcommand(name: String, rest: Seq[String]): Int =
 /** What a subcommand does, and the exit status it leaves. Visible to the package so a test can drive
  * the driver rather than re-implementing it — the error paths here are the ones a user meets, and
  * none of them is reachable from the compiler's own API.
+ *
+ * **This is the boundary where a filesystem failure becomes an answer** (`IoFailure`): every path a
+ * command reads or writes is the user's or the environment's, so an `-o` under a file, an unwritable
+ * cache or a manifest nobody may write ends in `sysl: error: …` and status 1 rather than a stack
+ * trace. Only an IO failure is caught — anything else reaching here is a compiler bug and escapes as
+ * one.
  */
-private[sysl] def execute(asked: Config): Int = {
+private[sysl] def execute(asked: Config): Int =
+  try executeCommand(asked)
+  catch case IoFailure(e) => fail(IoFailure.describe(e))
+
+private def executeCommand(asked: Config): Int = {
   // **A program in a package's `examples/` compiles against that package**, with nothing on the
   // command line saying so (`owningPackage`). It is added as a source root rather than handled
   // anywhere special, so everything downstream — the manifest's own `dependencies`, the C it
@@ -116,7 +126,7 @@ private[sysl] def execute(asked: Config): Int = {
       try Project.collect(cfg.file, Project.Every)
       catch
         case e: SelectionError => return fail(e.getMessage)
-        case e: Exception      => return fail(s"cannot read ${cfg.file}: ${e.getMessage}")
+        case e: Exception      => return fail(s"cannot read ${cfg.file}: ${IoFailure.describe(e)}")
 
     if rendered.isEmpty then return fail(s"${cfg.file} holds no sysl source files")
 
@@ -139,7 +149,7 @@ private[sysl] def execute(asked: Config): Int = {
 
     val source =
       try Source(cfg.file, readFile(cfg.file))
-      catch case e: Exception => return fail(s"cannot read ${cfg.file}: ${e.getMessage}")
+      catch case e: Exception => return fail(s"cannot read ${cfg.file}: ${IoFailure.describe(e)}")
 
     return SyslParser.parse(source, target) match
       case Left(diagnostic) => report(diagnostic)
@@ -223,7 +233,7 @@ private[sysl] def execute(asked: Config): Int = {
     try Project.collect(cfg.file, Some(target.os))
     catch
       case e: SelectionError => return fail(e.getMessage)
-      case e: Exception      => return fail(s"cannot read ${cfg.file}: ${e.getMessage}")
+      case e: Exception      => return fail(s"cannot read ${cfg.file}: ${IoFailure.describe(e)}")
 
   if ownSources.isEmpty then return fail(s"${cfg.file} holds no sysl source files")
 
@@ -416,7 +426,7 @@ private[sysl] def execute(asked: Config): Int = {
   // to clean up on the paths below that refuse the compilation.
   val unpacked =
     try artifacts.map(p => LibraryArtifact.metadataOf(p, readBytes(p)))
-    catch case e: Exception => return fail(s"cannot read a library: ${e.getMessage}")
+    catch case e: Exception => return fail(s"cannot read a library: ${IoFailure.describe(e)}")
 
   unpacked.collectFirst { case Left(e) => e } match
     case Some(e) => return fail(e)
@@ -434,7 +444,7 @@ private[sysl] def execute(asked: Config): Int = {
     try roots.map(root => root -> Project.collect(root, Some(target.os)))
     catch
       case e: SelectionError => return fail(e.getMessage)
-      case e: Exception      => return fail(s"cannot read a library: ${e.getMessage}")
+      case e: Exception      => return fail(s"cannot read a library: ${IoFailure.describe(e)}")
 
   collected.find(_._2.isEmpty) match
     case Some((root, _)) => return fail(s"$root holds no sysl source files")
