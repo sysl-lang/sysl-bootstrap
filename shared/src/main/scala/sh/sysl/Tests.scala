@@ -200,10 +200,46 @@ object Tests {
    * strips anything, which is right for the program's own `@test` functions — they are part of what
    * the module declares, and part of what somebody may want printed or proved — and wrong for a
    * dependency's, which no build of this program ever keeps. Before this, both commands showed a
-   * package's test scaffolding as though the consumer had written it.
+   * package's test scaffolding as though the consumer had written it. `Compiler.compileTests` reads
+   * it too, for the same reason: a consumer's test build runs the consumer's tests.
+   *
+   * **A test and its hook are handed by the module they are declared in; the rest of the
+   * scaffolding is not, and is judged by what the kept tests reach.** `testOnly` also holds what a
+   * test *body* made — a closure, filed as `$closureN` in the root module, and an instantiation,
+   * filed under the generic's own module, which may well be a dependency's. Neither name says whose
+   * test made it, so dropping by module took the closure out from under the program's own test that
+   * wrote it (`use of undefined value '@$closure10.call'`). What the kept tests and hooks reach stays;
+   * everything else in the scaffolding goes with the handed tests.
    */
-  def stripHanded(program: TProgram, own: Set[String]): TProgram =
-    stripWhere(program, name => !own(Modules.moduleOf(name)))
+  def stripHanded(program: TProgram, own: Set[String]): TProgram = {
+    val handed = (program.tests.map(_.func) ::: program.hooks.map(_.func))
+      .filterNot(f => own(Modules.moduleOf(f))).toSet
+
+    if handed.isEmpty then program
+    else
+      val kept    = (program.tests.map(_.func) ::: program.hooks.map(_.func)).filterNot(handed)
+      val reached = reachedBy(program, kept)
+
+      stripWhere(program, name => handed(name) || (program.testOnly(name) && !reached(name)))
+  }
+
+  /** Every function and module `val` the named entries reach, taking the initializer of each `val`
+   * they read as a root too, until nothing new is reached.
+   */
+  private def reachedBy(program: TProgram, entries: List[String]): Set[String] = {
+    val byVal = program.vals.map(v => v.symbol -> v).toMap
+
+    @scala.annotation.tailrec
+    def grow(vals: Set[String]): Set[String] = {
+      val refs = Reachability.reachedFrom(entries.map(TEntry(_, None)) ::: vals.toList.flatMap(byVal.get),
+        program.funcs, program.vtables)
+      val more = vals ++ refs.vals
+
+      if more == vals then refs.calls ++ refs.vals ++ entries else grow(more)
+    }
+
+    grow(Set.empty)
+  }
 
   /** The removal both of the above make, of the scaffolding whose name `drop` accepts. */
   private def stripWhere(program: TProgram, drop: String => Boolean): TProgram = {
@@ -276,24 +312,18 @@ object Tests {
    * own, so a dependency's unreached `@export("main")` would fight it exactly as it fights a
    * program's.
    *
-   * **And it is WIDENED by the modules whose tests this build runs, which is what `own` means here.**
-   * The tests are the roots, so a module that contributes one is a module this compilation is
-   * *producing* rather than one it merely links — and a test build keeps every `@test` in the tree, a
-   * dependency's as readily as the project's. Without the widening, a package whose own suite makes a
-   * value with a destructor put that instantiation into a consumer's test build while
-   * `Reachability.contributing` answered for the **program's** module graph, which reaches neither the
-   * package nor its tests: the release hook was emitted and the body pruned. What a reader got was
-   * `use of undefined value '@pkg$T.drop'` out of clang — a symbol no line of their program mentions,
-   * in a package they need never have imported, and only when the package's tests were the one thing
-   * that made the value.
-   *
-   * It stays one rule for all four kinds, and it makes a consumer's test build agree with the one the
-   * package runs over itself, where those modules are `own` already.
+   * **`own` needs no widening, because every test this build keeps is in an own module.**
+   * `Compiler.compileTests` strips a handed module's tests before it gets here (`stripHanded`), as
+   * every other build of the program does. It once kept a dependency's suite too, and then had to
+   * widen `own` by the modules whose tests it ran: a package's suite making a value with a destructor
+   * put that instantiation into the consumer's test build while `Reachability.contributing` answered
+   * for the program's module graph, so the release hook was emitted and the body pruned —
+   * `use of undefined value '@pkg$T.drop'` out of clang. With the dependency's tests gone nothing
+   * outside `own` contributes a root, which is the whole of why the widening could go.
    */
   def only(program: TProgram, own: Option[Set[String]] = None): TProgram = {
     val kept    = program.copy(main = Nil, entry = None)
-    val running = own.map(_ ++ (kept.tests.map(_.func) ::: kept.hooks.map(_.func)).map(Modules.moduleOf))
-    val entries = Reachability.entryPoints(kept, running)
+    val entries = Reachability.entryPoints(kept, own)
     // The hooks are roots beside the tests, and for the same reason: the dispatcher lays down an arm
     // that calls each by name, so a hook the walk could not reach from a test — which is every one
     // of them, since nothing calls a hook — would be pruned out from under its own arm.
