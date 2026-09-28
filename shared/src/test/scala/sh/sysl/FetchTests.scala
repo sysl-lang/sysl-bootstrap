@@ -121,6 +121,47 @@ class FetchTests extends PackageCacheSupport {
     }
   }
 
+  /** Two builds on a cold cache fetch one package at one version at once. Each clones under a name of
+   * its own (`Publish.pending`) — a fixed `<dir>.partial` had each clearing the other's clone — and
+   * the one finishing second finds a whole package in place.
+   */
+  "two fetches of one package" - {
+    def cloned(dir: String, marker: String): String = {
+      val pending = Publish.pending(dir)
+
+      createDirectories(s"$pending/sh/demo")
+      writeFile(s"$pending/sh/demo/demo.sysl", marker)
+      pending
+    }
+
+    "clone apart" in {
+      val dir = s"${emptyCache()}/github.com/e/json/@v1.4.0"
+
+      Publish.pending(dir) should not be Publish.pending(dir)
+    }
+
+    "and the second to finish succeeds, leaving the first one's package untouched" in {
+      val dir    = s"${emptyCache()}/github.com/e/json/@v1.4.0"
+      val first  = cloned(dir, "first")
+      val second = cloned(dir, "second")
+
+      Publish.directory(first, dir) shouldBe Right(())
+      Publish.directory(second, dir) shouldBe Right(())
+      readFile(s"$dir/sh/demo/demo.sysl") shouldBe "first"
+      exists(first) shouldBe false
+      exists(second) shouldBe false
+      Project.parentOf(dir).map(p => listFiles(p).length) shouldBe Some(1)
+    }
+
+    "but a directory that cannot be put in place at all is a refusal, with the clone removed" in {
+      val cache   = emptyCache()
+      val pending = cloned(s"$cache/nowhere/@v1.4.0", "x")
+
+      Publish.directory(pending, s"$cache/no/such/parent/@v1.4.0").isLeft shouldBe true
+      exists(pending) shouldBe false
+    }
+  }
+
   "removing a tree takes what is under it" in {
     val root = project("", "a/b/c")
 
