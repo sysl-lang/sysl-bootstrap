@@ -441,8 +441,8 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
       seen.toArray.toList shouldBe Nil
     }
 
-    // `RunCache`'s redirect alone: `Fetch`'s is process-wide, and holding it here would move the
-    // package cache under any suite running beside this one.
+    // `RunCache`'s redirect alone: this test reaches no `Fetch` call, so there is nothing for
+    // `Fetch.usingCache` to move here.
     val cache = createTempDirectory("sysl-runcache-")
 
     "a kept test build puts the binary in its slot and the list beside it" in RunCache.usingCache(cache) {

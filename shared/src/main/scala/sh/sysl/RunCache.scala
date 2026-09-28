@@ -95,11 +95,11 @@ object RunCache {
    * counted entries in the developer's real cache would be measuring their morning, and one that
    * wrote into it would be spending their disk.
    */
-  /** **Per thread rather than per process**, which `Fetch`'s equivalent is not and which this one
-   * has to be: a suite that redirects the cache so it can count what lands in it runs beside other
-   * suites driving the same compiler, and a process-wide override would collect their entries as
-   * well as its own. A thread-local is exact — the redirect covers the calls the redirecting thread
-   * makes and no others — and costs a compilation nothing, since the ordinary answer is `None`.
+  /** **Per thread rather than per process**, the same shape `Fetch`'s equivalent uses: a suite that
+   * redirects the cache so it can count what lands in it runs beside other suites driving the same
+   * compiler, and a process-wide override would collect their entries as well as its own. A
+   * thread-local is exact — the redirect covers the calls the redirecting thread makes and no
+   * others — and costs a compilation nothing, since the ordinary answer is `None`.
    */
   private val override_ = new ThreadLocal[Option[String]] {
     override def initialValue(): Option[String] = None

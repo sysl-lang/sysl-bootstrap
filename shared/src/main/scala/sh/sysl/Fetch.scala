@@ -33,7 +33,7 @@ object Fetch {
    * reasoning, and the same root, as the standard module's prebuilt artifact.
    */
   def cacheRoot(projectRoot: String = ""): Either[String, String] =
-    override_.map(Right(_)).getOrElse {
+    override_.get.map(Right(_)).getOrElse {
       val vendored = s"$projectRoot/${Project.VendorDir}"
 
       if projectRoot.nonEmpty && isDirectory(vendored) then Right(vendored)
@@ -44,21 +44,29 @@ object Fetch {
     }
 
 
-  private var override_ : Option[String] = None
+  /** **Per thread rather than per process** — the same reasoning as `RunCache`'s equivalent: a suite
+   * that redirects the package cache runs beside other suites driving the same compiler (`sysl test`
+   * inside sbt runs suites in parallel), and a process-wide override would be visible to every one of
+   * them. A thread-local is exact — the redirect covers only the calls the redirecting thread makes.
+   */
+  private val override_ = new ThreadLocal[Option[String]] {
+    override def initialValue(): Option[String] = None
+  }
 
   /** Runs `body` against a cache somewhere else — **for tests only**.
    *
    * A suite that drives the whole driver has no other way to keep its packages out of the machine's
    * own cache, and putting them there would make a test's answer depend on what had been built
-   * before it. The same shape and the same caveat as `AutoImport.including`: it is process-global,
-   * so only one suite may use it, and that suite's tests must not run in parallel with each other.
+   * before it. The same shape as `AutoImport.including`: only the redirecting thread sees it, so a
+   * suite's own tests still must not run in parallel *with each other* — a thread-local is per thread,
+   * not per test.
    */
   private[sysl] def usingCache[T](path: String)(body: => T): T = {
-    val saved = override_
+    val saved = override_.get
 
-    override_ = Some(path)
+    override_.set(Some(path))
     try body
-    finally override_ = saved
+    finally override_.set(saved)
   }
 
   /** Where this coordinate at this version sits, fetched or not. */
