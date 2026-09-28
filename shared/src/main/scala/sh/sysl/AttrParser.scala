@@ -17,7 +17,8 @@ trait AttrParser extends ExprParser {
   protected lazy val attribute: PackratParser[Attr] =
     testAttr ^^ Attr.Test.apply | hookAttr | tailrecAttr | pureAttr | ghostAttr | readsAttr | writesAttr |
       crossingAttr | needsAttr | packedAttr | alignAttr | threadLocalAttr | exportAttr |
-      sectionAttr | noinlineAttr | inlineAttr | coldAttr | borrowsHere | unknownAttr | hashAttr
+      sectionAttr | noinlineAttr | inlineAttr | coldAttr | borrowsHere | ignoreHere | unknownAttr |
+      hashAttr
 
   /** What a member block reads where a member was wanted, for the three blocks that do not keep the
    * annotations: a trait's body, an `impl`'s, and a setter's line.
@@ -201,8 +202,9 @@ trait AttrParser extends ExprParser {
       "or the definition that goes there. The spelling is the target's: '.noinit' and '.ramfunc' " +
       "are ELF's, '__DATA,__mysection' is Mach-O's")
 
-  /** `@test`, and the three things it may say about the test: the name a report gives it, that it is
-   * a run which should not come back, and the text such a run should have printed on its way out.
+  /** `@test`, and the four things it may say about the test: the name a report gives it, that it is
+   * a run which should not come back, the text such a run should have printed on its way out, and
+   * the reason it is not to be run at all.
    */
   protected lazy val testAttr: PackratParser[TestAttr] =
     at(op("@") ~> attrWord("test") ~> opt(emptyTestErr | testArgList)
@@ -242,13 +244,13 @@ trait AttrParser extends ExprParser {
 
   private def badTestArgErr: Parser[TestAttr] =
     err("'@test' takes the description a report shows it under, written as a string — " +
-      "'@test(\"an index past the end is refused\")' — and 'should_trap' for a run that is meant " +
-      "not to come back, optionally with the text such a run must have printed. The two compose, " +
-      "in that order")
+      "'@test(\"an index past the end is refused\")' — 'should_trap' for a run that is meant " +
+      "not to come back, optionally with the text such a run must have printed, and " +
+      "'ignore: \"why\"' for a test that is compiled and not run. They compose, in that order")
 
   private def unclosedTestErr: Parser[Unit] =
-    err("'@test' closes what it opened — the description and 'should_trap' go between parentheses, " +
-      "and there is no ')' here to end them")
+    err("'@test' closes what it opened — the description, 'should_trap' and 'ignore' go between " +
+      "parentheses, in that order, and there is no ')' here to end them")
 
   /** `@setup`, `@teardown`, `@setup_all` and `@teardown_all` — what a module runs around its tests
    * (`reference/attributes.md § The hooks a module may write`).
@@ -540,13 +542,58 @@ trait AttrParser extends ExprParser {
       case (d, Attr.ThreadLocal) => d
     }
 
+  /** What goes between `@test`'s parentheses: a description, then `should_trap`, then `ignore`, each
+   * optional and in that order, with at least one present — `testArgList` refuses the empty list.
+   */
   private lazy val testArgs: Parser[TestAttr] =
-    contractMsg ~ opt(op(",") ~> testExpectation) ^^ {
-      case d ~ e => TestAttr(Some(d), e.isDefined, e.flatten)
-    } | testExpectation ^^ (e => TestAttr(None, true, e))
+    contractMsg ~ opt(op(",") ~> testExpectation) ~ opt(op(",") ~> testIgnore) ^^ {
+      case d ~ e ~ i => TestAttr(Some(d), e.isDefined, e.flatten, i)
+    } | testExpectation ~ opt(op(",") ~> testIgnore) ^^ {
+      case e ~ i => TestAttr(None, true, e, i)
+    } | testIgnore ^^ (i => TestAttr(None, false, None, Some(i)))
 
   /** `should_trap`, alone or with the substring a trapping run must have printed. */
   private lazy val testExpectation: Parser[Option[String]] =
     accept("'should_trap'", { case t: lexical.Identifier if t.chars == "should_trap" => () }) ~>
       opt(op(":") ~> contractMsg)
+
+  /** `ignore: "why"` — the test is compiled and not run, and the runner reports it with the reason.
+   *
+   * **The reason is not optional, and neither is it allowed to be empty.** An ignored test is a
+   * promise to come back, and one that does not say what it is waiting for is the one nobody comes
+   * back to: the report would say a test was skipped and give its reader nothing to act on. So bare
+   * `ignore` is refused where a bare `should_trap` is not — `should_trap` alone is a complete claim
+   * about the run, and `ignore` alone is not a claim about anything.
+   *
+   * The refusal is raised **after the word**, per the dead-`err` rule: having read `ignore` there is
+   * nothing else the reader could have been writing, so from here every road ends in a sentence
+   * about the reason.
+   */
+  private lazy val testIgnore: Parser[String] =
+    attrWord("ignore") ~> (op(":") ~> (ignoreReason | ignoreReasonErr) | ignoreReasonErr)
+
+  /** The reason itself, refused where it is blank. The refusal for a reason that is not a string at
+   * all sits beside this rather than after the `:`'s alternative, so that it fails at the same token
+   * the string would have been read from — one alternative further out and a `3` there outranks it.
+   */
+  private lazy val ignoreReason: Parser[String] =
+    contractMsg >> (why => if why.trim.isEmpty then ignoreReasonErr else success(why))
+
+  private def ignoreReasonErr: Parser[String] =
+    err("'ignore' needs the reason the test is not run, written as a string — " +
+      "'@test(ignore: \"the parser drops the second arm\")'. An ignored test that does not say why " +
+      "is one nobody comes back to")
+
+  /** `@ignore` — the spelling other test frameworks use, answered with this one's.
+   *
+   * Ignoring is something a *test* is, so it is an argument to `@test` rather than an annotation of
+   * its own: a function that is not a test has no run to withhold. Ordered before `unknownAttr` for
+   * `@borrows`' reason — the general refusal would win by position and list every annotation there
+   * is, when the reader needs one sentence.
+   */
+  private lazy val ignoreHere: Parser[Attr] =
+    op("@") ~> attrWord("ignore") ~>
+      err("an ignored test is written '@test(ignore: \"why it is not run\")' — ignoring is something " +
+        "a test is, so it goes inside '@test' beside the description and 'should_trap', and a " +
+        "function that is not a test has no run to withhold")
 }

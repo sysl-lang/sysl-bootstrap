@@ -273,6 +273,9 @@ class AstCodecTests extends AnyFreeSpec with Matchers {
         |
         |@test("both at once", should_trap: "past the end")
         |both() = 0
+        |
+        |@test("waiting", should_trap, ignore: "the check is not emitted yet")
+        |waiting() = 0
         |""".stripMargin)
     // A section that did not survive the trip would leave a library's placed object landing wherever
     // the linker chose — in a program that read the artifact, and nowhere else, so nothing about

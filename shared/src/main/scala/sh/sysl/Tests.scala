@@ -126,6 +126,7 @@ object Tests {
       attr.expected,
       attr.pos.map(_.source.name).getOrElse("<unknown>"),
       attr.pos.map(_.line).getOrElse(0),
+      ignored = attr.ignored,
     )
 
   /** What the runner is told about one hook: which moment it is for, the key that calls it, and

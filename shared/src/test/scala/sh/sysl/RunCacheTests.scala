@@ -328,10 +328,27 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
       TTest("m$traps", "one that should trap", true, Some("past the end"), "m.sysl", 9,
             THooks(setup = Some(THook(HookKind.Setup, "m$up", "m.sysl", 12)),
                    teardownAll = Some(THook(HookKind.TeardownAll, "m$halt", "m.sysl", 20)))),
+      TTest("m$waits", "one that is ignored", false, None, "m.sysl", 30,
+            ignored = Some("the parser drops the second arm")),
     )
 
     "every field comes back" in {
       RunCache.decode(RunCache.encode(suite)) shouldBe Some(suite)
+    }
+
+    // A cached suite that forgot a test was ignored would *run* it — the one difference between a
+    // cached run and a fresh one the report could not hide.
+    "an ignored test comes back ignored, with its reason, and the others come back not ignored" in {
+      RunCache.decode(RunCache.encode(suite)).get.map(_.ignored) shouldBe
+        List(None, None, Some("the parser drops the second arm"))
+    }
+
+    // A sidecar written before `ignore` existed has two fewer fields per line; reading it as a suite
+    // with nothing ignored would be a guess, and a rebuild is the answer that cannot be wrong.
+    "a sidecar written before 'ignore' existed is no cache at all" in {
+      val older = RunCache.encode(suite.take(1)).split("\u0000", -1).dropRight(2).mkString("\u0000")
+
+      RunCache.decode(older) shouldBe None
     }
 
     "a test with no hooks comes back with none" in {

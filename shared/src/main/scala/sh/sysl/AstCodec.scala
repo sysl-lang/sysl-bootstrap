@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 58
+  val Version: Int = 59
 
   private val Magic = "sysl-ast"
 
@@ -205,7 +205,9 @@ object AstCodec {
     // A shipped library carries no tests — `Library.withoutTests` is what drops them, on the way in
     // rather than here. What this is for is the codec's own promise: a tree reads back as the tree
     // that was written, and a field left out silently is how that stops being true.
-    private def testAttr(a: TestAttr): Unit = { pos(a); opt(a.display)(sref); bool(a.shouldTrap); opt(a.expected)(sref) }
+    private def testAttr(a: TestAttr): Unit = {
+      pos(a); opt(a.display)(sref); bool(a.shouldTrap); opt(a.expected)(sref); opt(a.ignored)(sref)
+    }
 
     /** A hook attribute travels as its `HookKind`'s spelling, which is the word the grammar reads
       * and the one a refusal names — so an artifact and a source say the same thing about the same
@@ -724,7 +726,7 @@ object AstCodec {
       case "2"   => Visibility.Scoped(sref())
       case other => fail(s"'$other' is not a visibility")
 
-    private def testAttr(): TestAttr = at(TestAttr(opt(sref()), bool(), opt(sref())))
+    private def testAttr(): TestAttr = at(TestAttr(opt(sref()), bool(), opt(sref()), opt(sref())))
 
     private def hookAttr(): HookAttr = at {
       val word = tok()

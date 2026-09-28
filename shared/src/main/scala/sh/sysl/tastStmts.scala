@@ -381,6 +381,11 @@ case class TTest(
       * and because what a test needs to know is which hooks bracket *it*.
       */
     hooks: THooks = THooks(),
+    /** Why the test is not run, where `@test(ignore: "…")` said so. The test is still in the
+      * binary — compiled and checked with everything else — and the runner reports it under this
+      * reason instead of starting a process for it.
+      */
+    ignored: Option[String] = None,
 )
 
 /** One hook function, as the runner needs it: what to call, and where to point a reader when the
