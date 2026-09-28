@@ -1371,10 +1371,9 @@ class PackageConfigTests extends AnyFreeSpec with Matchers {
   /** `optimization` — the level this project's builds hand clang, stated once instead of on every
    * command line (`PackageConfig.optimization`).
    *
-   * **The refusal is the half worth pinning.** `--optimize` lets clang rule on what it was given,
-   * which is right for something typed at a build somebody is watching; a manifest is read by every
-   * later build and by consumers who did not write it, so a level clang has no answer for is refused
-   * where the key is, naming the key, what was written, and what may be.
+   * **The refusal is the half worth pinning.** A manifest is read by every later build and by
+   * consumers who did not write it, so a level clang has no answer for is refused where the key is,
+   * naming the key, what was written, and what may be.
    */
   "the optimization level" - {
 
@@ -1410,7 +1409,7 @@ class PackageConfigTests extends AnyFreeSpec with Matchers {
 
     // `fast` and `g` are clang's own and are deliberately outside the set a manifest may name: one is
     // being retired and the other is about debugging rather than about what a project is built at.
-    // Both are still typable on the command line, where clang answers for itself.
+    // Both are still typable on the command line (`Toolchain.commandLineLevels`).
     "including the ones clang has and a manifest may not name" in {
       for level <- List("fast", "g") do
         withClue(level) { refused(s"optimization = \"$level\"") should include(level) }
