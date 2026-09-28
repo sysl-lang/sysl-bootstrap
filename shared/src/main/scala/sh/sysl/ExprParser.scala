@@ -344,7 +344,7 @@ trait ExprParser extends SyslParserBase {
         implicitMember |
         identExpr |
         arrayLit |
-        op("(") ~> parenTail,
+        parenExpr,
     )
 
   /** `.red`, `.Circle(3)`, `.make(2)` — a member of the type the context expects, written with
@@ -467,19 +467,30 @@ trait ExprParser extends SyslParserBase {
     op("[") ~> expression ~ (op(";") ~> expression) <~ op("]") ^^ { case v ~ n => ArrayFill(v, n) } |
       op("[") ~> commaList(expression) <~ op("]") ^^ ArrayLit.apply
 
-  /** After `(`: `)` is unit, one expression is a grouping, more are a tuple.
+  /** `(` and what follows it: `)` is unit, one expression is a grouping, more are a tuple.
    *
    * The group is one of the three boundaries a placeholder closes at (`reference/expressions.md § _
    * — a parameter with the name left out`), and it is the one a program reaches for when the other
    * two fall in the wrong place: `(_ + 1) * 2` multiplies the closure rather than closing over the
    * product. A tuple is lifted whole, since the parentheses that delimit it are the same ones.
+   *
+   * **A tuple is positioned at the whole of what it was written as, parentheses included**, exactly
+   * as an array literal is at its brackets — a complaint about a tuple is about all of it, so the
+   * caret belongs on its `(`. It has to be given that here rather than left to `primary`'s `at`,
+   * because the placeholder lift reads the position as it builds the closure around the tuple. A
+   * grouping is not a node, so it keeps the position of the expression inside it.
    */
-  protected lazy val parenTail: PackratParser[Expr] =
-    op(")") ^^ (_ => UnitLit()) |
-      expression ~ rep(op(",") ~> expression) <~ op(")") ^^ {
-        case e ~ Nil  => Placeholders.lift(e)
-        case e ~ more => Placeholders.lift(Tuple(e :: more).setPos(e.pos))
-      }
+  protected lazy val parenExpr: PackratParser[Expr] =
+    withSpan(op("(") ~> parenTail) ^^ {
+      case (_, None)              => UnitLit()
+      case (_, Some(e ~ Nil))     => Placeholders.lift(e)
+      case (span, Some(e ~ more)) => Placeholders.lift(Tuple(e :: more).setPos(span))
+    }
+
+  /** What follows the `(`: nothing for unit, or the expressions written between the parentheses. */
+  private lazy val parenTail: Parser[Option[Expr ~ List[Expr]]] =
+    op(")") ^^ (_ => None) |
+      expression ~ rep(op(",") ~> expression) <~ op(")") ^^ (Some(_))
 
   protected lazy val intLit: Parser[Expr] =
     accept("integer literal", { case t: lexical.IntLit => IntLit(t.value, t.suffix) })

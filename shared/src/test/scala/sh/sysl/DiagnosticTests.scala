@@ -250,6 +250,53 @@ class DiagnosticTests extends AnyFreeSpec with Matchers {
       diag(src) should include("--> t.sysl:2:14")
     }
 
+    // A refusal of a tuple argument is about the whole tuple, so the caret goes on its opening
+    // parenthesis — `(3, 4, 5)` starts at column 23, and its first element, where the caret used to
+    // land, at column 24.
+    "on the opening parenthesis of a tuple argument, not on its first element" in {
+      val src =
+        """zip_len(x: (int, int), y: (int, int)) -> int = x.0 + y.0
+          |print(zip_len((1, 2), (3, 4, 5)))
+          |""".stripMargin
+      val out = diag(src)
+
+      out should include("'y' of 'zip_len' is (int, int), but (int, int, int) was given")
+      out should include("--> t.sysl:2:23")
+    }
+
+    // The outer tuple starts at column 9; its first element is itself a tuple, starting at column 10,
+    // whose own first element is at column 11 — where the caret used to land.
+    "on the outer parenthesis of a nested tuple argument" in {
+      val src =
+        """f(p: ((int, int), int)) -> int = p.1
+          |print(f(((1, 2, 3), 4)))
+          |""".stripMargin
+      val out = diag(src)
+
+      out should include("'p' of 'f' is ((int, int), int), but ((int, int, int), int) was given")
+      out should include("--> t.sysl:2:9")
+    }
+
+    "on the opening bracket of an array literal argument" in {
+      val src =
+        """f(xs: [2]int) -> int = xs[0]
+          |print(f([1, 2, 3]))
+          |""".stripMargin
+
+      diag(src) should include("--> t.sysl:2:9")
+    }
+
+    // Parentheses around one expression are a grouping and not a node, so the refusal lands where
+    // it would without them: on `"two"`, at column 15, not on the `(` at 14.
+    "on the expression inside a parenthesised argument, not on the parenthesis" in {
+      val src =
+        """add(a: int, b: int) -> int = a + b
+          |print(add(1, ("two")))
+          |""".stripMargin
+
+      diag(src) should include("--> t.sysl:2:15")
+    }
+
     "on the callee, for a call that names nothing or takes other arguments" in {
       val src =
         """add(a: int, b: int) -> int = a + b

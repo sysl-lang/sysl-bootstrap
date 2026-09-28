@@ -221,7 +221,7 @@ class TypePackTests extends AnyFreeSpec with RunSupport with CodegenSupport {
       val e = err("""zip_len[..A: Display](x: (..A), y: (..A)) -> usize = A.len
                     |print(zip_len((1, 2), (3, 4, 5)))""".stripMargin)
       e should include("'y' of 'zip_len' is (int, int), but (int, int, int) was given")
-      e should include("<input>:2:24")
+      e should include("<input>:2:23")
     }
 
     "binds a pack from the first of three arguments, whichever later one disagrees" in {
@@ -230,10 +230,10 @@ class TypePackTests extends AnyFreeSpec with RunSupport with CodegenSupport {
       run(src + "print(zip3((1, 2), (3, 4), (5, 6)))") shouldBe "2\n"
       val third = err(src + "print(zip3((1, 2), (3, 4), (5, 6, 7)))")
       third should include("'z' of 'zip3' is (int, int), but (int, int, int) was given")
-      third should include("<input>:2:29")
+      third should include("<input>:2:28")
       val second = err(src + "print(zip3((1, 2), (3, 4, 5), (6, 7)))")
       second should include("'y' of 'zip3' is (int, int), but (int, int, int) was given")
-      second should include("<input>:2:21")
+      second should include("<input>:2:20")
     }
 
     "binds a pack beside a scalar parameter by the same rule" in {
