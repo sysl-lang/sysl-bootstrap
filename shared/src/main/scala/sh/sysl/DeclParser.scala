@@ -493,10 +493,16 @@ trait DeclParser extends ExprParser {
   protected lazy val member: PackratParser[MethodDecl] =
     at(
       staticProperty |
-        (memberName ~ opt(boundedTypeParams) >> { case name ~ tps =>
-          methodTail(name, tps.getOrElse(TypeParams.none)) |
-            (if tps.isEmpty then propertyTail(name)
-             else failure("a property takes no type parameters"))
+        (memberName ~ opt(boundedTypeParams) >> {
+          case name ~ None => methodTail(name, TypeParams.none) | propertyTail(name)
+          case name ~ Some(tps) =>
+            // A name and a type-parameter list are a method's head, so what is missing after the
+            // `]` is its parameter list — unless the line goes on as a property does, with `->`,
+            // which is a property that has been given type parameters it has nowhere to solve.
+            // That refusal is an `Error` raised on the lookahead, so a trait's `methodSig` below
+            // cannot outrank it; anything else falls to `methodTail`, tried last so that its
+            // `'(' expected` wins the tie at the same token.
+            guard(op("->")) ~> err("a property takes no type parameters") | methodTail(name, tps)
         }),
     )
 

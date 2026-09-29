@@ -185,6 +185,44 @@ class GenericMethodErrorTests extends AnyFreeSpec with CodegenSupport {
           |    size[U] -> int = 1""".stripMargin,
       ) should include("a property takes no type parameters")
     }
+
+    /** A name and a type-parameter list are a method's head, so a line that goes on with anything
+      * but `(` is a method missing its parameter list — not a property, which is only what `->`
+      * would have made it. The struct used to call every such line a property with type
+      * parameters while a trait said `'(' expected`; every kind of body now says the trait's thing
+      * at the token after the `]`, and keeps the property refusal for the line that is one.
+      */
+    "a name and a type-parameter list are a method's head, whatever body holds them" - {
+      val heads = List(
+        "struct" -> "struct S\n    x: int\n",
+        "enum"   -> "enum E\n    A\n",
+        "trait"  -> "trait R\n    f(self) -> int\n",
+      )
+      // `y[T]` alone leaves nothing on its line, so its parameter list is missing at the next one.
+      val notProperties = List("y[T] 5" -> "3:10", "y[T] = 1" -> "3:10", "y[T]: int" -> "3:9",
+        "y[T]" -> "4:1")
+
+      for (kind, head) <- heads; (line, at) <- notProperties do
+        s"'$line' in $kind is a method missing its parameter list" in {
+          val out = err(s"$head    $line\n")
+          out should include("'(' expected")
+          out should include(s":$at")
+          out shouldNot include("a property takes no type parameters")
+        }
+
+      for (kind, head) <- heads; line <- List("y[T] -> int = 1", "y[T] -> int") do
+        s"'$line' in $kind is a property, and is refused for its type parameters" in {
+          err(s"$head    $line\n") should include("a property takes no type parameters")
+        }
+
+      "an 'impl' body reads it the same way" in {
+        val src = "trait Tr\n    f(self) -> int\nstruct S\n    x: int\nimpl Tr for S\n    y[T] 5\n"
+        val out = err(src)
+        out should include("'(' expected")
+        out should include(":6:10")
+        err(src.replace("y[T] 5", "y[T] -> int = 1")) should include("a property takes no type parameters")
+      }
+    }
   }
 
   "an 'impl' supplies exactly the type parameters the trait's member declares" - {
