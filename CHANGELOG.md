@@ -7,6 +7,61 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.150 — 2026-09-29
+
+**the census fixes: dependency tests stay home, reserved words refused in words, combining marks in names**
+
+A release of fixes: every live defect the 2026-09-28 census found, each with a regression test. Four of them change what a program sees, and those come first.
+
+### Behaviour changes
+
+#### `sysl test` runs the named tree's tests and no dependency's
+
+A dependency's modules are compiled into the test binary because the project calls them, but its own `@test` functions are no longer collected — they are its author's to run, in its own repository. Before this, every dependency's tests ran in the consumer's suite, and a failing one failed it.
+
+The test build is also now assembled the way `build` and `run` assemble a program, with each package's modules under its canonical prefix. So two path dependencies that each declare a module called `json` — legal behind a `mount`, and built by `sysl run` — no longer collide as one module declaring `tag` twice under `sysl test`. (edf0db11)
+
+#### A file-private type in a sibling file no longer hides a variant
+
+`private` is file-private, so a type of that name in another file of the module is not a candidate for a call there. A variant of the same name now resolves where it used to report `undefined name`. (57336ee5)
+
+#### A reserved word as a name is refused in words, at the word
+
+Every binding position — a function, a method or member, `val`/`var`/`const`/`ref`, a `for` variable, a pattern binding — now answers a reserved word with
+
+```
+error: 'match' is a reserved word, so it cannot stand as a function's name — write it '`match`' if that is the name you want, which is what the backticks are for
+```
+
+including the words that open a declaration (`type`, `struct`, `static`, `private` and the rest), which used to surface as a bare `dedent expected` or `identifier expected` somewhere after the word. `private[a.b]` is answered with the rule — the bracket takes one simple name — instead of `']' expected` at the first dot. (423b2910, 0de40dae, d7da7d58, 40991fc2)
+
+#### A combining mark continues an identifier
+
+A name may now carry a Unicode combining mark (category M) after its first character, so `café` spelled `e` + U+0301 lexes as one identifier. It is still a different name from the precomposed `café` — sysl applies no normalization — and a mark at the *start* of a name is refused with a message saying so rather than as an illegal character. The site's highlighting grammar follows the lexer: `\p{M}` is in every identifier class and boundary. (e44778a7, e6627334)
+
+### Fixes
+
+- **A filesystem refusal is `sysl: error: …`, never a stack trace** — an output path under a file, a directory that cannot be made, an unwritable target: the path and the reason, and exit 1. Scala.js reads the same refusals per platform. (aade465d, dd07d2fe)
+- **An unusable standard library is refused cleanly** — one that does not parse, is empty, or holds a `c const` that cannot be measured — instead of crashing the compiler. (6f71203c)
+- **A qualified standard-library enum variant works**: `text.ParseError.BadBase(3)` resolves, and no escaped internal key leaks into a diagnostic. (66702b3c)
+- **`emit-typed` and `prove` assemble the compilation exactly as the build does**, so they see the same modules under the same names. (62f751b4)
+- **One refused `impl` member no longer cascades** into a page of "has no method" reports against the dependency that declared the trait, and a parameter-count mismatch says "1 parameter", not "1 parameters". (70f70871)
+- **A refused constant is reported once**, at the sub-expression that caused it. (6c32663c)
+- **An undefined module-qualified function is named as written** (`'host.size'`), and is not reported beside a capability refusal that already explains it. (ac960911)
+- **An interpolation hole's nodes are positioned where they were written**, so a diagnostic inside `"${…}"` points into the string. (1404c563, ecff8499)
+- **A tuple literal argument anchors at its opening parenthesis.** (d5fe91d1)
+- **A type pack binds from the first argument that names it.** (dedf59e9)
+
+### Tests
+
+`ReservedWordNameTests` (every binding position, the declaration-opening words, the dotted `private[...]`), `ImplMemberRefusalTests`, `IoRefusalTests`, `VariantNamespaceTests`, `TypedPackageTests`, `StdLibraryTests`, `ConstTests`, `DiagnosticTests`, `DiagnosticPositionTests`, `AnalyzerDeclErrorTests`, `TypePackTests`, `UnicodeIdentTests`, `GrammarTests` (a name carrying a combining mark styled as one token — shown failing against the old grammar), and `PackageBuildTests` (a test build keeps two same-named packages apart and runs the project's tests only). `PackageBuildTests` now compiles every run rather than replaying the machine's run cache, which in a development tree can hand back a binary built by an earlier build of the same version.
+
+### Verification
+
+Full Native gate on dev `e6627334` (`./run-gate.sh`, 414 suites + 2 doc suites): 12,121 passed, 1 failed, 49:27, no retries or timeouts. The one failure was the run-cache replay above, fixed in `eb86c301` and re-run green (`PackageBuildTests` 58/0 on Native, against the same stale cache entry). The tag is `eb86c301` plus the version bump. Warnings census, cleaned: zero compile warnings; `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
+The macOS tarball was extracted into a bare prefix and run through a symlink under a fresh `HOME` before upload: `sysl --version` answers `sysl 0.0.150`, the standard module builds from the shipped `share/sysl/library`, and `sysl doc` reaches `sysl-doc`. A program declaring `café` precomposed and decomposed prints `1 2`; `sysl test` on a project whose path dependency carries a failing `@test` reports `1 passed, 0 failed` and never mentions it; `match() -> int = 1` gets the reserved-word message above; `sysl build-c -o <file>/lib.a` answers `sysl: error: cannot make the directory '…': a file is already there, and a directory is needed`.
+
 ## 0.0.149 — 2026-09-28
 
 **@test(ignore:), and publishing a file where somebody else is reading**
