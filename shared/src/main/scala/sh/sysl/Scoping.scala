@@ -1051,22 +1051,8 @@ trait Scoping extends DeclTables {
     Modules.show(bare)
   }
 
-  /** A key with the segments the compiler added to it taken off — an overload's number and a
-   * file-private slot — so that what is left is the qualified name a file actually wrote.
-   *
-   * They come off in turn because a private slot can carry an overload suffix: a file that declares
-   * one spelling twice, privately, while a sibling file holds the plain key, has its second
-   * declaration at `m$pick.private1.1`.
-   */
-  private def spelledKey(key: String): String = {
-    val cut  = key.lastIndexOf('.')
-    val last = key.drop(cut + 1)
-    val slot = last.forall(_.isDigit) ||
-      (last.startsWith("private") && last.drop("private".length).forall(_.isDigit) &&
-        last.length > "private".length)
-
-    if cut > 0 && cut < key.length - 1 && slot then spelledKey(key.take(cut)) else key
-  }
+  /** A key with the segments the compiler added to it taken off (`Modules.spelled`). */
+  private def spelledKey(key: String): String = Modules.spelled(key)
 
   /** The bare name a key was written under, with the compiler's own segments off (`spelledKey`) —
    * what a diagnostic says when it names a declaration without its module.

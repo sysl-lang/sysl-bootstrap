@@ -280,6 +280,13 @@ enum Severity:
 
 object Diagnostic {
 
+  /** A diagnostic whose message names every declaration as its source spells it — a key a site
+   * interpolated is read back here, once, rather than at each of the hundreds of sites that write a
+   * message (`Modules.readable`).
+   */
+  def apply(message: String, pos: Option[Pos], severity: Severity = Severity.Error): Diagnostic =
+    new Diagnostic(Modules.readable(message), pos, severity)
+
   /** How many errors one compilation reports.
    *
    * Five is already more than anyone fixes before compiling again, and the further down a broken

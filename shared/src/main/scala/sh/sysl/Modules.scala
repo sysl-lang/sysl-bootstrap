@@ -70,4 +70,79 @@ object Modules {
    * by someone looking at the line it points at; a table is not.
    */
   def show(key: String): String = key.replace(sep, '.')
+
+  /** A key with the segments the compiler added to it taken off — an overload's number and a
+   * file-private slot — so that what is left is the qualified name a file actually wrote.
+   *
+   * They come off in turn because a private slot can carry an overload suffix: a file that declares
+   * one spelling twice, privately, while a sibling file holds the plain key, has its second
+   * declaration at `m$pick.private1.1`.
+   */
+  def spelled(key: String): String = {
+    val cut  = key.lastIndexOf('.')
+    val last = key.drop(cut + 1)
+    val slot = last.forall(_.isDigit) ||
+      (last.startsWith("private") && last.drop("private".length).forall(_.isDigit) &&
+        last.length > "private".length)
+
+    if cut > 0 && cut < key.length - 1 && slot then spelled(key.take(cut)) else key
+  }
+
+  /** The declaration a key names, as the source that declared it spells it: `m$P.get` is `P.get`,
+   * `m$hid.private1` is `hid`, and a `$` a quoted name contributed (`LlvmName.guard`) is read back.
+   */
+  def declared(key: String): String = unguard(bare(spelled(key)))
+
+  /** A message with every key it quotes spelled as the declaration it names (`declared`).
+   *
+   * **This is the one place a key becomes display text**, and it sits in `Diagnostic`'s constructor,
+   * so every complaint the compiler makes passes through it on its way to a reader — rendered, or
+   * read as data through `api.Sysl.check`. A message is written by interpolating whatever name is
+   * in hand, and in the analyzer the name in hand is nearly always the key a table holds, so a site
+   * that forgot to take the module off printed `'m$use'`: a name nobody can write, and one that
+   * names the compiler's bookkeeping rather than the program. Fixing each site would leave the next
+   * one written to make the same mistake.
+   *
+   * **What counts as a key is narrow on purpose**: a span between two single quotes that begins
+   * with a module path — identifier segments joined by dots — followed by the separator and a
+   * letter or an underscore. So `'$'`, `'$name'` and `'{'` are untouched, a qualified spelling
+   * a site chose with `show` has no `$` left to find, and a quoted name that was guarded carries
+   * `$24`, whose digit is not a name's first character.
+   */
+  def readable(message: String): String =
+    if !message.contains(sep) then message
+    else {
+      val out = new StringBuilder
+      var i   = 0
+
+      while i < message.length do
+        val close = if message(i) == '\'' then message.indexOf('\'', i + 1) else -1
+
+        if close > i && isKey(message.substring(i + 1, close)) then
+          out += '\'' ++= declared(message.substring(i + 1, close)) += '\''
+          i = close + 1
+        else
+          out += message(i)
+          i += 1
+
+      out.toString
+    }
+
+  private def isNameStart(c: Char): Boolean = c.isLetter || c == '_'
+
+  private def isNamePart(c: Char): Boolean = c.isLetterOrDigit || c == '_'
+
+  /** Whether a quoted span is a key: a module path, the separator, and a name after it. */
+  private def isKey(s: String): Boolean = {
+    val i = s.indexOf(sep.toInt)
+
+    i > 0 && i < s.length - 1 && isNameStart(s(i + 1)) && !s.contains('\n') && {
+      val segments = s.take(i).split('.')
+
+      segments.forall(seg => seg.nonEmpty && isNameStart(seg.head) && seg.forall(isNamePart))
+    }
+  }
+
+  /** A name with the `$` marks `LlvmName.guard` wrote read back as the `$` a quoted name held. */
+  private def unguard(name: String): String = name.replace(s"${sep}24", sep.toString)
 }
