@@ -7,6 +7,57 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.151 — 2026-09-29
+
+**a file-private name shadows a public one, and caches keyed by compiler build**
+
+A small release: one rule about file-private names that turns a refusal into a program, and a cache key that stops a new compiler build from reading back what an older one made. Both change what a program sees, so they come first.
+
+### Behaviour changes
+
+#### A file-private name shadows a sibling file's public one of its spelling
+
+Code that was refused as a duplicate now compiles. A bare `private` declaration in one file of a module, beside a public (or `private[M]`) declaration of the same spelling in another file, is no longer `already declared`: inside the file that declares it, the private one answers; every other file of the module, and every importer, sees only the public one. It is C's `static` in one translation unit beside an `extern` in another.
+
+```sysl
+// m/pub.sysl
+module m
+helper() -> string = "public"
+```
+
+```sysl
+// m/priv.sysl
+module m
+private helper() -> string = "private"
+from_priv() -> string = s"${helper()} ${m.helper()}"    // "private public"
+```
+
+- **Between two functions the private one shadows only the public overloads a call could not tell from it** — the pairs overloading refuses inside one file. The rest stay candidates in the private file, so a private `helper(s: string)` beside a public `helper(n: int)` is an overload set there.
+- **Any other pairing hides the whole spelling** in the private file; `m.helper` still reaches the public one from there.
+- **An enum's variant is not shadowed.** A private struct beside a sibling file's public variant of its name stays the pair a struct and a variant always are: both candidates in the struct's file, chosen by the expected type (0.0.150's rule, unchanged).
+- **Still refused**: one spelling twice in one file whatever the two visibilities, and two public declarations of one spelling in a module.
+- A call to a name a duplicate was already reported against is no longer reported again as "ambiguous here".
+
+(8ed28b80, 684b6c70)
+
+#### A new compiler build no longer reuses another build's cached standard module or `sysl run` binary
+
+Both caches named the compiler by its version alone, so a different build of the same version — a development tree, above all — replayed what an older build had cached: a `sysl run`/`sysl test` binary for an unchanged program, or a `std.syslib` produced by an earlier lowering. Both are now keyed on `<version>+<build>`, where `build` is a SHA-256 digest of the compiler's own sources (every platform, plus `build.sbt` and `project/{plugins.sbt,build.properties}`). The standard module now lives at `~/Library/Caches/sysl/<version>+<build>-<library hash>-<target>/std.syslib`, so upgrading leaves the old entries behind unused; nothing needs clearing. (b1f14513)
+
+### Fixes
+
+- **A name and a type-parameter list read as a method's head in every body.** A struct, enum or `impl` body answered `y[T] 5` (or `y[T] = 1`, `y[T]: int`, a bare `y[T]`) with *"a property takes no type parameters"* where a trait body said `'(' expected`; every body now says `'(' expected` at the token after the `]`. The property refusal is kept for the line that is one — `y[T] -> int = 1` — and a trait now gives it too. (8655a15f)
+
+### Tests
+
+`FilePrivateNameTests` carries the shadowing rule (both functions and every other kind, overload sets across the pair, the one-file duplicate, importers); `VisibilityTests`' collision case is re-quoted as the shadowing; `VariantNamespaceTests`' declaring-file case pins that a private struct does not shadow a sibling's variant. `GenericMethodErrorTests` covers every body kind for `y[T]`. `PackageBuildTests` seeds the run-cache entry another build of the same version would have left — a test binary that fails everything — and proves this build compiles rather than replaying it; it no longer needs to disable the run cache.
+
+### Verification
+
+dev CI on `22e4d632` (Linux, JVM) was red on exactly one case, `VariantNamespaceTests`' declaring-file case: the first cut of the shadowing rule made a file-private struct shadow a sibling's variant, refusing a program 0.0.150 compiled. It is fixed in `684b6c70` and that case is the regression test. Full Native gate on `9b0ad86d` (`./run-gate.sh`, 414 suites + 2 doc suites): **12,164 passed, 0 failed**, one heavy suite (`ConditionalTests`) retried alone and passed. The tag is that sha. Warnings census, cleaned: zero compile warnings; `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
+The macOS tarball was extracted into a bare prefix and run through a symlink under a fresh `HOME` before upload: `sysl --version` answers `sysl 0.0.151`, the standard module builds from the shipped `share/sysl/library` into `…/sysl/0.0.151+1d12109c0944d382-…/std.syslib` (the build digest in the key), and `sysl doc` reaches `sysl-doc`. A two-file module with a public `helper`, a file-private `helper` and a file-private `struct Circle` beside a public `Circle` variant prints `public private public public 7 25` — the private name answering only in its file, `m.helper` reaching the public one from there, and the variant still chosen where a `Shape` is expected.
+
 ## 0.0.150 — 2026-09-29
 
 **the census fixes: dependency tests stay home, reserved words refused in words, combining marks in names**
