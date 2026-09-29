@@ -512,6 +512,13 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
             err(s"no '${qn(plain)}' takes these arguments — the declarations of that name are:\n" +
               candidates.map(f => s"    ${signatureOf(f)}").mkString("\n"))
 
+        // Several fit because the name is one a duplicate declaration was already reported against
+        // (`contestedNames`): the losing declaration is still registered so its own body can be
+        // walked, which makes every call to the name "ambiguous" between the declaration and its
+        // repeat — one mistake, already on screen at the line that made it, reported again at each
+        // call site in words that send the reader to the call.
+        case _ :: _ :: _ if contestedNames(plain) => poisoned()
+
         // Several fit, and the language does not guess. A literal is the usual cause: `0` is an
         // `int` and an `i64` and an `f64`, so a name declared at two of those is genuinely ambiguous
         // at a bare `0` and is not at `0i64`.

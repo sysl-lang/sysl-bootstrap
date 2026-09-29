@@ -165,17 +165,17 @@ class VisibilityTests extends AnyFreeSpec with CodegenSupport with RunSupport wi
    * what file-privacy is for, since the reason to keep a helper to its file is that its name is a
    * local matter. Rust, C and Go all scope the name as well as the reach.
    *
-   * What did **not** move is the public case, and the two are asserted together because the
-   * distinction is the whole rule: a private declaration against a sibling's public one is a real
-   * ambiguity for that sibling's own references, and is still refused.
+   * **And since 0.0.151 a private declaration shadows a sibling's public one** rather than colliding
+   * with it: the private file's references mean its own, every other file's the public one. This
+   * section asserted the collision until then; `FilePrivateNameTests` carries the rule in full.
    */
   "a file scopes a private name, and only a private one" - {
-    "a private declaration still collides with a sibling file's public one" in {
-      errIn(
-        ("", "main.sysl", "print(1)"),
-        ("geom", "g.sysl", "module geom\nprivate scale(n: int) -> int = n * 2"),
-        ("geom", "h.sysl", "module geom\nscale(n: int) -> int = n + 1"),
-      ) should include("function 'scale' is already declared")
+    "a private declaration shadows a sibling file's public one, in its own file only" in {
+      runIn(
+        ("", "main.sysl", "print(geom.from_g(), geom.from_h(), geom.scale(10))"),
+        ("geom", "g.sysl", "module geom\nprivate scale(n: int) -> int = n * 2\nfrom_g() -> int = scale(10)"),
+        ("geom", "h.sysl", "module geom\nscale(n: int) -> int = n + 1\nfrom_h() -> int = scale(10)"),
+      ) shouldBe "20 11 11\n"
     }
 
     // The half that moved. Two files that each keep a `scale` to themselves have written two
@@ -216,16 +216,21 @@ class VisibilityTests extends AnyFreeSpec with CodegenSupport with RunSupport wi
 
     // A collision is one mistake, so it is one diagnostic. The losing declaration is still
     // registered under the name, so without care the file that wrote it is then told the name
-    // belongs to its sibling — a name it declares itself, three lines up.
+    // belongs to another declaration — a name it declares itself, three lines up. What still
+    // collides is one file declaring the spelling twice; a public declaration in another file
+    // must not turn that into a second complaint either.
     "and the file that loses the collision is not also told the name is not its own" in {
       val out = errIn(
         ("", "main.sysl", "print(1)"),
-        ("geom", "g.sysl", "module geom\nscale(n: int) -> int = n * 2"),
-        ("geom", "h.sysl", "module geom\nprivate scale(n: int) -> int = n + 1\ntwice(n: int) -> int = scale(n)"),
+        ("geom", "g.sysl", "module geom\nscale(n: int) -> int = n * 3"),
+        ("geom", "h.sysl",
+         "module geom\nscale(n: int) -> int = n * 2\nprivate scale(n: int) -> int = n + 1\n" +
+           "twice(n: int) -> int = scale(n)"),
       )
 
       out should include("function 'scale' is already declared")
       out should not include "private to"
+      out should not include "ambiguous"
     }
   }
 

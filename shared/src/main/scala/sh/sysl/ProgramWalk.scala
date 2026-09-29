@@ -165,6 +165,11 @@ trait ProgramWalk extends OpaqueResults with DropReturnCheck {
       currentPos = pos
       recover(())(at(pos)(refuseReserved(name, what)))
 
+    // What each file makes nameable beyond itself is read off the parsed files before anything is
+    // registered, so a file-private declaration hoisted ahead of a public one of its spelling knows
+    // to leave the plain key to it (`Hoisting.declKey`).
+    for (scope, stmt) <- body do noteWiderDecl(scope, stmt)
+
     for (scope, stmt) <- body do
       currentPos = stmt.pos
       inScope(scope)(recover(())(hoistType(stmt)))

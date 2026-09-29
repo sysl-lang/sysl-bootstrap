@@ -284,9 +284,8 @@ trait Scoping extends DeclTables {
    */
   protected val contestedNames = mutable.Set.empty[String]
 
-  /** Where a **file-private** declaration went when a sibling file's file-private declaration
-   * already held the plain key: `(the file that wrote it, the plain key) -> the key it got`
-   * (`reference/modules.md § Visibility`).
+  /** Where a **file-private** declaration went: `(the file that wrote it, the plain key) -> the key
+   * it got` (`reference/modules.md § A file-private name is scoped to its file`).
    *
    * `private` in sysl is private to the *file*, and until 2026-08-27 it restricted visibility
    * without restricting the namespace — so two files of one module could not each declare a
@@ -294,18 +293,27 @@ trait Scoping extends DeclTables {
    * were each one file's business. Rust, C and Go all scope the name as well as the reach: a
    * `static` in one C translation unit does not collide with a `static` of that name in another.
    *
-   * **Only a name two files contend for gets an entry**, which is what keeps this from moving any
-   * key that exists today: the first file keeps the plain key, and a key is also the emitted symbol
-   * (`Modules`), so re-keying every private declaration would have changed symbols and the artifact
-   * they are recorded in for a change that adds nothing. It is the same arrangement `overloadSlot`
-   * already makes for the second and later declarations of one function name, down to the dotted
-   * suffix, which is a character an LLVM symbol may carry unquoted.
+   * **Only a name another file contends for gets a slot**, which is what keeps this from moving any
+   * key that has no reason to move: a key is also the emitted symbol (`Modules`), so re-keying every
+   * private declaration would have changed symbols and the artifact they are recorded in for a
+   * change that adds nothing. It is the same arrangement `overloadSlot` already makes for the second
+   * and later declarations of one function name, down to the dotted suffix, which is a character an
+   * LLVM symbol may carry unquoted.
    *
-   * **A file-private name against a PUBLIC one of the same spelling is still a duplicate**, and
-   * deliberately: the sibling file's own references to that name would have two answers with
-   * nothing to tell them apart. Only the all-private case is separable.
+   * **A file-private name SHADOWS a public one of the same spelling in another file**, and the
+   * public one keeps the plain key (`Hoisting.declKey`). Inside the private one's file this key is
+   * found first, so the spelling means the private declaration — and where both are functions, the
+   * public overloads no call could confuse with a private one are still candidates there
+   * (`unshadowed`). Everywhere else the plain key answers. The file that wrote the private one can
+   * still reach the public one by the module's own path, `m.name`, which resolves the plain key.
    */
   protected val filePrivateKeys = mutable.HashMap.empty[(Source, String), String]
+
+  /** Each numbered slot `filePrivateKeys` handed out, back to the plain key it stepped aside from —
+   * which is what a call in the slot's file reads to find the public overloads it still sees
+   * (`unshadowed`).
+   */
+  protected val slotPlain = mutable.HashMap.empty[String, String]
 
   /** The key a name written in the current file resolves to before the module's own plain key is
    * tried — this file's own file-private declaration, where it has one.
@@ -697,10 +705,49 @@ trait Scoping extends DeclTables {
    * declarations still have them to name — the compilation is failing on the restriction either way.
    */
   protected def reachableOverloads(key: String): List[String] = {
-    val keys      = overloadKeys(key)
+    val keys      = overloadKeys(key) ++ unshadowed(key)
     val reachable = keys.filter(visible)
 
     if reachable.isEmpty then keys else reachable
+  }
+
+  /** Where `key` is this file's private slot for a spelling some other file declares publicly, the
+   * public functions of that spelling this file still sees: **every one no call could confuse with
+   * one of the file's own** (`reference/modules.md § A file-private name is scoped to its file`).
+   *
+   * A private function shadows only the public declarations a call could not tell from it — the
+   * pairs `reference/declarations.md § Overloading` would refuse inside one file — and joins the
+   * rest as an overload set, exactly as it did when both were filed under one key. So a file adding
+   * a private `skip_line(s: string)` beside a module's public `skip_line(n: int)` still calls the
+   * public one with an `int`, and one adding a private `skip_line(n: int)` calls its own.
+   */
+  private def unshadowed(key: String): List[String] =
+    slotPlain.get(key).toList.flatMap { plain =>
+      val own = overloadKeys(key).flatMap(funcDecls.get)
+
+      overloadKeys(plain).filter { k =>
+        visible(k) && funcDecls.get(k).exists(p => !own.exists(o => sharedArity(o, p).isDefined))
+      }
+    }
+
+  /** The argument count at which some call would fit both declarations, where one does
+   * (`reference/declarations.md § Overloading`).
+   *
+   * Each declaration takes a *range* of argument counts — from its parameters without defaults up
+   * to all of them, or up from there with no ceiling if it is variadic — so two of them collide when
+   * their ranges overlap at some count and their first that-many parameter types agree. **Compared
+   * as written rather than as resolved**: hoisting has not resolved a generic parameter's type, and
+   * the written form is what a reader is looking at.
+   */
+  protected def sharedArity(a: FuncDecl, b: FuncDecl): Option[Int] = {
+    def low(ps: List[Param]) = ps.count(_.default.isEmpty)
+    def high(ps: List[Param], v: Boolean) = if v then Int.MaxValue else ps.length
+
+    val lo = low(a.params) max low(b.params)
+    val hi = high(a.params, a.variadic) min high(b.params, b.variadic)
+    val n  = lo min (a.params.length min b.params.length)
+
+    Option.when(lo <= hi && a.params.take(n).map(_.typ) == b.params.take(n).map(_.typ))(n)
   }
 
   /** Whether this module declares the name as **storage, a constant, or an enum variant** — the

@@ -390,14 +390,16 @@ trait Hoisting extends HoistMembers {
       if key != plain && Modules.bare(plain) == "main" then
         recover(())(err("'main' is where a program starts, so there is one — a second declaration " +
           "of it would overload the name, and a program has one beginning rather than a set of them"))
-      else if key != plain then
-        recover(())(checkOverloadDistinct(plain, key, f.params, f.retType, f.variadic, f.vis))
+      // A declaration filed under a private slot is in no set but the slot's: nothing outside its
+      // file can name it, and inside its file a member of the plain set a call could not tell from
+      // it is shadowed rather than refused (`Scoping.unshadowed`), so there is no pair to check.
+      else if key != plain && base == plain then
+        recover(())(checkOverloadDistinct(plain, key, f.params, f.retType, f.variadic))
       // The declarations sharing a private slot are an overload set of their own, and one file's
       // call sites see every one of them — so they are told apart by the same rule, asked of the
-      // slot. The check above asked it of the plain key, whose set this file's private declarations
-      // are deliberately not in.
+      // slot.
       if base != plain && key != base then
-        recover(())(checkOverloadDistinct(base, key, f.params, f.retType, f.variadic, f.vis))
+        recover(())(checkOverloadDistinct(base, key, f.params, f.retType, f.variadic))
       checkSignatureRules(f.name, f.params, f.retType, f.variadic)
       checkValueParamArithmetic(f.tvalues.keySet, f.params.map(_.typ) ::: f.retType.toList,
         f.tparams.toSet, f.tpacks)
@@ -908,20 +910,29 @@ trait Hoisting extends HoistMembers {
    * here, and every lookup answers exactly as it did.
    */
   /** The key a declaration of `name` is filed under: the module's plain one, unless this
-   * declaration is **file-private** and a *sibling file's* file-private declaration already holds
-   * that key — in which case this one gets a numbered key of its own (`filePrivateKeys`).
+   * declaration is **file-private** and another file of the module also declares the spelling — in
+   * which case this one gets a numbered key of its own (`filePrivateKeys`).
    *
    * `taken` is the question "does something already hold the plain key", asked by the caller because
    * each kind of declaration checks a different set of tables — a constant asks about the value
    * namespace, a struct about the type one. Passing it keeps this from having to know which
    * namespace it is being asked about, which is the thing that would go stale.
    *
-   * **Three cases and only the third is new.** Nothing holds the key: this declaration takes it, and
-   * where it is file-private the claim is recorded so its own file resolves to it. Something holds
-   * it and is *not* another file's file-private declaration: the plain key comes back and the
-   * caller's existing duplicate check reports it, so a private name against a public one of the
-   * same spelling is refused exactly as it was. Something holds it and **is** another file's
-   * file-private declaration: a numbered key, and the two coexist.
+   * **A file-private declaration steps aside from the plain key whenever another file has a claim on
+   * it** (`reference/modules.md § A file-private name is scoped to its file`):
+   *
+   * - **a wider declaration of the spelling in another file** — public, or a `private[M]` — which is
+   *   the case asked FIRST and asked of `widerDecls` rather than of the tables, because the wider one
+   *   may not have been hoisted yet. The plain key is what every other file and every importer
+   *   resolves, so it belongs to the declaration they can see, and the private one *shadows* it only
+   *   inside its own file: C's `static` beside an `extern` of the same name in another translation
+   *   unit;
+   * - **another file's file-private declaration already holding the key**, where the first file
+   *   keeps it and this one takes a slot, since neither can see the other.
+   *
+   * Nothing holds the key and nothing wider is coming: this declaration takes it. Something holds it
+   * from **this** file: the plain key comes back and the caller's duplicate check reports it — one
+   * file declaring a spelling twice, whatever the two visibilities, is the ordinary duplicate.
    */
   protected def declKey(name: String, vis: Visibility, taken: String => Boolean): String = {
     val plain = Modules.qualify(currentModule, name)
@@ -936,17 +947,70 @@ trait Hoisting extends HoistMembers {
             // *here* is an ordinary duplicate and must arrive at the same key to be reported as one.
             case Some(claimed) => claimed
             case None =>
+              val wider    = widerDecls.getOrElse(plain, Nil)
+              val shadows  = wider.nonEmpty && !wider.exists(_ eq file)
               val key =
-                if !taken(plain) then plain
-                else if fileLocal(plain) && !declAccess.get(plain).exists(_.file.exists(f => currentFile.exists(_ eq f)))
-                then s"$plain.private${filePrivateSlots(plain).length + 1}"
+                if shadows then filePrivateSlot(plain)
+                else if !taken(plain) then plain
+                else if fileLocal(plain) && !declAccess.get(plain).exists(_.file.exists(_ eq file))
+                then filePrivateSlot(plain)
                 else plain
-
-              if key != plain then filePrivateSlots(plain) = filePrivateSlots(plain) :+ key
 
               filePrivateKeys((file, plain)) = key
               key
   }
+
+  private def filePrivateSlot(plain: String): String = {
+    val key = s"$plain.private${filePrivateSlots(plain).length + 1}"
+
+    filePrivateSlots(plain) = filePrivateSlots(plain) :+ key
+    slotPlain(key) = plain
+    key
+  }
+
+  /** Every spelling a declaration makes nameable beyond its own file — public, or `private[M]` —
+   * with the files that declare it: `the plain key -> those files`.
+   *
+   * **Filled from the parsed files before anything is hoisted** (`noteWiderDecl`), because the
+   * question `declKey` asks of it is about the future: a file-private declaration hoisted first has
+   * to know that a public one of its spelling is coming, or it takes the plain key the public one
+   * needs. Asking the tables instead would make where each declaration lands depend on the order the
+   * files arrived in.
+   *
+   * One namespace for every kind, deliberately: whatever kind the wider declaration is, the private
+   * one takes a slot, and inside its file the slot is found first. What it then hides is decided at
+   * the use — everything of its spelling, except where both are functions, when only the public
+   * overloads a call could not tell from a private one are hidden (`Scoping.unshadowed`).
+   */
+  private val widerDecls = mutable.HashMap.empty[String, List[Source]]
+
+  /** Records what `stmt` makes nameable beyond its own file, for `declKey` (`widerDecls`).
+   *
+   * An enum's variants are names of the module in their own right and carry the enum's reach, so a
+   * public enum's variants are recorded beside it.
+   */
+  protected def noteWiderDecl(scope: Scope, stmt: Stmt): Unit =
+    for file <- scope.file do
+      def note(name: String, vis: Visibility): Unit =
+        if vis != Visibility.File then
+          val key = Modules.qualify(scope.module, name)
+
+          widerDecls(key) = file :: widerDecls.getOrElse(key, Nil)
+
+      stmt match
+        case d: StructDecl    => note(d.name, d.vis)
+        case d: EnumDecl      =>
+          note(d.name, d.vis)
+          for v <- d.variants do note(v.name, d.vis)
+        case d: TraitDecl     => note(d.name, d.vis)
+        case d: TypeDecl      => note(d.name, d.vis)
+        case d: ConstDecl     => note(d.name, d.vis)
+        case d: ValDecl       => note(d.name, d.vis)
+        case d: VarDecl       => note(d.name, d.vis)
+        case d: ExternVarDecl => note(d.name, d.vis)
+        case d: FuncDecl      => note(d.name, d.vis)
+        case d: ExternDecl    => note(d.name, d.vis)
+        case _                => ()
 
   /** Records a declaration as scaffolding where the file being hoisted said `@tests`
    * (`reference/attributes.md § @tests — a file of scaffolding`).
@@ -1008,28 +1072,16 @@ trait Hoisting extends HoistMembers {
       params: List[Param],
       retType: Option[TypeRef],
       variadic: Boolean,
-      vis: Visibility = Visibility.Public,
   ): Unit = {
-    // **A declaration this file cannot name is not one a call here could be confused with**, so two
-    // functions file-private to two files are not an overload pair at all — there is no call site
-    // that sees both (`reference/modules.md § Visibility`).
-    //
-    // The condition is deliberately both-ways: it takes a file-private declaration past a sibling's
-    // file-private one, and takes nothing past a **public** one. A public declaration beside another
-    // file's private one of the same spelling is still a duplicate, because the sibling file's own
-    // references would then have two answers with nothing to tell them apart.
-    def separable(other: String): Boolean = vis == Visibility.File && !visible(other)
-
-    def low(ps: List[Param]) = ps.count(_.default.isEmpty)
-    def high(ps: List[Param], v: Boolean) = if v then Int.MaxValue else ps.length
+    // Every member of the set is one some call site sees beside this one: a file-private declaration
+    // that another file's declaration of the spelling contends with is filed under a slot of its own
+    // (`declKey`), so the only private declarations left in a set are its own file's. Where a slot's
+    // file also sees the public set, a pair this would refuse is a SHADOWING instead (`unshadowed`).
+    val self = FuncDecl(key, Nil, params, retType, Nil, variadic = variadic)
 
     for
-      other <- overloadKeys(plain).filter(k => k != key && !separable(k)).flatMap(funcDecls.get)
-      lo = low(params) max low(other.params)
-      hi = high(params, variadic) min high(other.params, other.variadic)
-      if lo <= hi
-      n = lo min (params.length min other.params.length)
-      if params.take(n).map(_.typ) == other.params.take(n).map(_.typ)
+      other <- overloadKeys(plain).filter(_ != key).flatMap(funcDecls.get)
+      n     <- sharedArity(self, other)
     do
       // **A pair whose parameter lists are the same is a DUPLICATE, and is told so.** It is the same
       // rule — a call fits both — but not the same mistake: somebody who declared one function twice
