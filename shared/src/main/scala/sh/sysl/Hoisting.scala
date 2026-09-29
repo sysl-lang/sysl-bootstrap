@@ -986,8 +986,12 @@ trait Hoisting extends HoistMembers {
 
   /** Records what `stmt` makes nameable beyond its own file, for `declKey` (`widerDecls`).
    *
-   * An enum's variants are names of the module in their own right and carry the enum's reach, so a
-   * public enum's variants are recorded beside it.
+   * **An enum's variants are not recorded, only the enum.** A variant never contended with a
+   * declaration of its spelling — a struct and a variant of one name coexist, and at each use the
+   * expected type decides which answers (`reference/modules.md § Visibility`). So a file-private
+   * struct beside a public variant keeps the plain key it always had, and in its own file both stay
+   * candidates. Recording the variant would make the struct *shadow* it there, which is a refusal of
+   * code that compiled before this rule existed rather than the relaxation the rule is.
    */
   protected def noteWiderDecl(scope: Scope, stmt: Stmt): Unit =
     for file <- scope.file do
@@ -999,10 +1003,8 @@ trait Hoisting extends HoistMembers {
 
       stmt match
         case d: StructDecl    => note(d.name, d.vis)
-        case d: EnumDecl      =>
-          note(d.name, d.vis)
-          for v <- d.variants do note(v.name, d.vis)
-        case d: TraitDecl     => note(d.name, d.vis)
+        case d: EnumDecl      => note(d.name, d.vis)
+        case d: TraitDecl    => note(d.name, d.vis)
         case d: TypeDecl      => note(d.name, d.vis)
         case d: ConstDecl     => note(d.name, d.vis)
         case d: ValDecl       => note(d.name, d.vis)
