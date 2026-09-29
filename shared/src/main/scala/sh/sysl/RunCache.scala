@@ -19,10 +19,12 @@ import io.github.edadma.cross_platform.*
  * toward rebuilding: everything that can reach the bytes is in the key, and anything that cannot be
  * cheaply established is a miss rather than a guess.
  *
- *   - the **compiler**, by version. Two releases never share an entry, exactly as they never share a
- *     standard-module entry, and for the same reason: an executable is compiled code, so a release
- *     that changes what a program lowers to while touching none of its source produces different
- *     bytes at an identical fingerprint.
+ *   - the **compiler**, by version and by build (`CompilerIdentity`). Two releases never share an
+ *     entry, exactly as they never share a standard-module entry, and for the same reason: an
+ *     executable is compiled code, so a release that changes what a program lowers to while touching
+ *     none of its source produces different bytes at an identical fingerprint. The build is there for
+ *     a development tree, which changes the compiler under one version: keyed on the version alone,
+ *     a build replayed what an earlier build of the same version had cached for an identical fixture.
  *   - the **target**, the **allocator** pair and the **optimization level**, each of which changes
  *     what is emitted. The level is the one the build resolved rather than the one `-O` named
  *     (`Config.optimization`), so a project that raises its manifest's `optimization` rebuilds on the
@@ -46,18 +48,13 @@ import io.github.edadma.cross_platform.*
  *
  * ==What it does not cover, stated rather than hidden==
  *
- * A **development tree**, where the compiler changes under a constant `BuildInfo.version`. Nothing in
- * a cache can distinguish those without hashing the compiler itself, and it is the same hole the
- * standard-module cache has and names. `SYSL_NO_CACHE` is the escape hatch, and a `sysl build`
- * never consults this at all.
- *
  * An **`#include`d header** outside the trees this hashes, which a `c const` block or a vendored C
  * file may reach. The same is true of the standard-module cache, and the same answer applies.
  */
 object RunCache {
 
-  /** Set to anything non-empty to compile every time. It is for working **on the compiler**, where
-   * the version in the key stands still while the bytes it produces do not.
+  /** Set to anything non-empty to compile every time — for timing a compilation, or for anything
+   * that reaches the bytes and is outside what the key covers (an `#include`d header, below).
    */
   private val Off = "SYSL_NO_CACHE"
 

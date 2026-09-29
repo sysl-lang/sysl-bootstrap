@@ -468,6 +468,20 @@ class LibraryCliTests extends LibraryCliSupport {
         LibraryArtifact.stdDefault(Target.default) should include(BuildInfo.version)
       }
 
+      "and by which build of that version, so a changed development compiler links its own" in {
+        // A development tree changes the compiler under one version, so a key naming only the
+        // version handed every build the archive the first build of that version had made -- linked
+        // into every program, whatever the lowering had become since (`CompilerIdentity`).
+        assume(cacheDirectory.isDefined, "this machine has no cache directory")
+
+        val mine = LibraryArtifact.stdDefault(Target.default)
+
+        mine should include(BuildInfo.build)
+        CompilerIdentity.as(s"${BuildInfo.version}+0123456789abcdef")(
+          LibraryArtifact.stdDefault(Target.default)) should not be mine
+        CompilerIdentity.as(CompilerIdentity.current)(LibraryArtifact.stdDefault(Target.default)) shouldBe mine
+      }
+
       "and by the target, so a cross build and a host build do not overwrite each other" in {
         // An artifact is object code for one machine, and a tree parsed as that machine sees it, so
         // `Stdlib.read` refuses one built for another target by name. Sharing a path between two
@@ -570,12 +584,13 @@ class LibraryCliTests extends LibraryCliSupport {
         assume(cacheDirectory.isDefined, "this machine has no cache directory")
 
         LibraryArtifact.stdDefault(Target.default) shouldBe
-          s"${cacheDirectory.get}/sysl/${BuildInfo.version}-${Std.fingerprint(Target.default.os)}-${Target.default.name}" +
-            s"-${Allocator.c.alloc}-${Allocator.c.free}-O${Toolchain.defaultOptimization}/std${LibraryArtifact.extension}"
+          s"${cacheDirectory.get}/sysl/${BuildInfo.version}+${BuildInfo.build}-${Std.fingerprint(Target.default.os)}" +
+            s"-${Target.default.name}-${Allocator.c.alloc}-${Allocator.c.free}-O${Toolchain.defaultOptimization}" +
+            s"/std${LibraryArtifact.extension}"
 
         LibraryArtifact.stdDefault(Target.default, level = "3", pipeline = Pipeline(lto = Some("thin"))) shouldBe
-          s"${cacheDirectory.get}/sysl/${BuildInfo.version}-${Std.fingerprint(Target.default.os)}-${Target.default.name}" +
-            s"-${Allocator.c.alloc}-${Allocator.c.free}-O3-lto-thin/std${LibraryArtifact.extension}"
+          s"${cacheDirectory.get}/sysl/${BuildInfo.version}+${BuildInfo.build}-${Std.fingerprint(Target.default.os)}" +
+            s"-${Target.default.name}-${Allocator.c.alloc}-${Allocator.c.free}-O3-lto-thin/std${LibraryArtifact.extension}"
       }
 
       "and it sits under the cache directory rather than in the project" in {

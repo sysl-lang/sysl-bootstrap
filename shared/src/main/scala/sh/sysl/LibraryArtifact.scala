@@ -224,9 +224,12 @@ object LibraryArtifact {
    * second it takes. `Stdlib.read`'s fingerprint check still stands behind the library half; nothing
    * stands behind the compiler half but this, because an artifact does not record what built it.
    *
-   * What this does *not* separate is two builds of the same version — a development tree, where the
-   * compiler changes under a constant `BuildInfo.version`. Nothing in the cache can distinguish those
-   * without hashing the compiler itself, and `--no-core-lib` is the answer there.
+   * **And not by the version alone, but by which BUILD of it (`CompilerIdentity`).** A development
+   * tree changes the compiler under a constant `BuildInfo.version`, so a key naming only the version
+   * handed every build the `std.syslib` the first build of that version had made — linked into every
+   * program, whatever the lowering had become since. The build is a digest of the compiler's own
+   * sources, so a rebuild that changes nothing shares the entry and one that changes anything does
+   * not.
    *
    * Nothing here is ever evicted. Every distinct library leaves an artifact behind, which is what a
    * cache directory is for and why this belongs in one — the platform's own housekeeping knows to
@@ -269,7 +272,7 @@ object LibraryArtifact {
                  level: String = Toolchain.defaultOptimization,
                  pipeline: Pipeline = Pipeline.none): String =
     cacheDirectory
-      .map(c => s"$c/sysl/${BuildInfo.version}-${fingerprint.getOrElse(Std.fingerprint(target.os))}" +
+      .map(c => s"$c/sysl/${CompilerIdentity.current}-${fingerprint.getOrElse(Std.fingerprint(target.os))}" +
         s"-${target.name}-${allocator.alloc}-${allocator.free}-${codegen(level, pipeline)}/std$extension")
       .getOrElse(stdLocal)
 

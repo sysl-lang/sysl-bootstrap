@@ -100,15 +100,44 @@ lazy val githubCredentials: Seq[Credentials] = {
 // drift, and this one drifts *silently* — a binary that reports the
 // version before last is worse than one that reports none, since the whole use of the flag is telling
 // which build somebody has when they report something.
+//
+// `build` is which BUILD of that version this is: a digest of every file the compiler is made from --
+// its main sources on every platform, and the build definition that picks its dependencies. A
+// development tree changes the compiler under a constant `version`, so a cache keyed on the version
+// alone (`RunCache`, the standard module's `LibraryArtifact.stdDefault`) replayed what an older build
+// of the same version had made. A digest of the inputs rather than a git sha or a clock: a sha does
+// not move for an uncommitted edit, and a clock moves on every compile of an unchanged tree, where
+// this moves exactly when something that could change the compiler's output does. A release's is
+// fixed with the rest of the binary.
+lazy val compilerBuild = Def.task {
+  val root  = (ThisBuild / baseDirectory).value
+  val trees = Seq("shared", "jvm", "js", "native").map(p => root / p / "src" / "main")
+  val files =
+    trees.filter(_.isDirectory).flatMap(t => (t ** AllPassFilter).get()) ++
+      Seq(root / "build.sbt", root / "project" / "plugins.sbt", root / "project" / "build.properties")
+  val kept  = files.filter(f => f.isFile && !f.getName.startsWith(".")).map(f => (IO.relativize(root, f).get, f))
+  val sha   = java.security.MessageDigest.getInstance("SHA-256")
+
+  for ((name, f) <- kept.sortBy(_._1)) {
+    val bytes = IO.readBytes(f)
+
+    sha.update(s"$name ${bytes.length} ".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    sha.update(bytes)
+  }
+
+  sha.digest().take(8).map(b => f"${b & 0xff}%02x").mkString
+}
+
 lazy val embedVersion = Def.task {
   val utf8 = java.nio.charset.StandardCharsets.UTF_8
   val out  = (Compile / sourceManaged).value / "sh" / "sysl" / "BuildInfo.scala"
   val text =
     s"""package sh.sysl
        |
-       |/** Generated from `version` by `build.sbt` -- do not edit. */
+       |/** Generated from `version` and the compiler's own sources by `build.sbt` -- do not edit. */
        |private[sysl] object BuildInfo {
        |  val version: String = "${version.value}"
+       |  val build: String = "${compilerBuild.value}"
        |}
        |""".stripMargin
 
