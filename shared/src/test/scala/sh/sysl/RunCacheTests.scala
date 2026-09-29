@@ -220,6 +220,31 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
     }
   }
 
+  /** **The fingerprint is over each file's place in its tree, so two identical trees in two
+   * directories fingerprint alike** — and a test build's report heads each file with its full path.
+   * The key has to carry the paths as well, or the second tree replays the first one's build and
+   * reports the other directory as its own.
+   */
+  "an identical tree in another directory is another program, and reports its own path" in withCache { cache =>
+    {
+      val text  = """@test
+                    |four() =
+                    |    assert(2 * 2 == 4)
+                    |""".stripMargin
+      val one   = program(text)
+      val two   = program(text)
+      val first = ran(Config(command = "test", file = one))
+
+      first should include(s"$one/main.sysl")
+
+      val second = ran(Config(command = "test", file = two))
+
+      second should include(s"$two/main.sysl")
+      second should not include one
+      entries(cache) shouldBe 4
+    }
+  }
+
   /** The filter picks from the list rather than deciding what is compiled, so it is not in the key —
    * and a cached run has to apply it exactly as a fresh one does, which is why `rerun` is the tail
    * of `run` rather than a second implementation.

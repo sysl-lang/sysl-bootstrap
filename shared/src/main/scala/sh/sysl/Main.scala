@@ -729,6 +729,12 @@ private def executeCommand(asked: Config): Int = {
       // Every file the program is made of, and the C beside it. `fingerprint` is over each file's
       // place in its tree and its text, sorted, so the order these arrive in cannot matter.
       LibraryArtifact.fingerprint(sources ::: librarySources),
+      // **And where each of those files IS**, which the fingerprint deliberately leaves out. The
+      // binary names its sources by their full path — a test build's report heads each file with
+      // it, and a trap's location carries it — so two byte-identical trees in two directories are
+      // two programs. Without this the second tree was handed the first one's binary and printed
+      // the other directory's path as its own.
+      (sources ::: librarySources).map(_.name).sorted.mkString("\u0000"),
       // **What each package has enabled**, because that decides which lines of those files survive
       // the gate (`Conditional`) — and the fingerprint above is over the text as it was written. Two
       // runs of one unchanged tree under different features are two different programs, and without
@@ -737,6 +743,9 @@ private def executeCommand(asked: Config): Int = {
         .flatMap(s => s.features.toList.sorted.map(f => s"${s.name}:$f")).sorted.mkString(" "),
       LibraryArtifact.fingerprint(NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree,
                                                    target.os).flatten),
+      // The C's paths too, for the same reason: clang's `__FILE__` is the path it was handed.
+      NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree, target.os).flatten
+        .map(_.name).sorted.mkString("\u0000"),
       // An artifact named with `--lib` has no source to hash, so it is hashed as bytes.
       artifacts.map(a => s"$a:${fingerprintOfFile(a)}").mkString("\u0000"),
       // **The environment that reaches the toolchain** (`Toolchain.buildEnvironment`, card `0415`).
