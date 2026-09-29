@@ -76,21 +76,11 @@ class PackageBuildTests extends PackageCacheSupport {
     root
   }
 
-  /** Every `run` and `test` here compiles, and replays nothing out of the machine's run cache.
-   *
-   * That cache is keyed on the sources and `BuildInfo.version`, which is right for an installed
-   * compiler and wrong for this tree, where the compiler changes under a constant version. A fixture
-   * whose text matches one somebody built earlier with a different build of this version is handed
-   * that binary back — which is how "runs the project's own tests and not a dependency's" once
-   * reported a dependency's test, from another directory's run, built before the fix it asserts.
-   */
-  private def uncached[T](body: => T): T = RunCache.disabledFor(body)
-
   private def run(root: String, libs: List[String] = Nil): String = {
     val out    = new java.io.ByteArrayOutputStream
     val notes  = new java.io.ByteArrayOutputStream
-    val status = Console.withOut(out)(Console.withErr(notes)(
-      uncached(sh.sysl.execute(Config(command = "run", file = root, libs = libs)))))
+    val status = Console.withOut(out)(
+      Console.withErr(notes)(sh.sysl.execute(Config(command = "run", file = root, libs = libs))))
 
     if status != 0 then fail(s"the driver exited with $status:\n${out.toString}${notes.toString}")
 
@@ -99,8 +89,8 @@ class PackageBuildTests extends PackageCacheSupport {
 
   private def refused(root: String, libs: List[String] = Nil): String = {
     val notes  = new java.io.ByteArrayOutputStream
-    val status = Console.withOut(Discarded)(Console.withErr(notes)(
-      uncached(sh.sysl.execute(Config(command = "run", file = root, libs = libs)))))
+    val status = Console.withOut(Discarded)(
+      Console.withErr(notes)(sh.sysl.execute(Config(command = "run", file = root, libs = libs))))
 
     if status == 0 then fail(s"expected a refusal, got a build")
 
@@ -259,7 +249,7 @@ class PackageBuildTests extends PackageCacheSupport {
   private def tested(root: String): (Int, String) = {
     val out    = new java.io.ByteArrayOutputStream
     val status = Console.withOut(out)(
-      Console.withErr(out)(uncached(sh.sysl.execute(Config(command = "test", file = root)))))
+      Console.withErr(out)(sh.sysl.execute(Config(command = "test", file = root))))
 
     (status, out.toString)
   }
@@ -304,6 +294,39 @@ class PackageBuildTests extends PackageCacheSupport {
         status shouldBe 0
         out should include("1 passed")
         out should not include "fails_if_run"
+      }
+    }
+
+    /** The case above once reported a dependency's test in a release gate, from a binary a build of
+     * this version made before the fix it asserts had cached for an identical fixture — the run
+     * cache was keyed on the version and not on which build of it (`CompilerIdentity`). So the entry
+     * that build left is put back here, holding a test binary that fails everything, and this build
+     * has to compile rather than replay it.
+     */
+    "and is not handed a test build another build of this version cached for the same project" in {
+      val one = packageOf("one", "json", "tag() -> int = 40", "",
+        "json/tests.sysl" -> "module json\n@tests\n\n@test\nfails_if_run()\n    assert_eq(1, 2)\n")
+      val root  = app("print(json.tag())\n\n@test\nforty()\n    assert_eq(json.tag(), 40)\n",
+        s"""a { path = "$one" }""")
+      val cache = createTempDirectory("sysl-runcache-")
+      val older = s"${BuildInfo.version}+0123456789abcdef"
+
+      RunCache.usingCache(cache) {
+        CompilerIdentity.as(older)(tested(root))._1 shouldBe 0
+
+        for slot <- listFiles(s"$cache/sysl/run") if !slot.endsWith(".tests") do
+          writeFile(slot, "#!/bin/sh\necho fails_if_run\nexit 1\n")
+
+        // The seeded entry is what that build's key finds, so the check below can fail.
+        CompilerIdentity.as(older)(tested(root))._1 should not be 0
+
+        val (status, out) = tested(root)
+
+        withClue(out) {
+          status shouldBe 0
+          out should include("1 passed")
+          out should not include "fails_if_run"
+        }
       }
     }
   }
@@ -598,7 +621,7 @@ class PackageBuildTests extends PackageCacheSupport {
     def noted(root: String): String = {
       val notes  = new java.io.ByteArrayOutputStream
       val status = Console.withOut(Discarded)(
-        Console.withErr(notes)(uncached(sh.sysl.execute(Config(command = "run", file = root)))))
+        Console.withErr(notes)(sh.sysl.execute(Config(command = "run", file = root))))
 
       withClue(notes.toString)(status shouldBe 0)
       notes.toString

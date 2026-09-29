@@ -88,6 +88,45 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
     }
   }
 
+  /** **Another build of the same version is another compiler** (`CompilerIdentity`). A development
+   * tree changes the compiler under one `BuildInfo.version`, and keyed on the version alone a build
+   * replayed the binary an earlier build had cached for an identical program.
+   */
+  "a different build of this version is a different compiler, and the same build is the same" in withCache { cache =>
+    {
+      val root  = program("""print(21 * 2)""")
+      val other = s"${BuildInfo.version}+0123456789abcdef"
+
+      ran(Config(command = "run", file = root)) shouldBe "42\n"
+      entries(cache) shouldBe 1
+
+      CompilerIdentity.as(other)(ran(Config(command = "run", file = root))) shouldBe "42\n"
+      entries(cache) shouldBe 2
+
+      CompilerIdentity.as(other)(ran(Config(command = "run", file = root))) shouldBe "42\n"
+      CompilerIdentity.as(CompilerIdentity.current)(ran(Config(command = "run", file = root))) shouldBe "42\n"
+      entries(cache) shouldBe 2
+    }
+  }
+
+  "and what another build cached is not replayed, whatever it holds" in withCache { cache =>
+    {
+      val root  = program("""print(21 * 2)""")
+      val other = s"${BuildInfo.version}+0123456789abcdef"
+
+      CompilerIdentity.as(other)(ran(Config(command = "run", file = root))) shouldBe "42\n"
+
+      // What an older build left: here a program printing something else entirely, standing in
+      // for a binary that build's lowering made.
+      val slot = listFiles(s"$cache/sysl/run").head
+
+      writeFile(slot, "#!/bin/sh\necho stale\n")
+      CompilerIdentity.as(other)(ran(Config(command = "run", file = root))) shouldBe "stale\n"
+
+      ran(Config(command = "run", file = root)) shouldBe "42\n"
+    }
+  }
+
   /** **A comment is an edit.** The key is over the file's text rather than over anything the parser
    * decided, which is the conservative direction: a key that tried to see through a comment would be
    * a key that had to be right about what a comment is.

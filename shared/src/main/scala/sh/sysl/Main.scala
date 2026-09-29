@@ -704,7 +704,9 @@ private def executeCommand(asked: Config): Int = {
   val runKey =
     Option.when(cfg.command == "run" || cfg.command == "test")(RunCache.key(List(
       cfg.command,
-      BuildInfo.version,
+      // The compiler: its version AND which build of it, since a development tree changes the
+      // compiler under one version and a binary an older build made is not this build's answer.
+      CompilerIdentity.current,
       target.name,
       s"${allocator.alloc}/${allocator.free}",
       // **What the target provides, as the config narrowed it.** It decides whether a program
