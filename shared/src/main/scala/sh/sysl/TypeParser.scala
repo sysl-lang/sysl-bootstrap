@@ -279,9 +279,16 @@ trait TypeParser extends ExprParser {
           case p: TypeParamSpec if p.bounds.nonEmpty => p.name -> p.bounds
           case p: PackParamSpec if p.bounds.nonEmpty => p.name -> p.bounds
         }.toMap,
-        ps.collect { case p: TypeParamSpec if p.default.nonEmpty => p.name -> p.default.get }.toMap,
+        // A value parameter's default goes in the same map a type parameter's does, as the value
+        // argument a use would have written in its place — one list, one arity, one suffix rule,
+        // and one fill, so `Ring[int]` is `Ring[int, 4]` by the same step `Pair[int]` is
+        // `Pair[int, int]`.
+        ps.collect {
+          case p: TypeParamSpec if p.default.nonEmpty  => p.name -> p.default.get
+          case p: ValueParamSpec if p.default.nonEmpty =>
+            p.name -> ValueArgType(p.default.get).setPos(p.default.get.pos)
+        }.toMap,
         ps.collect { case p: ValueParamSpec => p.name -> p.typ }.toMap,
-        ps.collect { case p: ValueParamSpec if p.default.nonEmpty => p.name -> p.default.get }.toMap,
         ps.collect { case p: PackParamSpec => p.name }.toSet,
       )
     }
