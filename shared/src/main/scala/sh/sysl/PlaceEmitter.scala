@@ -62,7 +62,7 @@ trait PlaceEmitter extends ArcEmitter with ScalarEmitter {
    * the field chain with `getelementptr` rather than reading values out with `extractvalue`.
    */
   protected def address(place: TExpr): Val = place match
-    case TLoad(name, _)     => Val.Reg(s"$name.addr")
+    case TLoad(name, _)     => localSlot(name)
     // A `val`'s storage is the global itself, so its address needs no instruction to compute — it
     // is what makes indexing one reach into the table rather than copy it out first.
     case g: TGlobal         => Val.Global(g.symbol)

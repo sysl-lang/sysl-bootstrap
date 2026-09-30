@@ -993,6 +993,223 @@ class DeferTests extends AnyFreeSpec with RunSupport with CodegenSupport with Te
             |f(false)
             |""".stripMargin) shouldBe "7\nx\n7\n"
     }
+
+    "a loop ahead of a closing 'return' runs once, the copy at the block's end being unreached" in {
+      run("""f()
+            |    defer for j in 0..<2
+            |        print(j)
+            |
+            |    print("x")
+            |    return
+            |
+            |f()
+            |""".stripMargin) shouldBe "x\n0\n1\n"
+    }
+
+    "a 'while' with a 'variant' shares the slots its measure is kept in" in {
+      run("""f(c: bool)
+            |    defer if true
+            |        var k = 2
+            |
+            |        while k > 0
+            |            variant k
+            |            print(k)
+            |            k -= 1
+            |
+            |    if c then return
+            |    print("x")
+            |
+            |f(true)
+            |f(false)
+            |""".stripMargin) shouldBe "2\n1\nx\n2\n1\n"
+    }
+
+    "a 'defer' with a local, written inside a deferred block, runs at that block's end each time" in {
+      run("""f(c: bool, d: bool)
+            |    defer if true
+            |        defer for j in 0..<2
+            |            print(j)
+            |
+            |        if d
+            |            print("d")
+            |        else
+            |            print("not d")
+            |
+            |    if c then return
+            |    print("x")
+            |
+            |f(true, true)
+            |f(false, false)
+            |""".stripMargin) shouldBe "d\n0\n1\nx\nnot d\n0\n1\n"
+    }
+  }
+
+  // A slot can be shared by the copies of a deferred statement and a register cannot: it is defined
+  // by one instruction, once. So where a local's address is a register — a `ref`, and an array moved
+  // to a buffer — the first copy keeps the local's name and each later one takes `.d1`, `.d2`.
+  "a deferred statement whose local's address is a register, in a block with more than one exit" - {
+    def count(text: String, piece: String): Int = text.sliding(piece.length).count(_ == piece)
+
+    val refTwoExits =
+      """struct P
+        |    a: int
+        |    b: int
+        |
+        |f(c: bool)
+        |    var p = P(1, 2)
+        |
+        |    defer if true
+        |        ref r = p.b
+        |
+        |        r += 10
+        |        print(r)
+        |
+        |    if c then return
+        |    print("x")
+        |
+        |f(true)
+        |f(false)
+        |""".stripMargin
+
+    "a 'ref' names its place on each of them" in {
+      run(refTwoExits) shouldBe "12\nx\n12\n"
+    }
+
+    "and the second copy's address is a register of its own, read by that copy's uses" in {
+      val text = ir(refTwoExits)
+
+      count(text, "  %r.addr = getelementptr i8, ptr ") shouldBe 1
+      count(text, "  %r.d1.addr = getelementptr i8, ptr ") shouldBe 1
+      count(text, ", ptr %r.d1.addr\n") shouldBe 3
+      count(text, "%r.d2") shouldBe 0
+    }
+
+    "a third copy takes the next name" in {
+      val three =
+        """struct P
+          |    a: int
+          |    b: int
+          |
+          |f(n: int)
+          |    var p = P(1, n)
+          |
+          |    defer if true
+          |        ref r = p.b
+          |
+          |        r += 10
+          |        print(r)
+          |
+          |    if n == 1 then return
+          |    if n == 2 then return
+          |    print("x")
+          |
+          |f(1)
+          |f(2)
+          |f(3)
+          |""".stripMargin
+
+      run(three) shouldBe "11\n12\nx\n13\n"
+      count(ir(three), "  %r.d2.addr = getelementptr i8, ptr ") shouldBe 1
+    }
+
+    "a 'ref' ahead of a closing 'return' takes no second name, its second copy being unreached" in {
+      val closing =
+        """struct P
+          |    a: int
+          |    b: int
+          |
+          |f(c: bool)
+          |    var p = P(1, 2)
+          |
+          |    defer if true
+          |        ref r = p.b
+          |
+          |        if c then r += 10
+          |
+          |        print(r)
+          |
+          |    print("x")
+          |    return
+          |
+          |f(true)
+          |f(false)
+          |""".stripMargin
+
+      run(closing) shouldBe "x\n12\nx\n2\n"
+      count(ir(closing), "%r.d1") shouldBe 0
+    }
+
+    val arrayTwoExits =
+      """var kept: []int = []
+        |
+        |f(c: bool)
+        |    defer if true
+        |        var a = [1, 2, 3]
+        |
+        |        a[0] = if c then 7 else 9
+        |        kept = a[..]
+        |
+        |    if c then return
+        |    print("x")
+        |
+        |f(true)
+        |print(kept[0])
+        |f(false)
+        |print(kept[0])
+        |""".stripMargin
+
+    "an array whose view gets out is a buffer of its own on each of them" in {
+      run(arrayTwoExits) shouldBe "7\nx\n9\n"
+    }
+
+    "and the copies share the slot holding the box while each names its own elements" in {
+      val text = ir(arrayTwoExits)
+
+      count(text, "  %a.box = alloca ptr\n") shouldBe 1
+      count(text, "  %a.addr = getelementptr ") shouldBe 1
+      count(text, "  %a.d1.addr = getelementptr ") shouldBe 1
+    }
+
+    "an array whose view gets out, ahead of a closing 'return', runs once per call" in {
+      run("""var kept: []int = []
+            |
+            |f(c: bool)
+            |    defer if true
+            |        var a = [1, 2, 3]
+            |
+            |        a[0] = if c then 7 else 9
+            |        kept = a[..]
+            |
+            |    print("x")
+            |    return
+            |
+            |f(true)
+            |print(kept[0])
+            |f(false)
+            |print(kept[0])
+            |""".stripMargin) shouldBe "x\n7\nx\n9\n"
+    }
+
+    "a view taken through a 'ref' to such an array counts against the copy's own buffer" in {
+      run("""var kept: []int = []
+            |
+            |f(c: bool)
+            |    defer if true
+            |        var a = [1, 2, 3]
+            |        ref r = a
+            |
+            |        r[0] = if c then 7 else 9
+            |        kept = r[..]
+            |
+            |    if c then return
+            |    print("x")
+            |
+            |f(true)
+            |print(kept[0])
+            |f(false)
+            |print(kept[0])
+            |""".stripMargin) shouldBe "7\nx\n9\n"
+    }
   }
 
   "a real resource" - {

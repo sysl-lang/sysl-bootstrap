@@ -313,7 +313,7 @@ trait ExprEmitter extends ArithEmitter {
       val acc = accessOf(if refStorage.contains(name) then refStorage(name) else ty)
       val r   = freshReg()
 
-      emit(Inst.Load(r, ty.lty, Val.Reg(s"$name.addr"), acc))
+      emit(Inst.Load(r, ty.lty, localSlot(name), acc))
       r
 
     case TResult(_) =>

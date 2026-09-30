@@ -507,6 +507,8 @@ trait Emitter {
     promotedBoxes = mutable.HashMap.empty
     refStorage = mutable.HashMap.empty
     refPlaceOf = mutable.HashMap.empty
+    addressed = mutable.HashSet.empty
+    relaid = mutable.HashMap.empty
   }
 
   /** The **storage** type each `ref` in this body names (`reference/memory.md § ref — a name for a
@@ -661,6 +663,40 @@ trait Emitter {
   /** Whether the function being emitted already has a stack slot of this name. */
   private def hoisted(name: ir.Val): Boolean =
     prologue.exists { case ir.Inst.Alloca(n, _, _) => n == name; case _ => false }
+
+  /** The locals of this function whose address is a **register** an instruction defines where the
+   * declaration stands — a `ref`, and an array moved to a buffer — once that instruction is emitted.
+   */
+  private var addressed = mutable.HashSet.empty[String]
+
+  /** How many further times each such local has been declared, which is the `N` of the name its
+   * latest declaration took.
+   */
+  private var relaid = mutable.HashMap.empty[String, Int]
+
+  /** Names the storage of a local whose address is a register, at its declaration.
+   *
+   * A slot can be shared by every copy of a deferred statement, and a register cannot: it is defined
+   * once, by one instruction. So the first declaration keeps the local's own name and each one after
+   * it takes a name of its own — `r.d1`, `r.d2` — which the uses that follow, belonging to the same
+   * copy, then read through `localName`.
+   *
+   * **A declaration nothing reaches takes no name**, because its instruction is dropped and a name
+   * taken for it would be one nothing defines. That is the copy laid down after a closing `return`.
+   */
+  protected def declareLocal(name: String): String = {
+    if !terminated && !addressed.add(name) then relaid(name) = relaid.getOrElse(name, 0) + 1
+
+    localName(name)
+  }
+
+  /** The storage name a use of a local means: the one its most recent declaration took. Copies of a
+   * deferred statement are emitted one after another, so the most recent is the use's own.
+   */
+  protected def localName(name: String): String = relaid.get(name).fold(name)(n => s"$name.d$n")
+
+  /** The address a local lives at, for a use of it. */
+  protected def localSlot(name: String): ir.Val = ir.Val.Reg(s"${localName(name)}.addr")
 
   /** The boundary the type this storage holds asked for, and nothing where it did not — LLVM's own
    * choice is the natural alignment, which is right for everything that made no claim.
@@ -817,6 +853,8 @@ trait Emitter {
     // reset would leave the interrupted function with no target and its remaining tail calls would be
     // emitted as ordinary ones, which is a miscompile only a body long enough to need a helper shows.
     val savedTail = (tailTarget, tailCalls, tailParams)
+    // And the names the interrupted function's registers took, which its remaining uses still read.
+    val savedNames = (addressed, relaid)
 
     startFunction()
     gen
@@ -828,6 +866,7 @@ trait Emitter {
     blocks = savedBlocks._1; current = savedBlocks._2
     currentEnd = savedBlocks._3; currentLbl = savedBlocks._4; reached = savedBlocks._5
     tailTarget = savedTail._1; tailCalls = savedTail._2; tailParams = savedTail._3
+    addressed = savedNames._1; relaid = savedNames._2
     built
   }
 

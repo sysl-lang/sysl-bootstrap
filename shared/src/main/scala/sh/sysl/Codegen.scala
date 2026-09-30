@@ -851,10 +851,13 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       val v           = genExpr(init)
       val (box, data) = genBuffer(elem, Val.Int(n))
 
+      // The address is a register rather than a slot, so a copy of a deferred statement names its own.
+      val addr = Val.Reg(s"${declareLocal(name)}.addr")
+
       promotedBoxes(name) = box
-      emit(Inst.Gep(Val.Reg(s"$name.addr"), elem.lty, data, List(Arg(LType.I(64), Val.Int(0)))))
+      emit(Inst.Gep(addr, elem.lty, data, List(Arg(LType.I(64), Val.Int(0)))))
       retainValue(ty, v)
-      emit(Inst.Store(ty.lty, v, Val.Reg(s"$name.addr"), Access.Plain))
+      emit(Inst.Store(ty.lty, v, addr, Access.Plain))
       ownBox(name, box, elem)
 
     // The slot is laid down **before** the initializer runs, because a large one is written into it
@@ -882,7 +885,11 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       // to read it off — so it is recorded here and put back at every access through the name.
       if Type.volatileIn(place.placeTy) then refStorage(name) = place.placeTy
       refPlaceOf(name) = place
-      emit(Inst.Gep(Val.Reg(s"$name.addr"), LType.I(8), base, List(Arg(LType.I(64), Val.Int(0)))))
+
+      // A register is defined once, so a copy of a deferred statement names its own.
+      val addr = Val.Reg(s"${declareLocal(name)}.addr")
+
+      emit(Inst.Gep(addr, LType.I(8), base, List(Arg(LType.I(64), Val.Int(0)))))
 
     case TExprStmt(expr) =>
       genExpr(expr)
@@ -963,7 +970,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     val loaded = ins.map { o =>
       val r = freshReg()
 
-      emit(Inst.Load(r, o.ty.lty, Val.Reg(s"${o.slot}.addr"), Access.Plain))
+      emit(Inst.Load(r, o.ty.lty, localSlot(o.slot), Access.Plain))
       Arg(o.ty.lty, r)
     }
 
@@ -983,7 +990,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
         val r = freshReg()
 
         emit(Inst.Asm(Some(r), o.ty.lty, text, cons, loaded))
-        emit(Inst.Store(o.ty.lty, r, Val.Reg(s"${o.slot}.addr"), Access.Plain))
+        emit(Inst.Store(o.ty.lty, r, localSlot(o.slot), Access.Plain))
 
       // Several outputs come back as one anonymous structure, which is LLVM's shape rather than
       // anything the language says — so it is taken apart here and never seen above this line.
@@ -997,7 +1004,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
           val part = freshReg()
 
           emit(Inst.Extract(part, shape, r, List(i)))
-          emit(Inst.Store(o.ty.lty, part, Val.Reg(s"${o.slot}.addr"), Access.Plain))
+          emit(Inst.Store(o.ty.lty, part, localSlot(o.slot), Access.Plain))
   }
 
   /** Counts the assembly blocks emitted in this module, so each one's labels can be its own. */
