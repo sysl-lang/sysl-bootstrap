@@ -701,6 +701,9 @@ private def executeCommand(asked: Config): Int = {
   // `run` alone. A `build` writes a binary somebody named and is expected to have built it; a
   // `build-c` and a `build-lib` write artifacts for somebody else's toolchain, and neither is
   // something a reader would want quietly skipped.
+  // The C the key is over, walked once: it is hashed and its paths are listed, and each walk reads
+  // every directory of every tree.
+  lazy val nativeForKey =NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree, target.os).flatten
   val runKey =
     Option.when(cfg.command == "run" || cfg.command == "test")(RunCache.key(List(
       cfg.command,
@@ -741,11 +744,9 @@ private def executeCommand(asked: Config): Int = {
       // this the second is handed the first one's binary.
       (sources ::: librarySources)
         .flatMap(s => s.features.toList.sorted.map(f => s"${s.name}:$f")).sorted.mkString(" "),
-      LibraryArtifact.fingerprint(NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree,
-                                                   target.os).flatten),
+      LibraryArtifact.fingerprint(nativeForKey),
       // The C's paths too, for the same reason: clang's `__FILE__` is the path it was handed.
-      NativeSources.of(cfg.file :: roots ::: fetched.roots ::: stdTree, target.os).flatten
-        .map(_.name).sorted.mkString("\u0000"),
+      nativeForKey.map(_.name).sorted.mkString("\u0000"),
       // An artifact named with `--lib` has no source to hash, so it is hashed as bytes.
       artifacts.map(a => s"$a:${fingerprintOfFile(a)}").mkString("\u0000"),
       // **The environment that reaches the toolchain** (`Toolchain.buildEnvironment`, card `0415`).

@@ -61,7 +61,7 @@ object Hashing {
    */
   private[sysl] def files(root: String): Either[String, List[String]] = {
     def walk(path: String): List[String] = {
-      val entries = listFiles(path).toList
+      val entries = listDirectory(path).toList
 
       entries.filter(isFile) ::: entries.filter(isDirectory)
         .filter(d => Project.basename(d) != ".git")

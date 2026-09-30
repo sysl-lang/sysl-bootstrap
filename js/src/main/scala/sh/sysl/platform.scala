@@ -79,3 +79,9 @@ def runProgram(command: Seq[String]): Int = {
 
   if status == null || js.isUndefined(status) then -1 else status.asInstanceOf[Int]
 }
+
+/** The entries of one directory, as absolute normalized paths in sorted order. Node's `readdirSync`
+ * holds no descriptor once it returns, so `cross_platform.listFiles` is already what the other two
+ * platforms have to write out by hand.
+ */
+def listDirectory(dir: String): Seq[String] = io.github.edadma.cross_platform.listFiles(dir)

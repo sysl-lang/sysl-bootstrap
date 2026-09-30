@@ -750,7 +750,7 @@ object Toolchain {
               // Several may be installed side by side, which is what the directory is named for, and
               // the newest is the one to take. Sorted on the version read as *numbers* — `9.x` sorts
               // above `30.x` as text, which is the whole reason this is not a plain `.sorted`.
-              listFiles(installed).toList.filter(isDirectory).sortBy(d => versionKey(Project.basename(d)))
+              listDirectory(installed).toList.filter(isDirectory).sortBy(d => versionKey(Project.basename(d)))
                 .lastOption match
                 case Some(newest) => clangUnderNdk(newest)
                 case None =>
@@ -771,7 +771,7 @@ object Toolchain {
     if !isDirectory(prebuilt) then
       Left(s"'$ndk' is not an Android NDK — it has no 'toolchains/llvm/prebuilt' in it")
     else
-      listFiles(prebuilt).toList.filter(isDirectory).sorted.headOption match
+      listDirectory(prebuilt).toList.filter(isDirectory).sorted.headOption match
         case None => Left(s"'$prebuilt' holds no toolchain for any host")
         case Some(host) =>
           val cc = s"$host/bin/clang"

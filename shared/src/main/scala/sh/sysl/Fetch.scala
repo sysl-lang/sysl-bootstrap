@@ -198,7 +198,7 @@ object Fetch {
   private[sysl] def removeTree(path: String): Unit =
     try
       if isDirectory(path) then
-        listFiles(path).foreach(removeTree)
+        listDirectory(path).foreach(removeTree)
         deleteFile(path)
       else if exists(path) then deleteFile(path)
     catch case _: Exception => ()

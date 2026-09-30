@@ -173,7 +173,7 @@ object RunCache {
   private def evict(fresh: String, now: Long): Unit =
     for dir <- Project.parentOf(fresh) do
       try
-        val kept = listFiles(dir).toList.filterNot(_ == fresh)
+        val kept = listDirectory(dir).toList.filterNot(_ == fresh)
 
         if kept.length >= Keep then
           for old <- kept if now - lastModified(old) > Stale do
@@ -186,7 +186,7 @@ object RunCache {
    */
   private def newest(fresh: String): Long =
     Project.parentOf(fresh).toList
-      .flatMap(dir => try listFiles(dir).toList catch case _: Exception => Nil)
+      .flatMap(dir => try listDirectory(dir).toList catch case _: Exception => Nil)
       .map(lastModified)
       .maxOption
       .getOrElse(0L)

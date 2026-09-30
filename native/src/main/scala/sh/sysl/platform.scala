@@ -228,3 +228,23 @@ private def pumpOutput(from: java.io.InputStream, to: java.io.PrintStream): Unit
     n = from.read(chunk)
   }
 }
+
+/** The entries of one directory, as absolute normalized paths in sorted order — and **the directory
+ * stream closed before this returns**. The JVM implementation says why `cross_platform.listFiles`
+ * is not enough: it leaves the stream open, so every call holds a descriptor for the life of the
+ * process.
+ */
+def listDirectory(dir: String): Seq[String] = {
+  val at = java.nio.file.Paths.get(dir)
+
+  if !java.nio.file.Files.isDirectory(at) then
+    throw new IllegalArgumentException(s"$dir is not a directory or does not exist")
+
+  val entries = java.nio.file.Files.list(at)
+
+  try {
+    val names = scala.collection.mutable.ArrayBuffer.empty[String]
+    entries.forEach(p => names += p.toAbsolutePath.normalize.toString)
+    names.toSeq.sorted
+  } finally entries.close()
+}

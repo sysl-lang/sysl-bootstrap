@@ -272,7 +272,7 @@ object Project {
    */
   private def contents(path: String, os: Option[Os], within: Option[String])
       : (List[String], List[(String, Option[String])]) = {
-    val entries            = listFiles(path).toList.sorted
+    val entries            = listDirectory(path).toList.sorted
     val (dirs, files)      = entries.partition(isDirectory)
     val (selectors, plain) = dirs.partition(d => marked(basename(d)))
 

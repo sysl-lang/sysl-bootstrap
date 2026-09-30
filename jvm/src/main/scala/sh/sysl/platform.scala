@@ -117,3 +117,27 @@ private def pumpOutput(from: java.io.InputStream, to: java.io.PrintStream): Unit
     n = from.read(chunk)
   }
 }
+
+/** The entries of one directory, as absolute normalized paths in sorted order — and **the directory
+ * stream closed before this returns**.
+ *
+ * `cross_platform.listFiles` answers the same list and leaves the stream `Files.list` opened for the
+ * garbage collector, which never closes one: every call holds a descriptor for the life of the
+ * process. A compilation walks every directory of every tree it reads, several times over, so a
+ * process that compiles many programs — the test suite is one — runs out of descriptors and every
+ * file operation after that fails with *"Too many open files"*.
+ */
+def listDirectory(dir: String): Seq[String] = {
+  val at = java.nio.file.Paths.get(dir)
+
+  if !java.nio.file.Files.isDirectory(at) then
+    throw new IllegalArgumentException(s"$dir is not a directory or does not exist")
+
+  val entries = java.nio.file.Files.list(at)
+
+  try {
+    val names = scala.collection.mutable.ArrayBuffer.empty[String]
+    entries.forEach(p => names += p.toAbsolutePath.normalize.toString)
+    names.toSeq.sorted
+  } finally entries.close()
+}
