@@ -7,6 +7,38 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.152 — 2026-09-30
+
+**run caches keyed by where a program is, and diagnostics that name what the source spells**
+
+A small release: a run cache that stops handing one directory's binary to another, diagnostics that name a declaration the way its source does, and a file-descriptor leak that took the Linux CI down. Two of them change what a user sees, so they come first.
+
+### Behaviour changes
+
+#### Moving a project to another directory now costs one rebuild of its cached run
+
+`sysl run` and `sysl test` keep the binary they built, keyed on the program's files. The key was over each file's place in its tree and its text, so two byte-identical trees in two directories shared one entry — and the binary names its sources by their full path (a test build heads each file's report with it, and a trap's location carries it). `sysl test .` in the second tree replayed the first tree's build and printed the other directory's paths as its own. The key now also carries the sorted absolute names of the sysl sources and of the C beside them, so a moved or copied project is a different program and is built once in its new place. Nothing needs clearing. (a57f4b46, 2273ba63)
+
+#### Error messages no longer print internal `module$name` keys
+
+A diagnostic that named a declaration could print the compiler's internal key for it — `'m$use'`, `'m$hid.private1'` — rather than what the source spells. Every diagnostic now names a declaration as its source spells it (`'use'`, `'P.get'`, `'hid'`). It is done in one place, `Modules.readable` applied in `Diagnostic.apply`, so no message path can bypass it. A test or a page quoting the old wording has to be re-quoted; sysl.sh's four such `error` blocks (`library/buf.md`, `library/fs.md`, `library/text.md` twice) moved with this release. (cecf55f3)
+
+### Fixes
+
+- **The compiler closes every directory stream it opens.** `cross_platform.listFiles` left the stream `Files.list` opened for the garbage collector, which never closes one, so every directory listing held two descriptors for the life of the process. One compilation is harmless; a process that compiles thousands — the JVM test suite — reached the Linux runner's limit about an hour in once the run-cache key above walked the C trees a second time, and 261 tests failed with *"Too many open files"*, none of them about directories. `listDirectory` in each platform file now closes the stream before it returns, every caller uses it, and the key walks the C trees once. (8e8f8d20)
+
+### Tests
+
+- `RunCacheTests` gains a case running two identical trees in two directories, which fails without the key change.
+- `DiagnosticNameTests` pins each shape of internal key against the bare name its source spells.
+- `DirectoryListingTests` counts this process's open descriptors across 3,000 listings; with the stream left open it reads 6,002 over the bound.
+
+### Verification
+
+dev CI was red on `2273ba63`, `9ef55f7d` and `cecf55f3` — 261 to 292 failures, every one of them *"Too many open files"* — which is the descriptor leak above and is what `8e8f8d20` fixes. Full Native gate on `8e8f8d20` (`./run-gate.sh`, 416 suites + 2 doc suites): **12,183 passed, 0 failed**, nothing retried. The tag is that sha plus the version bump (`df083a69`). Warnings census, cleaned: zero compile warnings; `doc` totals 2 / 3 / 3 / 1 / 2, all named and none from this repository.
+
+The macOS tarball was extracted into a bare prefix and run through a symlink under a fresh `HOME`: `sysl --version` answers `sysl 0.0.152`, the standard module builds from the shipped `share/sysl/library` into `…/sysl/0.0.152+0637df01abee998f-…/std.syslib`, and `sysl doc` reaches `sysl-doc`. One program copied into two directories and run by absolute path made two run-cache entries, one per directory (`RunCacheTests` is what shows the pre-fix compiler sharing one).
+
 ## 0.0.151 — 2026-09-29
 
 **a file-private name shadows a public one, and caches keyed by compiler build**
