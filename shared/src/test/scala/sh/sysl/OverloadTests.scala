@@ -161,6 +161,53 @@ class OverloadTests extends LibraryCliSupport with RunSupport with CodegenSuppor
     }
   }
 
+  // A refused declaration is still a declaration: it has been counted into the name's overload set,
+  // and a call of the name reads every member of that set. So each refusal is asked again with a
+  // call below it — the refusal has to be what comes out, and the only thing that does. The quoted
+  // source line is asserted so that the absence of the call's line is a statement about the
+  // diagnostics rather than about the message carrying no source at all.
+  "a refused declaration is still there for a call of the name to find" - {
+    "a sysl function refused for overloading an 'extern'" in {
+      val e = err("""extern "abs" bump(a: int) -> int
+                    |bump(a: long) -> long = a
+                    |print(bump(3))""".stripMargin)
+
+      e should include("'bump' is already declared as an 'extern', which this would overload")
+      e should include("bump(a: long) -> long = a")
+      e should not include "print(bump(3))"
+    }
+
+    "an 'extern' refused for overloading a sysl function" in {
+      val e = err("""bump(a: long) -> long = a
+                    |extern "abs" bump(a: int) -> int
+                    |print(bump(3))""".stripMargin)
+
+      e should include("'bump' is already declared as a function, so this 'extern' would overload it")
+      e should include("""extern "abs" bump(a: int) -> int""")
+      e should not include "print(bump(3))"
+    }
+
+    "an 'extern' refused for naming a symbol another of the name has" in {
+      val e = err("""extern "abs" bump(a: int) -> int
+                    |extern "abs" bump(a: long) -> long
+                    |print(bump(3))""".stripMargin)
+
+      e should include("one C function cannot be two")
+      e should include("""extern "abs" bump(a: long) -> long""")
+      e should not include "print(bump(3))"
+    }
+
+    "a function refused for differing from another only in what it returns" in {
+      val e = err("""bump(a: int) -> int = a
+                    |bump(a: int) -> long = 1
+                    |print(bump(3))""".stripMargin)
+
+      e should include("function 'bump' is already declared")
+      e should include("bump(a: int) -> long = 1")
+      e should not include "print(bump(3))"
+    }
+  }
+
   "a pair no call could tell apart is refused where it is written" - {
     // Resolution never looks at the result, so this pair has no call that distinguishes them. Refused
     // at the declaration: the mistake is in the pair, and every use of the name would otherwise

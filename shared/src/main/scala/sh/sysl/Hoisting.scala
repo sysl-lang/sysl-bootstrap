@@ -353,13 +353,6 @@ trait Hoisting extends HoistMembers {
       // under one private slot, where the second overwrote the first — a declaration silently gone.
       val key = if funcDecls.contains(base) then overloadSlot(base) else base
 
-      // The other side of the `extern` rule below: overloads of an `extern` are told apart by the
-      // symbol each names, and a sysl function has none to give.
-      if key != plain && overloadKeys(plain).exists(externDecls.contains) then
-        err(s"'${f.name}' is already declared as an 'extern', which this would overload — what tells " +
-          "overloads of an 'extern' apart is the symbol each names, and a sysl function declares no " +
-          "symbol")
-
       if constDecls.contains(key) then duplicate(key, s"'${f.name}' is already declared as a constant")
       else if valDecls.contains(key) then duplicate(key, s"'${f.name}' is already declared as a 'val'")
       else if staticVarDecls.contains(key) then
@@ -381,13 +374,23 @@ trait Hoisting extends HoistMembers {
       // After every table this declaration fills, because it reports and reporting unwinds: a
       // declaration whose overload is refused is still a declaration the body pass will look up.
       //
+      // **The other side of the `extern` rule below**: overloads of an `extern` are told apart by
+      // the symbol each names, and a sysl function has none to give. `overloadSlot` has already
+      // counted this declaration into the name's set by the time the question can be asked, so a
+      // refusal made above the tables would leave a key in the set that names no declaration — and
+      // a call of the name, which reads every key in the set, would take the compiler down on it
+      // instead of letting this be what the reader sees.
+      if key != plain && overloadKeys(plain).exists(externDecls.contains) then
+        recover(())(err(s"'${f.name}' is already declared as an 'extern', which this would overload — " +
+          "what tells overloads of an 'extern' apart is the symbol each names, and a sysl function " +
+          "declares no symbol"))
       // **`main` is the one name overloading must not reach.** A program starts in one place, and
       // the entry point is found by asking which declarations are *called* `main` — so a second one,
       // filed under a key of its own, would be invisible to that question and the program would
       // start at whichever was written first with the other silently unreachable. It is refused
       // rather than resolved because there is nothing for a call site to choose between: nothing
       // calls `main`.
-      if key != plain && Modules.bare(plain) == "main" then
+      else if key != plain && Modules.bare(plain) == "main" then
         recover(())(err("'main' is where a program starts, so there is one — a second declaration " +
           "of it would overload the name, and a program has one beginning rather than a set of them"))
       // A declaration filed under a private slot is in no set but the slot's: nothing outside its
