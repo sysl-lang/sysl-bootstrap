@@ -9,14 +9,15 @@ package sh.sysl
   * parameters, because they share one list, one namespace and one argument position — what marks
   * one out is an entry in `values` giving the type its argument must have. A value parameter
   * carries no bound (a bound is a trait, and a value does not implement one) and its default, where
-  * it has one, is an expression rather than a type.
+  * it has one, is an expression rather than a type — kept in `defaults` beside the type
+  * parameters' as the `ValueArgType` a use would have written, so every rule about defaults (the
+  * arity, the suffix, the left-to-right fill) is one rule rather than two.
   */
 case class TypeParams(
     names: List[String],
     bounds: Map[String, List[BoundRef]] = Map.empty,
     defaults: Map[String, TypeRef] = Map.empty,
     values: Map[String, TypeRef] = Map.empty,
-    valueDefaults: Map[String, Expr] = Map.empty,
     packs: Set[String] = Set.empty,
 ) {
 

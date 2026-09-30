@@ -681,4 +681,120 @@ class DefaultTypeParamTests extends AnyFreeSpec with RunSupport with CodegenSupp
       ) shouldBe "15\n"
     }
   }
+
+  /** A **value** parameter may carry a default too, under the same rules: it is the argument a use
+    * would have written in its place, so it fills the same gap, counts toward the same arity, sits in
+    * the same suffix and is refused on the same three solved declarations.
+    */
+  "a value parameter's default" - {
+    "a struct takes it" in {
+      run(
+        """struct Ring[T, const N: usize = 4]
+          |    items: [N]T
+          |val r: Ring[int] = Ring([1, 2, 3, 4])
+          |print(r.items.len)""".stripMargin,
+      ) shouldBe "4\n"
+    }
+
+    "an enum takes it" in {
+      run(
+        """enum Slot[const N: usize = 2]
+          |    Empty
+          |    Full(xs: [N]int)
+          |held(s: Slot) -> usize = s match
+          |    Full(xs) -> xs.len
+          |    Empty -> 0
+          |var s: Slot = Full([5, 6])
+          |print(held(s))""".stripMargin,
+      ) shouldBe "2\n"
+    }
+
+    "type and value defaults fill together" in {
+      run(
+        """struct Grid[T = int, const N: usize = 3]
+          |    cells: [N]T
+          |var g: Grid = Grid([1, 2, 3])
+          |var h: Grid[bool] = Grid([true, false, true])
+          |var k: Grid[bool, 2] = Grid([true, false])
+          |print(g.cells.len, h.cells.len, k.cells.len)""".stripMargin,
+      ) shouldBe "3 3 2\n"
+    }
+
+    "a default may name a value parameter written before it" in {
+      run(
+        """struct Pad[const M: usize, const N: usize = M * 2]
+          |    a: [M]int
+          |    b: [N]int
+          |var p: Pad[2] = Pad([1, 2], [3, 4, 5, 6])
+          |print(p.a.len, p.b.len)""".stripMargin,
+      ) shouldBe "2 4\n"
+    }
+
+    /** Asserted on the emitted module, as the type-parameter case above is: two instantiations
+      * would show up there as two struct types.
+      */
+    "the filled and the written spelling are one instantiation" in {
+      val out = ir(
+        """struct Ring[T, const N: usize = 4]
+          |    items: [N]T
+          |var p: Ring[int] = Ring([1, 2, 3, 4])
+          |var q: Ring[int, 4] = Ring([5, 6, 7, 8])
+          |print(p.items[0] + q.items[3])""".stripMargin,
+      )
+
+      out.linesIterator.count(_.startsWith("%struct.Ring")) shouldBe 1
+    }
+
+    "a defaulted value parameter may not come before an undefaulted one" in {
+      err("struct S[const N: usize = 4, T]\n    x: [N]T") should include(
+        "'T' has no default and comes after 'N', which has one",
+      )
+    }
+
+    "a default may not name a value parameter fixed after it" in {
+      err("struct S[const M: usize = N, const N: usize = 2]\n    x: [M]int") should include(
+        "the default for 'M' names 'N', which is fixed after it",
+      )
+    }
+
+    "a default has to fit the parameter's type" in {
+      err("struct S[const N: u8 = 300]\n    x: int") should include(
+        "the default for 'N' does not fit byte: 300",
+      )
+    }
+
+    "and so does a written argument" in {
+      err("struct S[const N: u8]\n    x: int\nvar s: S[300] = S(1)\nprint(s.x)") should include(
+        "this argument does not fit byte: 300",
+      )
+    }
+
+    "a default has to be a value" in {
+      err("struct S[const N: usize = int]\n    x: [N]int") should include("'int' is a type")
+    }
+
+    "a function may not default one" in {
+      err("total[const N: usize = 3](xs: [N]int) -> usize = N\nprint(total([1, 2]))") should include(
+        "'N' is a value parameter of the function 'total', whose type parameters are solved from " +
+          "what it is given rather than written where it is used — so '= 3' has nothing to stand in for",
+      )
+    }
+
+    "nor may a method" in {
+      err("struct P\n    v: int\n    m[const N: usize = 2](self, xs: [N]int) -> usize = N") should include(
+        "'N' is a value parameter of the method 'P.m'",
+      )
+    }
+
+    "nor may an 'impl' block" in {
+      err(
+        """trait Show
+          |    show(self) -> string
+          |struct Buf[const N: usize]
+          |    v: [N]int
+          |impl[const N: usize = 2] Show for Buf[N]
+          |    show(self) -> string = "buf"""".stripMargin,
+      ) should include("'N' is a value parameter of the 'impl' block")
+    }
+  }
 }

@@ -286,11 +286,13 @@ class ValueGenericsTests extends AnyFreeSpec with RunSupport with CodegenSupport
       run("var a: [0]int = []\nprint(a)") shouldBe "[]\n"
     }
 
+    // Refused at the argument itself now, since -1 is not a `usize` at all — before the array it
+    // would have sized is ever laid out.
     "while a negative length is refused as it always was" in {
       err("""struct Buf[const N: usize]
             |    data: [N]byte
             |var b: Buf[-1] = Buf([])
-            |print(b.data.len)""".stripMargin) should include("an array cannot have -1 elements")
+            |print(b.data.len)""".stripMargin) should include("this argument does not fit usize: -1")
     }
   }
 
