@@ -231,8 +231,19 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
           // good enough is erasure, and `traitObject` refuses it there in its own words.
           val here = (if self.contains(selfName) then self else self ++ selfBinding(abstractSelf))
 
+          // A value parameter's default is the argument a use would have written there, folded
+          // under the same arguments a type default is resolved under — so `[const M: usize,
+          // const N: usize = M]` reads the `M` this use fixed.
+          val values = nominalValues(key)
+
           for tp <- tparams.drop(targs.length) do
-            filled += tdefaults.get(tp).fold(Type.Unknown)(resolveType(_, here ++ tparams.zip(filled)))
+            val fixed = here ++ tparams.zip(filled)
+            filled += tdefaults.get(tp).fold(Type.Unknown) { ref =>
+              values.get(tp) match
+                case Some(vt) =>
+                  valueArg(ref, recover(Type.Unknown)(resolveType(vt, Map.empty)), fixed, s"the default for '$tp'")
+                case None => resolveType(ref, fixed)
+            }
 
           filled.toList
         }
@@ -686,7 +697,7 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
    * generic body, exactly as an array length written over one does — there is no argument yet, and
    * the tree that walk builds is discarded.
    */
-  protected def valueArg(ref: TypeRef, ty: Type, subst: Map[String, Type]): Type = {
+  protected def valueArg(ref: TypeRef, ty: Type, subst: Map[String, Type], what: String = "this argument"): Type = {
     val written = ref match
       case ValueArgType(e)      => Some(e)
       case NamedType(name, Nil) => Some(Ident(name))
@@ -694,11 +705,17 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
 
     written match
       case None =>
-        err(s"this argument stands where the declaration wrote 'const', so a value belongs here " +
+        err(s"$what stands where the declaration wrote 'const', so a value belongs here " +
           s"rather than a type — one of ${show(ty)}")
       case Some(e) =>
         constArgValue(e, subst).orElse(variantTag(e, ty)) match
-          case Some(v)                               => Type.ConstArg(v, ty)
+          // The value goes into a type's identity at the parameter's declared width, so one that
+          // does not fit it is refused in the words a `const` that does not fit is — rather than
+          // keyed at a number the parameter could never hold.
+          case Some(v) =>
+            Type.underlying(ty) match
+              case i: Type.Integer if !Type.fits(v, i) => err(s"$what does not fit ${show(i)}: $v")
+              case _                                   => Type.ConstArg(v, ty)
           case None if awaitsInstantiation(e, subst) => Type.ConstArg(0, ty)
           // A name that turns out to be a **type** is the likely mistake in this position, and it
           // gets its own sentence: `Buf[int]` reads as an argument list of types until the

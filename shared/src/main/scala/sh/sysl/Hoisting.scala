@@ -731,7 +731,13 @@ trait Hoisting extends HoistMembers {
    */
   protected def checkSolvedDefaults(noun: String, label: String, tdefaults: Map[String, TypeRef]): Unit =
     for (tp, ref) <- tdefaults.toList.sortBy(_._1) do
-      at(ref.pos)(err(s"'$tp' is a type parameter of $noun '$label', whose type parameters are solved " +
+      // A value parameter's default is held as the argument it stands for, and it is refused in the
+      // same words: `[const N: usize]` on a function is solved from an array's length exactly as
+      // `[T]` is from an argument's type.
+      val kind = ref match
+        case _: ValueArgType => "a value parameter"
+        case _               => "a type parameter"
+      at(ref.pos)(err(s"'$tp' is $kind of $noun '$label', whose type parameters are solved " +
         s"from what it is given rather than written where it is used — so '= ${ref.show}' has nothing " +
         "to stand in for"))
 
@@ -759,7 +765,8 @@ trait Hoisting extends HoistMembers {
           // Arguments are written left to right, so a parameter with no default sitting behind one
           // that has could never be reached: leaving the earlier one out would leave nothing for the
           // later one to be written after. The shape is refused here rather than at every use.
-          val first = tparams.indexWhere(tdefaults.contains)
+          val first  = tparams.indexWhere(tdefaults.contains)
+          val values = nominalValues(key)
 
           for tp <- tparams.drop(first + 1) if !tdefaults.contains(tp) do
             err(s"'$tp' has no default and comes after '${tparams(first)}', which has one — a use " +
@@ -787,7 +794,14 @@ trait Hoisting extends HoistMembers {
                     err(s"'Self' is the type implementing a trait, and $noun '${qn(key)}' is not a " +
                       s"trait — so the default for '$tp' has nothing to name")
 
-                  known(tp) = resolveType(ref, known.toMap)
+                  // A value default is folded here, where the declaration is, so one that does not
+                  // fit its parameter is refused once rather than at every use leaving it out. An
+                  // earlier parameter it names stands abstract, and the fold waits for a use.
+                  known(tp) = values.get(tp) match
+                    case Some(vt) =>
+                      valueArg(ref, recover(Type.Unknown)(resolveType(vt, Map.empty)), known.toMap,
+                        s"the default for '$tp'")
+                    case None => resolveType(ref, known.toMap)
                 }
         }))
 
