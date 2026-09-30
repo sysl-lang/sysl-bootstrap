@@ -641,9 +641,26 @@ trait Emitter {
    * rule already at or above the type's.
    */
   protected def emitAlloca(name: ir.Val, ty: ir.LType, align: Option[Int] = None): ir.Val = {
-    prologue += ir.Inst.Alloca(name, ty, align.orElse(raisedAlign(ty)))
+    if !(layingDeferred > 0 && hoisted(name)) then
+      prologue += ir.Inst.Alloca(name, ty, align.orElse(raisedAlign(ty)))
+
     name
   }
+
+  /** How many deferred statements are being laid down at this point, one inside another.
+   *
+   * A deferred statement is emitted once for each edge that leaves its block, so a local it declares
+   * is declared once per copy — and a slot is named for its local, so the copies all name one slot.
+   * **They share it.** The copies lie on different ways out of the block, and no two of them run in
+   * one pass through it; each writes the slot before it reads it, as the statement it was copied from
+   * does. So the first copy hoists the slot and the rest find it there, which is what `emitAlloca`
+   * asks this for. A statement laid down once hoists exactly what it always did.
+   */
+  protected var layingDeferred = 0
+
+  /** Whether the function being emitted already has a stack slot of this name. */
+  private def hoisted(name: ir.Val): Boolean =
+    prologue.exists { case ir.Inst.Alloca(n, _, _) => n == name; case _ => false }
 
   /** The boundary the type this storage holds asked for, and nothing where it did not — LLVM's own
    * choice is the natural alignment, which is right for everything that made no claim.

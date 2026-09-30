@@ -223,6 +223,28 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
         case -1               => err(s"no enclosing loop is labeled '$l")
         case i                => (loops(i), i)
 
+  /** Whether a `break` or `continue` of this loop would leave the deferred statement it is written
+   * in — the loop was already open where the `defer` was read — and, where it would, notes the jump
+   * for that `defer` to refuse.
+   */
+  private def leavesDeferred(target: LoopCtx): Boolean =
+    deferring.exists { d =>
+      val leaves = d.outer.exists(_ eq target)
+
+      if leaves then d.leaving += ((currentPos, false))
+      leaves
+    }
+
+  /** What a deferred statement that would `return` is told. */
+  private def deferredReturn: String =
+    "a deferred statement runs while its block is being left, so it cannot 'return' — " +
+      "there is no exit left to take. Compute what the function returns before the block ends"
+
+  /** What a deferred statement that would `break` or `continue` a loop around it is told. */
+  private def deferredLoopJump: String =
+    "a deferred statement runs while its block is being left, so it cannot 'break' or " +
+      "'continue' — the loop edge it would take is the one already being taken"
+
   /** Why a `for const` body takes neither `break` nor `continue` (`reference/generics.md § A
    * parameter may stand for a list of types`).
    *
@@ -244,7 +266,8 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
     val tys    = (ctx.breakTys.toList :+ elseTy).distinct
     val joined = tys.foldLeft(Option(tys.head))((acc, t) => acc.flatMap(join(_, t)))
 
-    if joined.isDefined then joined.get
+    if ctx.refusedBreak then Type.Unknown
+    else if joined.isDefined then joined.get
     else if elseBlock.isEmpty then
       val v = ctx.breakTys.find(t => !Type.noValue(t)).get
       err(s"this loop breaks with a ${show(v)} but has no 'else' to give a value when it finishes normally — add an 'else'")
@@ -262,7 +285,8 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
   protected def endlessResultType(ctx: LoopCtx): Type = {
     val tys = ctx.breakTys.toList.distinct
 
-    if tys.isEmpty then Type.Never
+    if ctx.refusedBreak then Type.Unknown
+    else if tys.isEmpty then Type.Never
     else
       tys.foldLeft(Option(tys.head))((acc, t) => acc.flatMap(join(_, t))).getOrElse {
         err(s"a loop's break values must have the same type, but got ${tys.map(show).mkString(" and ")}")
@@ -729,6 +753,13 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
     case ExprStmt(e) =>
       List(TExprStmt(analyzeExpr(e, None, discarded = true)))
 
+    // A `return` in a deferred statement leaves it whatever it is nested in, so it is noted for the
+    // `defer` to refuse and its value is not read — a complaint about the value would be about a
+    // statement that may not be written at all.
+    case Return(_) if deferring.isDefined =>
+      deferring.get.leaving += ((currentPos, true))
+      List(TReturn(None))
+
     case Return(opt) =>
       val tv = opt.map(e => if retIsList then analyzeMulti(e, Some(retTy)) else analyzeExpr(e, Some(retTy)))
       tv match
@@ -769,14 +800,24 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
     // `'label` names — which unites it with that loop's other breaks and its `else` to fix the
     // loop's result type. The value is analyzed in the target loop's expected type, so a `break &T`
     // boxes the same way a `break` in a `&T` context asks.
+    //
+    // One that leaves a deferred statement is noted for the `defer` to refuse instead, and the loop
+    // hears nothing of the value it would have carried.
     case Break(label, opt) =>
       val (ctx, depth) = resolveLoop("break", label)
-      val tv           = opt.map(e => analyzeExpr(e, ctx.expected))
-      ctx.breakTys += tv.map(_.ty).getOrElse(Type.Unit)
-      List(TBreak(tv, depth))
+
+      if leavesDeferred(ctx) then
+        ctx.refusedBreak = true
+        List(TBreak(None, depth))
+      else
+        val tv = opt.map(e => analyzeExpr(e, ctx.expected))
+        ctx.breakTys += tv.map(_.ty).getOrElse(Type.Unit)
+        List(TBreak(tv, depth))
 
     case Continue(label) =>
-      val (_, depth) = resolveLoop("continue", label)
+      val (ctx, depth) = resolveLoop("continue", label)
+
+      leavesDeferred(ctx)
       List(TContinue(depth))
 
     // `defer stmt` (`reference/memory.md § Where defer sits`). The statement is analyzed here,
@@ -789,12 +830,8 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
     // are refused by name rather than by a general rule, because each is a different mistake.
     case Defer(inner) =>
       inner match
-        case _: Return =>
-          err("a deferred statement runs while its block is being left, so it cannot 'return' — " +
-            "there is no exit left to take. Compute what the function returns before the block ends")
-        case _: Break | _: Continue =>
-          err("a deferred statement runs while its block is being left, so it cannot 'break' or " +
-            "'continue' — the loop edge it would take is the one already being taken")
+        case _: Return              => err(deferredReturn)
+        case _: Break | _: Continue => err(deferredLoopJump)
         case _: Defer =>
           err("'defer' schedules a statement, and scheduling a scheduling has nothing to run: " +
             "write the statement itself after this 'defer'")
@@ -803,7 +840,25 @@ trait StmtAnalysis extends TypeResolution with AsmAnalysis {
             "so nothing could read it — defer what uses the value instead of what declares it")
         case _ =>
 
-      val body = analyzeStmts(List(inner))
+      // The same two jumps written deeper in the statement are found while it is analyzed, since
+      // which loop a `break` names is only known there: one of a loop written inside the statement
+      // stays inside it, and one of a loop that was already open here does not.
+      val saved = deferring
+      val ctx   = new DeferCtx(loops)
+
+      deferring = Some(ctx)
+
+      val body =
+        try analyzeStmts(List(inner))
+        finally deferring = saved
+
+      // Refused once, for the first of them as the statement reads, and at the jump rather than at
+      // the `defer` — the statement may be a page long and the jump is the one word that is wrong.
+      if ctx.leaving.nonEmpty then
+        val (where, isReturn) =
+          ctx.leaving.minBy((p, _) => p.map(q => (q.line, q.col)).getOrElse((0, 0)))
+
+        at(where)(err(if isReturn then deferredReturn else deferredLoopJump))
 
       // A `?` leaves the function, which is the same exit a `return` would take and is refused for
       // the same reason. It is read out of the analyzed body rather than the written statement

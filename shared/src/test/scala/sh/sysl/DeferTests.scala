@@ -596,6 +596,405 @@ class DeferTests extends AnyFreeSpec with RunSupport with CodegenSupport with Te
     }
   }
 
+  /** The program is refused with this message and no other, at this `line:column`. */
+  private def refused(src: String, message: String, at: String): Unit = {
+    val said = err(src)
+
+    withClue(said) {
+      said.linesIterator.count(_.startsWith("error: ")) shouldBe 1
+      said should include(s"error: $message\n")
+      said should include(s"--> <input>:$at\n")
+    }
+  }
+
+  private val loopEdge =
+    "a deferred statement runs while its block is being left, so it cannot 'break' or 'continue' " +
+      "— the loop edge it would take is the one already being taken"
+
+  private val noExit =
+    "a deferred statement runs while its block is being left, so it cannot 'return' — there is " +
+      "no exit left to take. Compute what the function returns before the block ends"
+
+  private val noFrameLeft =
+    "'become' replaces this frame with the call's, and this function has a 'defer', which runs " +
+      "on the way out of its scope — and the jump is the way out, so there would be nowhere " +
+      "left to run it"
+
+  // A deferred statement may not contain a jump that leaves it, at whatever depth the jump is
+  // written: a `return`, or a `break`/`continue` of a loop that was already open where the `defer`
+  // stands. Laying such a jump down runs the block's deferred statements, of which it is one, so
+  // there is nothing to lower it to. Each is told what the direct form is told, at the jump.
+  "a jump that leaves the deferred statement, written inside it" - {
+    "a 'break' of the loop around a deferred 'if' is refused where it stands" in {
+      refused("""for i in 0..<3
+                |    defer if i == 1 then break
+                |    print(i)
+                |""".stripMargin, loopEdge, "2:26")
+    }
+
+    "a 'return' under a deferred 'if' is refused where it stands" in {
+      refused("""f(c: bool) -> int
+                |    defer if c then return 1
+                |    2
+                |
+                |print(f(true))
+                |""".stripMargin, noExit, "2:21")
+    }
+
+    "a 'continue' of the loop around a deferred 'if' is refused" in {
+      refused("""for i in 0..<3
+                |    defer if i == 1 then continue
+                |    print(i)
+                |""".stripMargin, loopEdge, "2:26")
+    }
+
+    "a labelled 'break' of an outer loop from a loop inside the deferred statement is refused" in {
+      refused("""'outer for i in 0..<3
+                |    defer for j in 0..<3
+                |        if j == 1 then break 'outer
+                |
+                |    print(i)
+                |""".stripMargin, loopEdge, "3:24")
+    }
+
+    "a labelled 'continue' of an outer loop is refused the same way" in {
+      refused("""'outer for i in 0..<3
+                |    defer for j in 0..<3
+                |        if j == 1 then continue 'outer
+                |
+                |    print(i)
+                |""".stripMargin, loopEdge, "3:24")
+    }
+
+    "a 'return' several statements deep in a deferred block is refused at the 'return'" in {
+      refused("""f(c: bool) -> int
+                |    defer if c
+                |        print("a")
+                |        print("b")
+                |
+                |        for j in 0..<2
+                |            print(j)
+                |            if j == 1 then return 7
+                |
+                |        print("c")
+                |
+                |    2
+                |
+                |print(f(true))
+                |""".stripMargin, noExit, "8:28")
+    }
+
+    "two jumps in one deferred statement are one refusal, of the first in source order" in {
+      refused("""f(n: int) -> int
+                |    for i in 0..<n
+                |        defer if i == 1 then break else if i == 2 then return 5
+                |        print(i)
+                |
+                |    2
+                |
+                |print(f(3))
+                |""".stripMargin, loopEdge, "3:30")
+    }
+
+    "a 'return' in an arm of a deferred 'match' is refused" in {
+      refused("""f(n: int) -> int
+                |    defer n match
+                |        0 -> print("zero")
+                |        _ -> return 9
+                |
+                |    2
+                |
+                |print(f(1))
+                |""".stripMargin, noExit, "4:14")
+    }
+
+    "a 'return' in a 'defer' written inside a deferred statement is one refusal" in {
+      refused("""f(c: bool) -> int
+                |    defer if c
+                |        defer if c then return 1
+                |        print("inner")
+                |
+                |    2
+                |
+                |print(f(true))
+                |""".stripMargin, noExit, "3:25")
+    }
+
+    // The jump is what is wrong, so its value is not read and the loop hears nothing of it: no
+    // second complaint about a loop whose `break` and `else` disagree.
+    "a 'break' that leaves the deferred statement is refused before its value is read" in {
+      refused("""val r = for i in 0..<3
+                |    defer if i == 1 then break "early"
+                |    print(i)
+                |else 0
+                |
+                |print(r)
+                |""".stripMargin, loopEdge, "2:26")
+    }
+
+    // A `loop` takes its type from its breaks, and the one it has was refused unread — so it has
+    // no type to be wrong about, and nothing after it is complained of on its account.
+    "a refused 'break' out of a 'loop' leaves the loop's result unquestioned" in {
+      refused("""var n = 0
+                |
+                |val r = loop
+                |    defer if n > 2 then break n
+                |    n += 1
+                |
+                |print(r)
+                |""".stripMargin, loopEdge, "4:25")
+    }
+
+    "a 'return' under a deferred 'if' does not have its value read either" in {
+      refused("""f(c: bool) -> int
+                |    defer if c then return nope
+                |    2
+                |
+                |print(f(true))
+                |""".stripMargin, noExit, "2:21")
+    }
+
+    // A refusal of another kind, and the only one: the jump names no loop at all, so there is no
+    // edge it could have left by.
+    "a 'break' under a deferred 'if' with no loop around it is told there is no loop" in {
+      refused("""work(c: bool)
+                |    defer if c then break
+                |    print("body")
+                |
+                |work(true)
+                |""".stripMargin, "'break' is only allowed inside a loop", "2:21")
+    }
+
+    "a deferred 'become' is refused at its call" in {
+      refused("""g(n: int) -> int = n
+                |f(c: bool) -> int
+                |    defer become g(1)
+                |    2
+                |print(f(true))
+                |""".stripMargin, noFrameLeft, "3:18")
+    }
+
+    "a 'become' under a deferred 'if' is refused the same way" in {
+      refused("""g(n: int) -> int = n
+                |f(c: bool) -> int
+                |    defer if c then become g(1)
+                |    2
+                |print(f(true))
+                |""".stripMargin, noFrameLeft, "3:28")
+    }
+  }
+
+  "a jump that stays inside the deferred statement" - {
+    "a 'break' of a loop written inside it leaves that loop" in {
+      run("""work()
+            |    defer for i in 0..<5
+            |        if i == 2 then break
+            |        print(i)
+            |
+            |    print("body")
+            |
+            |work()
+            |""".stripMargin) shouldBe "body\n0\n1\n"
+    }
+
+    "a 'continue' of a loop written inside it restarts that loop" in {
+      run("""work()
+            |    defer for i in 0..<4
+            |        if i == 1 then continue
+            |        print(i)
+            |
+            |    print("body")
+            |
+            |work()
+            |""".stripMargin) shouldBe "body\n0\n2\n3\n"
+    }
+
+    "a labelled jump to a loop written inside it stays inside it" in {
+      run("""work()
+            |    defer 'rows for i in 0..<3
+            |        for j in 0..<3
+            |            if j == 2 then continue 'rows
+            |            if i == 2 then break 'rows
+            |            print(i, j)
+            |
+            |    print("body")
+            |
+            |work()
+            |""".stripMargin) shouldBe "body\n0 0\n0 1\n1 0\n1 1\n"
+    }
+
+    "a 'break' carrying a value out of a loop inside a deferred block gives the loop its value" in {
+      run("""work(c: bool)
+            |    defer if c
+            |        val hit = for j in 0..<9
+            |            if j * j > 10 then break j
+            |        else -1
+            |
+            |        print(hit)
+            |
+            |    print("body")
+            |
+            |work(true)
+            |""".stripMargin) shouldBe "body\n4\n"
+    }
+
+    "a 'while' and a 'loop' written as deferred statements are left by their own 'break'" in {
+      run("""work()
+            |    defer while true do break
+            |    defer loop
+            |        print("once")
+            |        break
+            |
+            |    print("body")
+            |
+            |work()
+            |""".stripMargin) shouldBe "body\nonce\n"
+    }
+
+    "a loop inside a deferred 'for const' is left by its own 'break'" in {
+      run("""work()
+            |    defer for const k in 0..<2
+            |        for j in 0..<3
+            |            if j == 1 then break
+            |            print(k, j)
+            |
+            |    print("body")
+            |
+            |work()
+            |""".stripMargin) shouldBe "body\n0 0\n1 0\n"
+    }
+
+    "a 'return' in a closure written inside it leaves the closure" in {
+      run("""twice(f: int -> int, x: int) -> int = f(f(x))
+            |
+            |work()
+            |    defer print(twice((x) ->
+            |        if x > 3 then return 100
+            |        x + 3, 1))
+            |
+            |    print("body")
+            |
+            |work()
+            |""".stripMargin) shouldBe "body\n100\n"
+    }
+
+    "a 'return' in a nested function written inside it leaves that function" in {
+      run("""work(c: bool)
+            |    defer if c
+            |        pick(n: int) -> int
+            |            if n > 1 then return 10
+            |            n
+            |
+            |        print(pick(1), pick(2))
+            |
+            |    print("body")
+            |
+            |work(true)
+            |""".stripMargin) shouldBe "body\n1 10\n"
+    }
+  }
+
+  // A deferred statement is laid down once for each edge that leaves its block, so a local it
+  // declares is declared once per copy. The copies share the local's slot: they lie on different
+  // ways out, and each writes the slot before reading it.
+  "a deferred statement that declares a local, in a block with more than one exit" - {
+    val twoExits =
+      """f(c: bool)
+        |    defer for j in 0..<2
+        |        print(j)
+        |    if c then return
+        |    print("x")
+        |f(true)
+        |f(false)
+        |""".stripMargin
+
+    "runs on each of them" in {
+      run(twoExits) shouldBe "0\n1\nx\n0\n1\n"
+    }
+
+    "and its copies share the one slot" in {
+      "%j\\.addr = alloca".r.findAllIn(ir(twoExits)).length shouldBe 1
+    }
+
+    "under a labelled loop left from a loop inside it" in {
+      run("""'outer for i in 0..<2
+            |    defer for j in 0..<2
+            |        print(i, j)
+            |
+            |    for k in 0..<2
+            |        if i == 1 then break 'outer
+            |
+            |    print("end", i)
+            |""".stripMargin) shouldBe "end 0\n0 0\n0 1\n1 0\n1 1\n"
+    }
+
+    "a counted local in a deferred block is released by whichever copy ran" in {
+      run("""struct Box
+            |    n: int
+            |
+            |f(c: bool) -> int
+            |    defer if true
+            |        val b: &Box = Box(7)
+            |        print("box", b.n)
+            |
+            |    if c then return 1
+            |    2
+            |
+            |print(f(true))
+            |print(f(false))
+            |""".stripMargin) shouldBe "box 7\n1\nbox 7\n2\n"
+    }
+
+    "a pattern binding in a deferred 'match', across 'continue', 'break' and the end of the body" in {
+      run("""for i in 0..<4
+            |    defer Some(i) match
+            |        Some(v) -> print("out", v)
+            |        None -> print("none")
+            |
+            |    if i == 1 then continue
+            |    if i == 2 then break
+            |    print("in", i)
+            |""".stripMargin) shouldBe "in 0\nout 0\nout 1\nout 2\n"
+    }
+
+    "an iteration, an 'is' binding and an array in one deferred block, across three exits" in {
+      run("""f(n: int) -> Result[int, string]
+            |    defer if n >= 0
+            |        var xs: [3]int = [1, 2, 3]
+            |        var sum = 0
+            |
+            |        for x in xs[0..<3]
+            |            sum += x
+            |
+            |        val o: Option[int] = Some(sum + n)
+            |
+            |        if o is Some(v) then print("out", v)
+            |
+            |    if n == 1 then return Ok(10)
+            |    if n == 2 then return Err("two")
+            |    Ok(0)
+            |
+            |for i in 0..<3
+            |    f(i) match
+            |        Ok(v) -> print("ok", v)
+            |        Err(e) -> print("err", e)
+            |""".stripMargin) shouldBe "out 6\nok 0\nout 7\nok 10\nout 8\nerr two\n"
+    }
+
+    "a closure in a deferred statement is built by each copy" in {
+      run("""twice(f: int -> int, x: int) -> int = f(f(x))
+            |
+            |f(c: bool)
+            |    defer print(twice((x) -> x + 3, 1))
+            |    if c then return
+            |    print("x")
+            |
+            |f(true)
+            |f(false)
+            |""".stripMargin) shouldBe "7\nx\n7\n"
+    }
+  }
+
   "a real resource" - {
     // What the whole form exists for, run against libc rather than simulated: the descriptor is
     // closed on the failure path without the failure path saying so. `close` on an already-closed

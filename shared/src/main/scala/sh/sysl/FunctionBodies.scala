@@ -71,6 +71,7 @@ trait FunctionBodies extends ModuleStorage {
     val savedGuards   = refGuards
     val savedImports  = importStack
     val savedLoops    = loops
+    val savedDefer    = deferring
     val savedEnsure   = ensureResultTy
     val savedOld      = oldBuf
     val savedMulti    = multiOk
@@ -200,6 +201,7 @@ trait FunctionBodies extends ModuleStorage {
       refGuards = savedGuards
       importStack = savedImports
       loops = savedLoops
+      deferring = savedDefer
       ensureResultTy = savedEnsure
       oldBuf = savedOld
       multiOk = savedMulti

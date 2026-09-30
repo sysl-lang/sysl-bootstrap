@@ -224,7 +224,31 @@ trait AnalyzerBase extends Scoping {
      * `TCheckedLoop`.
      */
     var variant: Option[(String, Type)] = None
+
+    /** Whether a `break` of this loop was refused before its value was read, so the loop's result
+     * cannot be worked out from the values that were. Its type is then the poisoned one, which
+     * stops the refusal being followed by a second complaint about a result nobody could know.
+     */
+    var refusedBreak: Boolean = false
   protected var loops: List[LoopCtx] = Nil
+
+  /** The deferred statement being analyzed (`reference/memory.md § Where defer sits`): the loops
+   * that were already open where its `defer` was read, and every jump found in it that would leave
+   * it — a `return`, or a `break`/`continue` of one of those loops — as where the jump stands and
+   * whether it is a `return`.
+   *
+   * A deferred statement runs while its block is being left, so such a jump has no edge to take.
+   * The jumps are collected rather than reported as they are met because the statement is refused
+   * once, for the first of them in source order, however many it holds.
+   */
+  protected class DeferCtx(val outer: List[LoopCtx]):
+    val leaving = mutable.ListBuffer.empty[(Option[Pos], Boolean)]
+
+  /** The innermost deferred statement being analyzed, or nothing outside one. A closure or a
+   * nested function written inside a deferred statement starts with nothing: its `return` leaves
+   * the function it is in, not the statement.
+   */
+  protected var deferring: Option[DeferCtx] = None
 
   /** Whether the statement being analyzed sits directly in the body of a `for const`
    * (`reference/generics.md § A parameter may stand for a list of types`).
@@ -317,6 +341,7 @@ trait AnalyzerBase extends Scoping {
     resetLocals()
     byNameLocals = Set.empty
     loops = Nil
+    deferring = None
     pendingVariant = None
     variantSeq = 0
     ensureResultTy = None

@@ -532,8 +532,16 @@ trait ArcEmitter extends Emitter {
    * while it runs — including the one holding the resource it is closing, which is the whole point
    * of the form. Registration order is written order, so `reverse` is the LIFO `reference/memory.md
    * § Where defer sits` promises.
+   *
+   * This is one copy of each statement among as many as the block has exits, which is what
+   * `layingDeferred` tells the slots its locals live in.
    */
-  private def runDeferrals(scope: mutable.ListBuffer[TStmt]): Unit = scope.reverse.foreach(genStmt)
+  private def runDeferrals(scope: mutable.ListBuffer[TStmt]): Unit = {
+    layingDeferred += 1
+
+    try scope.reverse.foreach(genStmt)
+    finally layingDeferred -= 1
+  }
 
   protected def pushOwned(): Unit = {
     owned = mutable.ListBuffer.empty[(Val, Type)] :: owned
