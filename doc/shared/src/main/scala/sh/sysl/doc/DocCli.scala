@@ -135,6 +135,15 @@ object DocCli {
           val units   = parsed.collect { case Right(p) => p }
           val modules = ApiModel.build(units, includePrivate)
 
+          // A doc comment the compiler would refuse — a `@param` naming no parameter — is said here
+          // in the compiler's own words, since the page leaves that row out and the author would
+          // otherwise never learn why. A warning rather than a refusal: a tree that does not compile
+          // still documents, which is the property the model is built from parsed units to keep.
+          for
+            u              <- units if !u.testOnly && u.module.isDefined
+            (tag, message) <- DocComments.problems(u)
+          do Console.err.println(s"${u.source.name}:${tag.line}: warning: $message")
+
           // A tree of programs rather than modules documents to nothing, and saying so beats writing
           // an empty index — the same call `weave` makes about a tree with no literate source in it.
           if modules.isEmpty then
@@ -173,6 +182,10 @@ object DocCli {
     try {
       Project.makeDirectories(out)
       pages.foreach(p => writeFile(s"$out/${p.path}", p.text))
+      orphans(out, pages).foreach { f =>
+        deleteFile(f)
+        println(s"sysl-doc: removed $out/${f.replace('\\', '/').split('/').last}, whose module is gone")
+      }
       println(s"sysl-doc: $modules module${if modules == 1 then "" else "s"} -> $out")
       0
     } catch {
@@ -197,12 +210,19 @@ object DocCli {
         val path = s"$out/${p.path}"
 
         !isFile(path) || readFile(path) != p.text
-      }
+      }.map(_.path)
 
-    if stale.isEmpty then { println(s"sysl-doc: $out is up to date"); 0 }
+    // A page left behind by a module that was renamed or removed is as stale as one that drifted:
+    // it documents an API nobody can import, and a check that only compared the pages it would
+    // write could never see it.
+    val left = orphans(out, pages).map(f => f.replace('\\', '/').split('/').last)
+    val all  = stale ::: left
+
+    if all.isEmpty then { println(s"sysl-doc: $out is up to date"); 0 }
     else
-      Console.err.println(s"sysl-doc: $out is stale — ${stale.length} file(s) differ:")
-      stale.foreach(p => Console.err.println(s"  ${p.path}"))
+      Console.err.println(s"sysl-doc: $out is stale — ${all.length} file(s) differ:")
+      stale.foreach(p => Console.err.println(s"  $p"))
+      left.foreach(p => Console.err.println(s"  $p (its module is gone)"))
       Console.err.println("\nRegenerate with 'sysl doc' and commit the result.")
       1
   }
@@ -214,6 +234,31 @@ object DocCli {
    * consume is the Markdown, in the repository. See `SiteRenderer` for why this builds a site that
    * already exists rather than making one.
    */
+  /** The module pages in `out` this run would not write — each one the page of a module that no
+   * longer exists.
+   *
+   * **Only a page this generator wrote counts**, told by the `layout: api-module` line its
+   * frontmatter always carries, so a hand-written page kept beside the generated ones is never
+   * reported, and never removed by a regenerate.
+   */
+  private def orphans(out: String, pages: List[MarkdownWriter.Page]): List[String] = {
+    val written = pages.map(_.path).toSet
+
+    val files =
+      try if isDirectory(out) then listDirectory(out).toList.sorted else Nil
+      catch case _: Exception => Nil
+
+    files.filter { f =>
+      val name = f.replace('\\', '/').split('/').last
+
+      name.endsWith(".md") && !written(name) && isFile(f) && generated(readFile(f))
+    }
+  }
+
+  /** Whether a file's frontmatter says it is a generated module page. */
+  private def generated(text: String): Boolean =
+    text.startsWith("---\n") && text.split("\n---\n", 2).head.linesIterator.contains("layout: api-module")
+
   private def render(markdown: String, site: String): Int =
     try {
       SiteRenderer.build(markdown, site)

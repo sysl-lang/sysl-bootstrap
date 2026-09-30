@@ -25,9 +25,13 @@ object ApiModel {
    * arriving at a module wants the functions it offers before the types those functions mention, and
    * the trait implementations last because they are facts *about* the types above rather than things
    * to call.
+   *
+   * `Value` is a module `val`, kept apart from `Const` because a constant is folded at compile time
+   * and a value is storage. `Extern` is a C function or variable the module binds, and `Alias` a
+   * `type` declaration; each sits after the kind it is read beside, and renders as that kind does.
    */
   enum Kind:
-    case Const, Function, Type, Trait, Implementation
+    case Const, Value, Function, Extern, Type, Alias, Trait, Implementation
 
   /** Where a symbol may be seen from.
    *
@@ -110,7 +114,7 @@ object ApiModel {
       // change when a file is renamed. Source order within ONE file is meaningful and is what the
       // line number preserves for the tie.
       val symbols =
-        us.flatMap(unit => unit.body.flatMap(symbolOf(unit, _)))
+        us.flatMap(unit => unit.body.flatMap(symbolOf(unit, _, includePrivate)))
           .filter(s => includePrivate || s.access == Access.Public)
           .sortBy(s => (s.kind.ordinal, s.name.toLowerCase, s.line))
 
@@ -203,6 +207,10 @@ object ApiModel {
     case t: TraitDecl  => t.pos.map(_.line)
     case c: ConstDecl  => c.pos.map(_.line)
     case i: ImplDecl   => i.pos.map(_.line)
+    case t: TypeDecl   => t.pos.map(_.line)
+    case e: ExternDecl => e.pos.map(_.line)
+    case v: ExternVarDecl => v.pos.map(_.line)
+    case v: ValDecl    => v.pos.map(_.line)
     case _             => None
 
   /** How a declaration's visibility reads as an access level. */
@@ -215,42 +223,85 @@ object ApiModel {
    *
    * A `var` at the top of a file is deliberately absent: in an entry file it is a local of the
    * program's body rather than module storage, and in a library module a mutable global is not an
-   * API a caller should be shown. A `const` is here because it is a module member proper.
+   * API a caller should be shown. A `const`, a `val`, a `type`, and an `extern` function or variable
+   * are here because each is a module member proper — something a caller can name.
    */
-  private def symbolOf(unit: Program, stmt: Stmt): Option[Symbol] = {
-    def docFor(pos: Option[Int]): Option[DocComments.Doc] =
-      pos.flatMap(l => DocComments.above(unit.source, unit.docs, l))
+  private def symbolOf(unit: Program, stmt: Stmt, includePrivate: Boolean): Option[Symbol] = {
+    // A tag the compiler's own doc-comment check refuses — a `@param` naming a parameter the
+    // declaration does not have, which is the shape a rename leaves behind — is left off the page:
+    // a row describing a parameter nobody can pass documents something that is not there. The
+    // command reports the same refusal in the compiler's words (`DocCli.read`).
+    def docFor(pos: Option[Int], params: List[String] = Nil, tparams: List[String] = Nil) =
+      pos.flatMap(l => DocComments.above(unit.source, unit.docs, l)).map { d =>
+        val refused = DocComments.check(d, params, tparams).map(_._1).toSet
 
-    def member(m: MethodDecl): Symbol =
+        if refused.isEmpty then d else d.copy(tags = d.tags.filterNot(refused.contains))
+      }
+
+    // A private declaration is only here under `--private`, and there it says so — otherwise the
+    // page gives a maintainer no way to tell what a caller could reach from what it could not.
+    def marked(vis: Visibility, signature: String): String = Signature.visText(vis) + signature
+
+    def member(m: MethodDecl): Symbol = {
+      val receiver = if m.receiver.isDefined then List("self") else Nil
+
       Symbol(
         name = m.name,
         kind = Kind.Function,
         access = access(m.vis),
-        signature = Signature.method(m),
-        doc = docFor(m.pos.map(_.line)),
+        signature = marked(m.vis, Signature.method(m)),
+        doc = docFor(m.pos.map(_.line), receiver ::: m.params.map(_.name), m.tparams),
         line = m.pos.map(_.line).getOrElse(0),
       )
+    }
+
+    // `--private` means every private item, and a type's private methods are items: they were
+    // filtered here by the model's flag rather than always dropped by the writer.
+    def members(ms: List[MethodDecl]): List[Symbol] =
+      ms.map(member).filter(m => includePrivate || m.access == Access.Public)
+
+    def line(p: Positioned): Int = p.pos.map(_.line).getOrElse(0)
 
     stmt match
       case f: FuncDecl =>
-        Some(Symbol(f.name, Kind.Function, access(f.vis), Signature.func(f), docFor(f.pos.map(_.line)),
-          line = f.pos.map(_.line).getOrElse(0)))
+        Some(Symbol(f.name, Kind.Function, access(f.vis), marked(f.vis, Signature.func(f)),
+          docFor(f.pos.map(_.line), f.params.map(_.name), f.tparams), line = line(f)))
 
       case s: StructDecl =>
-        Some(Symbol(s.name, Kind.Type, access(s.vis), Signature.struct(s), docFor(s.pos.map(_.line)),
-          s.members.map(member), s.pos.map(_.line).getOrElse(0)))
+        Some(Symbol(s.name, Kind.Type, access(s.vis), marked(s.vis, Signature.struct(s)),
+          docFor(s.pos.map(_.line), Nil, s.tparams), members(s.members), line(s)))
 
       case e: EnumDecl =>
-        Some(Symbol(e.name, Kind.Type, access(e.vis), Signature.enumDecl(e), docFor(e.pos.map(_.line)),
-          e.members.map(member), e.pos.map(_.line).getOrElse(0)))
+        Some(Symbol(e.name, Kind.Type, access(e.vis), marked(e.vis, Signature.enumDecl(e)),
+          docFor(e.pos.map(_.line), Nil, e.tparams), members(e.members), line(e)))
 
       case t: TraitDecl =>
-        Some(Symbol(t.name, Kind.Trait, access(t.vis), Signature.traitDecl(t), docFor(t.pos.map(_.line)),
-          t.methods.map(member), t.pos.map(_.line).getOrElse(0)))
+        Some(Symbol(t.name, Kind.Trait, access(t.vis), marked(t.vis, Signature.traitDecl(t)),
+          docFor(t.pos.map(_.line), Nil, t.tparams), members(t.methods), line(t)))
 
       case c: ConstDecl =>
-        Some(Symbol(c.name, Kind.Const, access(c.vis), Signature.const(c), docFor(c.pos.map(_.line)),
-          line = c.pos.map(_.line).getOrElse(0)))
+        Some(Symbol(c.name, Kind.Const, access(c.vis), marked(c.vis, Signature.const(c)),
+          docFor(c.pos.map(_.line)), line = line(c)))
+
+      // A `type` declaration is a name a caller spells — a package's pleasant layer names its raw
+      // layer's structs that way — so it is listed, in a group of its own after the types.
+      case t: TypeDecl =>
+        Some(Symbol(t.name, Kind.Alias, access(t.vis), marked(t.vis, Signature.typeDecl(t)),
+          docFor(t.pos.map(_.line)), line = line(t)))
+
+      // An `extern` is called or read exactly as a sysl function or value is; its group, after the
+      // functions, says the body is C's.
+      case e: ExternDecl =>
+        Some(Symbol(e.name, Kind.Extern, access(e.vis), marked(e.vis, Signature.externFunc(e)),
+          docFor(e.pos.map(_.line), e.params.map(_.name)), line = line(e)))
+
+      case v: ExternVarDecl =>
+        Some(Symbol(v.name, Kind.Extern, access(v.vis), marked(v.vis, Signature.externVar(v)),
+          docFor(v.pos.map(_.line)), line = line(v)))
+
+      case v: ValDecl =>
+        Some(Symbol(v.name, Kind.Value, access(v.vis), marked(v.vis, Signature.valDecl(v)),
+          docFor(v.pos.map(_.line)), line = line(v)))
 
       // An `impl` is named for what it says — this type has this trait — rather than for a
       // declaration name it does not have. That name is also what a reader would search for.

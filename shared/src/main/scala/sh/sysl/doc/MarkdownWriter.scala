@@ -37,6 +37,9 @@ object MarkdownWriter {
   /** The heading a group of symbols sits under. */
   private def groupTitle(kind: Kind): String = kind match
     case Kind.Const          => "Constants"
+    case Kind.Value          => "Values"
+    case Kind.Extern         => "Externs"
+    case Kind.Alias          => "Aliases"
     case Kind.Function       => "Functions"
     case Kind.Type           => "Types"
     case Kind.Trait          => "Traits"
@@ -184,7 +187,7 @@ object MarkdownWriter {
     // here would print it twice on the site. What goes in the body is whatever came AFTER the first
     // sentence — which is also why `Doc` splits the two rather than making the page re-derive one.
     m.doc.foreach { d =>
-      val rest = d.body.stripPrefix(d.summary).trim
+      val rest = afterSummary(d.body, d.summary).trim
 
       if rest.nonEmpty then out ++= s"$rest\n\n"
     }
@@ -262,7 +265,9 @@ object MarkdownWriter {
     // their own beyond the table, because a type with twenty methods would otherwise be twenty
     // fenced blocks and the page stops being scannable.
     if s.members.nonEmpty then
-      val visible = s.members.filter(_.access == Access.Public)
+      // Which members are here is the model's answer — the public ones, or every one under
+      // `--private` — so the page lists what it was given.
+      val visible = s.members
 
       if visible.nonEmpty then
         out ++= "| Member | Signature | Description |\n|---|---|---|\n"
@@ -348,6 +353,31 @@ object MarkdownWriter {
    */
   private def yamlScalar(s: String): String =
     "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\""
+
+  /** What `body` says after its first sentence, `summary`.
+   *
+   * The summary is whitespace-flattened (`DocComments`), so a first sentence the author broke across
+   * two lines is not a prefix of the body as written, and a plain `stripPrefix` left it in — printing
+   * it twice, once as the lead from the frontmatter and again as the body's opening. So the two are
+   * walked together, any run of whitespace in the body matching the one space the summary has there.
+   * A body the summary does not open is returned whole, which is the answer `stripPrefix` gave.
+   */
+  private def afterSummary(body: String, summary: String): String = {
+    val b = body.stripLeading
+    var i = 0
+    var j = 0
+
+    while j < summary.length && i < b.length do
+      if summary(j) == ' ' && b(i).isWhitespace then
+        while i < b.length && b(i).isWhitespace do i += 1
+        j += 1
+      else if summary(j) == b(i) then
+        i += 1
+        j += 1
+      else j = summary.length + 1
+
+    if j == summary.length then b.substring(i) else body
+  }
 
   /** Prose flattened to one line, for somewhere a line break would end the construct. */
   private def oneLine(s: String): String = s.trim.replaceAll("\\s+", " ")
