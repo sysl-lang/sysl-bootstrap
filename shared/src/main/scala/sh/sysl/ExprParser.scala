@@ -177,15 +177,22 @@ trait ExprParser extends SyslParserBase {
 
   /** Ranges are non-associative and sit below arithmetic, so each end is a `bitOr`. Either
    * end may be omitted (`a..`, `..b`).
+   *
+   * It is also the operand of a comparison, so a token that starts no value after `<` runs out here,
+   * and every alternative fails at the same place. The last of them is the bare `..`, which would
+   * then name the failure: `a < )` would be told `'..' expected`, about a range nobody wrote. Named
+   * as an expression, a refusal at its own entry says what was actually missing.
    */
   lazy val rangeExpr: PackratParser[Expr] =
-    at(
-      bitOr ~ opt(rangeOp ~ opt(bitOr)) ^^ {
-        case lo ~ None              => lo
-        case lo ~ Some(inc ~ hiOpt) => RangeExpr(Some(lo), hiOpt, inc)
-      } |
-        rangeOp ~ bitOr ^^ { case inc ~ hi => RangeExpr(None, Some(hi), inc) } |
-        rangeOp ^^ (inc => RangeExpr(None, None, inc)),
+    describe("expression")(
+      at(
+        bitOr ~ opt(rangeOp ~ opt(bitOr)) ^^ {
+          case lo ~ None              => lo
+          case lo ~ Some(inc ~ hiOpt) => RangeExpr(Some(lo), hiOpt, inc)
+        } |
+          rangeOp ~ bitOr ^^ { case inc ~ hi => RangeExpr(None, Some(hi), inc) } |
+          rangeOp ^^ (inc => RangeExpr(None, None, inc)),
+      ),
     )
 
   lazy val bitOr: PackratParser[Expr]  = at(chainl1(bitXor, binOp("|")))

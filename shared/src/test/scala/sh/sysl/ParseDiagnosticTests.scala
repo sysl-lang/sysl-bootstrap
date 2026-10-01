@@ -93,6 +93,31 @@ class ParseDiagnosticTests extends AnyFreeSpec with ParseSupport {
     }
   }
 
+  // A comparison's operand is a range, so a right side that starts no value ran out in the range
+  // rule, whose last alternative is a bare `..` — and every one of these was `'..' expected`.
+  "a comparison with no value on its right wants a value, not a range" - {
+
+    "nothing at all after the operator" in {
+      refusal("print(1 < )\n") shouldBe ("expression expected", "<input>:1:11")
+    }
+
+    "an 'if' as the right operand, which is not an operand" in {
+      refusal("val c = true\nvar z = 1 < if c then 1 else 2\n") shouldBe ("expression expected", "<input>:2:13")
+    }
+
+    "every comparison operator, and the second link of a chain" in {
+      for (o <- List("==", "!=", "<=", ">=", "<", ">"))
+        refusal(s"print(1 $o )\n") shouldBe ("expression expected", s"<input>:1:${10 + o.length}")
+
+      refusal("print(1 < 2 < )\n") shouldBe ("expression expected", "<input>:1:15")
+    }
+
+    "while a range's own refusal still names the range" in {
+      refusal("for i in 0..=3\n    print(i)\n")._1 shouldBe
+        "'..=' is not a range — inclusive is 'a..b' and exclusive is 'a..<b'"
+    }
+  }
+
   // Both fixtures here used to put the value on an *indented* next line, which is a block now and
   // therefore not a mistake at all. A value that is genuinely missing leaves the following line at
   // the same indentation, and that is what these write; the columns are what the tests are about and
