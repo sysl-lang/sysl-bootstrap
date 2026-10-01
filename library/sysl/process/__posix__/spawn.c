@@ -175,20 +175,43 @@ static int wait_until(pid_t pid, int *status, long long deadline, int *err) {
     }
 }
 
-/* Start `program`, wait for it, and say how it ended.
+/* Asked first and made second, then reaped: the end of a child nobody is going to wait out.
+ * Answers 0, or an `errno`.
  *
- * Returns 0 having set `*code` and `*sig`, or an `errno` if the child could not be started at all.
- *
- * `timeout_ms` bounds the whole of the child's life, and zero or less means it is unbounded. On a
- * deadline that arrives first the child is sent `SIGTERM`, given `SYSL_PROC_GRACE_MS` to go, then
- * sent `SIGKILL` -- and `*timed_out` is set, because the exit status of a child that was killed
- * because it ran out of time says nothing a caller wants to hear.
+ * A child that stops on being asked gets to run whatever it does on the way out -- flush what it
+ * was writing, remove what it was building -- and one that does not is still gone when this
+ * returns. `SIGKILL` cannot be caught or ignored, so the last wait is for something already on its
+ * way rather than for the child's cooperation.
  *
  * **The signal goes to the child and not to its process group**, which is the same restraint the
  * module keeps everywhere else: putting the child in a group of its own would take it out of the
  * terminal's foreground group, so a person's own interrupt would stop reaching it. What that costs
  * is that a child which forked grandchildren of its own leaves them behind -- for which the answer
  * is to run the program rather than a shell that runs it, which is what this module does anyway.
+ */
+static int stop(pid_t pid, int *status) {
+    int wait_errno = 0;
+
+    kill(pid, SIGTERM);
+
+    int in_time = wait_until(pid, status, now_ms() + SYSL_PROC_GRACE_MS, &wait_errno);
+
+    if (in_time < 0) return wait_errno;
+
+    if (in_time == 1) return 0;
+
+    kill(pid, SIGKILL);
+    return wait_out(pid, status);
+}
+
+/* Start `program` and answer which child it became, without waiting for it.
+ *
+ * Returns 0 having set `*pid_out` and `*started_ms`, or an `errno` if the child could not be
+ * started at all -- in which case there is no child left over: the one that failed to exec has
+ * already been reaped here, so a caller has nothing to wait for and nothing to clean up.
+ *
+ * `*started_ms` is the monotonic clock at the fork, which is what a timeout is measured from, so
+ * that a bound covers the child's whole life rather than only the part after somebody began waiting.
  *
  * **The pipe is how a failed `execvp` is told from a program that ran and exited 127**, which is
  * the distinction a caller most wants and the one `system(3)` cannot make. It is close-on-exec, so
@@ -197,12 +220,10 @@ static int wait_until(pid_t pid, int *status, long long deadline, int *err) {
  * same answer -- and "no such file or directory" is the single most likely thing to go wrong when a
  * tool shells out.
  */
-int sysl_proc_run(const char *program, char *const *argv,
-                  const char *const *env_names, const char *const *env_values,
-                  const char *dir, const char *out_path, const char *err_path,
-                  int timeout_ms, int *code, int *sig, int *timed_out) {
-    *timed_out = 0;
-
+int sysl_proc_start(const char *program, char *const *argv,
+                    const char *const *env_names, const char *const *env_values,
+                    const char *dir, const char *out_path, const char *err_path,
+                    int *pid_out, long long *started_ms) {
     /* **Everything this program has written, written, before anything else can write.**
      *
      * A C library buffers standard output, and it buffers it *fully* rather than by line whenever
@@ -273,6 +294,35 @@ int sysl_proc_run(const char *program, char *const *argv,
 
     close(report[0]);
 
+    if (got == (ssize_t) sizeof child_errno && child_errno != 0) {
+        /* The child wrote why and is exiting straight after, so this wait is short; reaping it
+         * here is what makes "could not be started" leave nothing behind for anybody to wait on. */
+        int status = 0;
+
+        (void) wait_out(pid, &status);
+        return child_errno;
+    }
+
+    *pid_out = (int) pid;
+    *started_ms = started_at;
+    return 0;
+}
+
+/* Wait for a child `sysl_proc_start` began, and say how it ended.
+ *
+ * Returns 0 having set `*code` and `*sig`, or an `errno`.
+ *
+ * `timeout_ms` bounds the whole of the child's life, measured from `started_ms`, and zero or less
+ * means it is unbounded. On a deadline that arrives first the child is stopped as `stop` above
+ * stops one, and `*timed_out` is set, because the exit status of a child that was killed because it
+ * ran out of time says nothing a caller wants to hear. **A child that had already ended is asked
+ * first**, so one that finished before anybody came to wait for it is reported as it finished
+ * rather than as timed out -- it did not outstay anything; its parent was simply busy.
+ */
+int sysl_proc_wait(int pid, long long started_ms, int timeout_ms,
+                   int *code, int *sig, int *timed_out) {
+    *timed_out = 0;
+
     int status = 0;
 
     if (timeout_ms <= 0) {
@@ -281,35 +331,18 @@ int sysl_proc_run(const char *program, char *const *argv,
         if (e != 0) return e;
     } else {
         int wait_errno = 0;
-        int in_time = wait_until(pid, &status, started_at + timeout_ms, &wait_errno);
+        int in_time = wait_until(pid, &status, started_ms + timeout_ms, &wait_errno);
 
         if (in_time < 0) return wait_errno;
 
         if (in_time == 0) {
-            /* Asked first and made second. A child that stops on being asked gets to run whatever
-             * it does on the way out -- flush what it was writing, remove what it was building --
-             * and one that does not is still gone when this returns. */
-            kill(pid, SIGTERM);
+            int e = stop(pid, &status);
 
-            in_time = wait_until(pid, &status, now_ms() + SYSL_PROC_GRACE_MS, &wait_errno);
-
-            if (in_time < 0) return wait_errno;
-
-            if (in_time == 0) {
-                kill(pid, SIGKILL);
-
-                /* `SIGKILL` cannot be caught or ignored, so this waits for something that is
-                 * already on its way rather than for the child's cooperation. */
-                int e = wait_out(pid, &status);
-
-                if (e != 0) return e;
-            }
+            if (e != 0) return e;
 
             *timed_out = 1;
         }
     }
-
-    if (got == (ssize_t) sizeof child_errno && child_errno != 0) return child_errno;
 
     if (WIFEXITED(status)) {
         *code = WEXITSTATUS(status);
@@ -323,6 +356,25 @@ int sysl_proc_run(const char *program, char *const *argv,
     }
 
     return 0;
+}
+
+/* End a child nobody is going to wait for, and reap it. Answers 0, or an `errno`.
+ *
+ * A child that has already ended is only reaped -- it is a zombie until somebody asks, and asking
+ * is the whole of the cure. One still running is stopped the way a timeout stops one, because the
+ * handle that owned it is gone and so are the files it was writing into: nothing is left that could
+ * read what it goes on to do.
+ */
+int sysl_proc_stop(int pid) {
+    int status = 0;
+    int err = 0;
+    int ended = reaped(pid, &status, &err);
+
+    if (ended < 0) return err;
+
+    if (ended == 1) return 0;
+
+    return stop(pid, &status);
 }
 
 /* A path nothing else holds, created empty so that it stays that way, written into the caller's

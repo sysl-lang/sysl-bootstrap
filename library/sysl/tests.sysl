@@ -633,6 +633,14 @@ cpu_agrees_with_the_directive()
 #endif
 end cpu_agrees_with_the_directive
 
+// The floor is the promise a caller sizing a pool leans on, so it is what is asserted here; that the
+// number is the machine's own, rather than merely positive, is checked against `getconf` in
+// `sysl.process`'s tests, since starting a program is that module's to do and this one may not
+// import it.
+@test("a machine has at least one processor online")
+cpu_count_is_at_least_one()
+    assert(cpu_count() >= 1, s"cpu_count() answered ${cpu_count()}")
+
 // A constant is still a value: it goes in a `val`, crosses a call, and is matched on. That is the
 // whole of what this adds over `#if`, so it is what the test exercises.
 @test("the platform reaches expression position")

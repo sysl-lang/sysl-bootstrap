@@ -22,11 +22,14 @@ import sysl.text.{CString, cstring, from_cstring}
  * difference visible: preview1 has no way to start a program at all, and Windows was already the
  * same case with nobody building for it.
  *
- * **What is deliberately absent is process *management*.** There is no pid here, no process group
- * and no way to hold a running child -- every call starts one program and waits for it. That covers
- * what a build tool, an installer or a command-line front end does, and it is the whole of what the
- * org needs; a program that wants to supervise children wants a different surface and can have one
- * under `sysl.posix` when something actually needs it.
+ * **A child can be held while it runs, and that is as far as management goes.** `run` and `capture`
+ * start one program and wait for it; `start` is `capture` with the wait taken out, answering a
+ * `Child` whose `wait` hands back exactly what `capture` would have. That is what a build tool
+ * running several compilers at once needs -- start them all, then collect them in whatever order
+ * suits it. What is still absent is everything a *supervisor* wants: no pid is handed out, no
+ * process group is made, and no signal of the caller's choosing can be sent. A program that wants
+ * those wants a different surface and can have one under `sysl.posix` when something actually
+ * needs it.
  *
  * **The one thing a call that waits cannot do without is a way to stop waiting.** "Runs a program
  * and waits for it" says nothing about a program that never ends, and a caller with no bound has no
@@ -43,9 +46,14 @@ import sysl.text.{CString, cstring, from_cstring}
  * the vector as it is given, so a path is a path whatever is in it.
  */
 
-private extern "sysl_proc_run" c_run(program: *u8, argv: **u8, names: **u8, values: **u8,
-                                     dir: *u8, out_path: *u8, err_path: *u8, timeout_ms: i32,
-                                     code: *i32, sig: *i32, timed_out: *i32) -> int
+private extern "sysl_proc_start" c_start(program: *u8, argv: **u8, names: **u8, values: **u8,
+                                         dir: *u8, out_path: *u8, err_path: *u8, pid: *i32,
+                                         started_ms: *i64) -> int
+
+private extern "sysl_proc_wait" c_wait(pid: i32, started_ms: i64, timeout_ms: i32, code: *i32,
+                                       sig: *i32, timed_out: *i32) -> int
+
+private extern "sysl_proc_stop" c_stop(pid: i32) -> int
 
 private extern "sysl_proc_temp_path" c_temp_path(buf: *u8, n: usize) -> int
 
@@ -186,23 +194,41 @@ private pairs_of(env: []const Var) -> (Buf[CString], Buf[*u8], Buf[*u8])
     (owned, names, values)
 end pairs_of
 
-private started(program: string, args: []const string, env: []const Var, dir: string,
-                out_path: string, err_path: string, timeout: int) -> Result[Status, IoError]
+/** Start a child and answer its pid and the moment it was started, without waiting for it.
+ *
+ * Everything the shim is handed is owned here and dropped when this returns, which is safe because
+ * the shim does not return until the child has either become the other program -- holding copies of
+ * its own -- or failed to, in which case it has already been reaped.
+ */
+private begun(program: string, args: []const string, env: []const Var, dir: string,
+              out_path: string, err_path: string) -> Result[(i32, i64), IoError]
     val (owned, ptrs) = vector_of(program, args)
     val (env_owned, names, values) = pairs_of(env)
     val d = cstring(dir)
     val o = cstring(out_path)
     val er = cstring(err_path)
 
-    var code: i32 = 0
-    var sig: i32 = 0
-    var expired: i32 = 0
+    var pid: i32 = 0
+    var at: i64 = 0
 
     // An empty `dir`, `out_path` or `err_path` is a one-byte string holding only its terminator,
     // which the shim reads as "not asked for" -- so none needs a null pointer and none is optional
     // here.
-    val e = c_run(owned.at(0).ptr, as_ptr(ptrs.elems), as_ptr(names.elems),
-                  as_ptr(values.elems), d.ptr, o.ptr, er.ptr, i32(timeout), &code, &sig, &expired)
+    val e = c_start(owned.at(0).ptr, as_ptr(ptrs.elems), as_ptr(names.elems),
+                    as_ptr(values.elems), d.ptr, o.ptr, er.ptr, &pid, &at)
+
+    if e != 0 then return Err(from_errno(e))
+
+    Ok((pid, at))
+end begun
+
+/** Wait for a child `begun` started, for at most `timeout` milliseconds of its life. */
+private ended(pid: i32, at: i64, timeout: int) -> Result[Status, IoError]
+    var code: i32 = 0
+    var sig: i32 = 0
+    var expired: i32 = 0
+
+    val e = c_wait(pid, at, i32(timeout), &code, &sig, &expired)
 
     if e != 0 then return Err(from_errno(e))
 
@@ -212,7 +238,13 @@ private started(program: string, args: []const string, env: []const Var, dir: st
     if expired != 0 then return Ok(Status.TimedOut)
 
     Ok(if sig != 0 then Status.Signalled(int(sig)) else Status.Exited(int(code)))
-end started
+end ended
+
+private started(program: string, args: []const string, env: []const Var, dir: string,
+                timeout: int) -> Result[Status, IoError]
+    val (pid, at) = begun(program, args, env, dir, "", "")?
+
+    ended(pid, at, timeout)
 
 /** Run a program, wait for it, and say how it ended.
  *
@@ -236,7 +268,7 @@ end started
  */
 run(program: string, args: []const string = [], dir: string = "",
     env: []const Var = [], timeout: int = 0) -> Result[Status, IoError] =
-    started(program, args, env, dir, "", "", timeout)
+    started(program, args, env, dir, timeout)
 
 /** Run a program, wait for it, and collect what it wrote to its standard output.
  *
@@ -261,25 +293,122 @@ run(program: string, args: []const string = [], dir: string = "",
  * hands over the half, which is usually what says where it stopped.
  *
  * The files are removed before this returns, whether the child succeeded or not.
+ *
+ * It is `start` followed at once by `wait`, and is written as exactly that, so the two can never
+ * come to answer differently.
  */
 capture(program: string, args: []const string = [], dir: string = "", env: []const Var = [],
         stderr: bool = false, timeout: int = 0) -> Result[Output, IoError]
-    val out_path = temp_path()?
-    val err_path = if stderr then temp_path()? else ""
+    val child = start(program, args, dir, env, stderr, timeout)?
 
-    val status = started(program, args, env, dir, out_path, err_path, timeout)
-
-    // Read and removed whatever happened, so that a failed child leaves nothing behind. The read is
-    // attempted first because a child that wrote something and then failed still wrote it.
-    val text = read_text(out_path)
-    val errs = if stderr then Some(read_text(err_path).unwrap_or("")) else None
-
-    remove_file(out_path)
-
-    if stderr then remove_file(err_path)
-
-    Ok(Output(status?, text.unwrap_or(""), errs))
+    child.wait()
 end capture
+
+/** A child that has been started and not yet waited for.
+ *
+ * **It owns the child and the files its streams go to**, so it is only ever reached through a
+ * `&Child` -- `start` answers one -- and when the last reference goes, whatever it still holds is
+ * let go of. A child that was waited for has nothing left but its answer. One that was *not* is
+ * ended and reaped there and then, so dropping a `Child` never leaves a zombie behind: a child that
+ * had already finished is reaped, and one still running is asked to stop, made to after a short
+ * grace, and reaped -- the same two steps a `timeout` takes. Stopping it rather than leaving it to
+ * run is not severity for its own sake: its output files are removed in the same breath, so a child
+ * left running would be writing into files nobody can open any more, and a program that genuinely
+ * wanted it to carry on should have waited for it.
+ *
+ * **The streams go to files, not pipes, and that is what makes several at once safe.** A pipe has a
+ * buffer, and a child that fills it blocks until somebody reads -- so with pipes, a program waiting
+ * for one child while a second fills its pipe deadlocks, and one waiting for the second while the
+ * first fills its pipe deadlocks the other way. Reading every pipe as it fills would need a loop
+ * polling all of them while also polling for exits. A file never fills, so every child runs to the
+ * end on its own and `wait` reads what it wrote afterwards, in whatever order the caller chooses.
+ */
+struct Child
+    private[process] pid: i32
+    private began: i64
+    private timeout: int
+    private out_path: string
+    private err_path: string
+    private answer: Option[Result[Output, IoError]]
+
+    /** Wait for the child to end, and answer what `capture` would have answered for it.
+     *
+     * The same `Output`, the same `TimedOut` for a child that outstays its `timeout` (measured from
+     * when it was *started*, not from this call), and the same files read and removed. **A child
+     * that finished before anybody came to wait for it is reported as it finished**, even past its
+     * deadline -- it did not outstay anything; its parent was busy.
+     *
+     * Waiting again answers what the first wait answered, because by then there is no child left to
+     * ask -- the kernel forgot it at the first wait.
+     */
+    wait(*self) -> Result[Output, IoError]
+        self.answer match
+            Some(r) -> return r
+            None -> ()
+
+        val status = ended(self.pid, self.began, self.timeout)
+
+        // Read and removed whatever happened, so that a failed child leaves nothing behind. The
+        // read is attempted first because a child that wrote something and then failed still
+        // wrote it.
+        val text = read_text(self.out_path)
+        val asked = self.err_path.len > 0
+        val errs = if asked then Some(read_text(self.err_path).unwrap_or("")) else None
+
+        self.release_files()
+
+        val r = status.map((s) -> Output(s, text.unwrap_or(""), errs))
+
+        self.answer = Some(r)
+        r
+    end wait
+
+    private release_files(self)
+        remove_file(self.out_path)
+
+        if self.err_path.len > 0 then remove_file(self.err_path)
+end Child
+
+impl Drop for Child
+    drop(self)
+        if self.answer.is_none()
+            c_stop(self.pid)
+            self.release_files()
+
+/** Start a program and answer it as a `Child`, without waiting for it.
+ *
+ * It takes what `capture` takes, meaning the same things, and `wait` answers what `capture` answers
+ * -- so `capture(p, args)` and `start(p, args)?.wait()` are the same call with room in the middle.
+ * That room is the point: start several, then wait for them in any order, and they run at the same
+ * time.
+ *
+ * **The error half is for a child that could not be started**, exactly as in `capture`: a program
+ * that is not there is `NotFound` here, at the start, rather than later at the wait -- there is no
+ * child to hand back, and no files left behind for one.
+ *
+ * `timeout` bounds the child's whole life from this call, but it is kept by `wait`: a child is only
+ * stopped for outstaying it while somebody is waiting for it, or when its `Child` is dropped.
+ */
+start(program: string, args: []const string = [], dir: string = "", env: []const Var = [],
+      stderr: bool = false, timeout: int = 0) -> Result[&Child, IoError]
+    val out_path = temp_path()?
+    val err_path = if stderr then temp_path() else Ok("")
+
+    if err_path.is_err()
+        remove_file(out_path)
+        return Err(err_path.unwrap_err())
+
+    val e = err_path.unwrap()
+
+    begun(program, args, env, dir, out_path, e) match
+        Ok((pid, at)) -> Ok(Child(pid, at, timeout, out_path, e, None))
+        Err(x) ->
+            remove_file(out_path)
+
+            if stderr then remove_file(e)
+
+            Err(x)
+end start
 
 /** A file nothing else holds, made empty, for a child to write one of its streams into. */
 private temp_path() -> Result[string, IoError]

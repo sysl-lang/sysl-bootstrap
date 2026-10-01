@@ -3,8 +3,13 @@ module sysl.process
 @tests
 
 import sysl.fs.IoError
-import sysl.posix.time.monotonic
-import sysl.time.whole_millis
+import sysl.posix.time.{monotonic, sleep}
+import sysl.time.{millis, whole_millis}
+
+// What the tests below ask the kernel directly, rather than the module: whether a pid still names a
+// process at all. A signal of zero is delivered to nothing and checks only that the target exists --
+// and a zombie exists, which is exactly what makes this the question for whether one was left.
+private extern "kill" c_kill(pid: i32, sig: int) -> int
 
 // What starting another program promises, asserted in sysl rather than beside it in Scala.
 //
@@ -303,3 +308,134 @@ timeout_does_not_disturb_a_start_failure()
     assert(r.is_err(), "a program that is not there cannot run out of time")
     assert_eq(r.unwrap_err(), IoError.NotFound)
 end timeout_does_not_disturb_a_start_failure
+
+// ## Starting one now and waiting for it later
+
+// **The claim `start` is built on**: `capture` with room in the middle, so turning one into the other
+// changes when the answer arrives and nothing about what it is. Every field is compared, on a child
+// that writes to both streams and fails, which is the case with the most to get wrong.
+@test("start then wait answers what capture answers")
+start_then_wait_is_capture()
+    val script = "echo out; echo err >&2; exit 3"
+    val want = capture("sh", ["-c", script], stderr = true).unwrap()
+    val got = start("sh", ["-c", script], stderr = true).unwrap().wait().unwrap()
+
+    assert_eq(got.status, want.status)
+    assert_eq(got.text, want.text)
+    assert_eq(got.err, want.err)
+    assert_eq(got.status, Status.Exited(3))
+    assert_eq(got.err, Some("err\n"))
+
+// A child is waited for in whatever order suits the caller, and its answer is its own whichever was
+// collected first. **And they run at the same time**, which is the point of having them: three
+// children sleeping a second each, waited for in reverse, come back in well under the three seconds
+// one after another would take.
+@test("three children started then waited in reverse order")
+three_children_reverse_order()
+    val t0 = monotonic()
+    val a = start("sh", ["-c", "sleep 1; echo a"]).unwrap()
+    val b = start("sh", ["-c", "sleep 1; echo b"]).unwrap()
+    val c = start("sh", ["-c", "sleep 1; echo c"]).unwrap()
+
+    assert_eq(c.wait().unwrap().text, "c\n")
+    assert_eq(b.wait().unwrap().text, "b\n")
+    assert_eq(a.wait().unwrap().text, "a\n")
+
+    val took = whole_millis(monotonic() - t0)
+
+    assert(took < 2500, s"took ${took}ms, which is the three run one after another")
+end three_children_reverse_order
+
+// **The deadlock this module was built to be unable to reach.** A child writing a megabyte to a pipe
+// blocks once the pipe's buffer is full until somebody reads, and a parent waiting on a *different*
+// child first never does. Through files nothing fills: the big child runs to its end on its own while
+// the parent waits for the other two, and both of its streams come back whole.
+@test("a megabyte on each stream is captured while two other children run")
+large_output_does_not_deadlock()
+    val n: usize = 1100000
+    val big = start("sh", ["-c", f"yes o | head -c $n%d; yes e | head -c $n%d >&2"],
+                    stderr = true, timeout = 30000).unwrap()
+    val one = start("sleep", ["0.2"]).unwrap()
+    val two = start("sleep", ["0.2"]).unwrap()
+
+    assert_eq(two.wait().unwrap().status, Status.Exited(0))
+    assert_eq(one.wait().unwrap().status, Status.Exited(0))
+
+    val out = big.wait().unwrap()
+
+    assert_eq(out.status, Status.Exited(0))
+    assert_eq(out.text.len, n)
+    assert_eq(out.err.unwrap().len, n)
+end large_output_does_not_deadlock
+
+// A child waited for twice has nothing left to ask by the second time, so the second answer is the
+// first one kept rather than an error about a pid the kernel has already forgotten.
+@test("waiting twice answers the same thing twice")
+waiting_twice()
+    val c = start("sh", ["-c", "echo once; exit 4"]).unwrap()
+    val first = c.wait().unwrap()
+    val second = c.wait().unwrap()
+
+    assert_eq(first.status, Status.Exited(4))
+    assert_eq(second.status, first.status)
+    assert_eq(second.text, "once\n")
+
+// A program that is not there is reported where it fails -- at the start, with no child to hand back.
+@test("a program that is not there fails to start rather than failing to finish")
+start_of_a_missing_program()
+    val r = start("sysl-no-such-program-anywhere-on-this-machine")
+
+    assert(r.is_err(), "there is no child to answer")
+    assert_eq(r.unwrap_err(), IoError.NotFound)
+
+// The bound is the child's life measured from `start`, and `wait` is what keeps it.
+@test("a started child that outstays its timeout is stopped at the wait")
+started_child_times_out()
+    val t0 = monotonic()
+    val out = start("sleep", ["5"], timeout = 200).unwrap().wait().unwrap()
+    val took = whole_millis(monotonic() - t0)
+
+    assert_eq(out.status, Status.TimedOut)
+    assert(took < 3000, s"waited ${took}ms, which is the child's five seconds rather than the bound")
+
+// The pid of a child that was started, still running, when its handle went.
+private abandoned_while_running() -> i32
+    val c = start("sleep", ["30"]).unwrap()
+
+    c.pid
+
+// The pid of a child that had finished, unreaped, when its handle went -- after first checking that
+// it really was a zombie by then, which is what makes the test below able to fail: a check that the
+// pid is gone is worth nothing unless the same check could see it there.
+private abandoned_after_finishing() -> i32
+    val c = start("true").unwrap()
+
+    sleep(millis(300))
+    assert(c_kill(c.pid, 0) == 0, "a finished child nobody has waited for is still a zombie")
+
+    c.pid
+
+// **Dropping a child is how a program says it is not going to wait**, and the module answers by
+// ending it and reaping it, so nothing is left in the process table either way. A pid that still
+// answers `kill(pid, 0)` is a zombie or a running child, and both are what this rules out.
+@test("a child dropped without being waited for leaves no zombie")
+dropped_child_is_reaped()
+    val t0 = monotonic()
+    val running = abandoned_while_running()
+    val took = whole_millis(monotonic() - t0)
+
+    assert(c_kill(running, 0) != 0, s"pid ${running} survived its handle")
+    assert(took < 3000, s"dropping took ${took}ms, which is waiting the child out rather than ending it")
+
+    val finished = abandoned_after_finishing()
+
+    assert(c_kill(finished, 0) != 0, s"pid ${finished} was left a zombie")
+end dropped_child_is_reaped
+
+// The number is the machine's own rather than merely positive: `getconf` is POSIX's own way of asking
+// the same question from outside, so the two have to agree.
+@test("cpu_count agrees with getconf")
+cpu_count_agrees_with_getconf()
+    val out = capture("getconf", ["_NPROCESSORS_ONLN"]).unwrap()
+
+    assert_eq(out.text, f"${cpu_count()}\n")

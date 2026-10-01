@@ -273,8 +273,14 @@ class StdSelfTests extends AnyFreeSpec with Matchers {
    * write, a failed publish leaving nothing, and the directory race. The runner collected **867**
    * before a case was written, against a floor of 844, so the drift was twenty-three and the number
    * here is the tree's exact count again.
+   *
+   * Raised to **884** for `sysl.process.start` and `sysl.cpu_count` (9): start-then-wait against
+   * `capture`, three children waited in reverse, a megabyte on each stream beside two other
+   * children, a second wait, a start that fails, a timeout kept at the wait, a dropped child left
+   * no zombie, and the processor count against its floor and against `getconf`. The runner
+   * collected 875 before a case was written, so this is the tree's exact count.
    */
-  private val floor = 875
+  private val floor = 884
 
   /** The library, compiled as a **test build of itself**.
    *
