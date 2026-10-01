@@ -83,6 +83,15 @@ trait FunctionBodies extends ModuleStorage {
     val savedPending  = pendingNested
     val savedOuter    = outerNested
     val savedDeclares = blockDeclares
+    val savedByName   = byNameLocals
+
+    // Which captured names are a by-name parameter of a frame around this body, asked of the scope
+    // the body is written in, before the reset takes it away. Reading one in here is the same call a
+    // read in that frame is — each use is an evaluation, because each use is a call
+    // (`reference/types.md § A parameter passed by name`) — and the capture is of the callable the
+    // call made of the argument, so the mark travels with the name into the body's own scope.
+    val byNameCaptured =
+      environment.toList.flatMap(_.names).filter(n => lookupOpt(n).exists(l => byNameLocals(l._1))).toSet
 
     // A closure has no name a reader wrote, so `__FUNCTION__` in one names the function it is
     // written in — which means carrying the enclosing name across the reset rather than letting the
@@ -133,7 +142,10 @@ trait FunctionBodies extends ModuleStorage {
             case Type.Ptr(inner) if e.byReference => (inner, TDeref(field, inner))
             case _                                => (stored, field)
 
-          (if e.fixed(n) then declareReadOnly(n, ty) else declare(n, ty)) -> read
+          val unique = if e.fixed(n) then declareReadOnly(n, ty) else declare(n, ty)
+
+          if byNameCaptured(n) then byNameLocals += unique
+          unique -> read
         }.toMap
       // A sibling is in scope throughout the group, so a body may call one written below it — which
       // is the half of `reference/declarations.md` that makes mutual recursion work. What a body
@@ -213,6 +225,7 @@ trait FunctionBodies extends ModuleStorage {
       pendingNested = savedPending
       outerNested = savedOuter
       blockDeclares = savedDeclares
+      byNameLocals = savedByName
   }
 
   /** Analyzes one body against a signature it is handed, rather than one looked up in `funcInsts`.

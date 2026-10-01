@@ -162,6 +162,122 @@ class ByNameTests extends AnyFreeSpec with RunSupport with CodegenSupport {
     }
   }
 
+  // Each use is a call wherever it is written, so a read inside a closure or a nested function of
+  // the body is the same evaluation a read in the body is: the capture holds the callable the call
+  // made of the argument, and naming it calls that.
+  "read inside a body written in the body" - {
+
+    "a closure of the body calls it" in {
+      run("""in_closure(x: -> int) -> int
+            |    val g = () -> x + 1
+            |    g()
+            |
+            |print(in_closure(41))
+            |""".stripMargin) shouldBe "42\n"
+    }
+
+    "a nested function of the body calls it" in {
+      run("""in_nested(x: -> int) -> int
+            |    inner() -> int = x + 2
+            |    inner()
+            |
+            |print(in_nested(40))
+            |""".stripMargin) shouldBe "42\n"
+    }
+
+    "a closure evaluates the argument at every call of it" in {
+      run("""static var calls: int = 0
+            |
+            |tick() -> int
+            |    calls += 1
+            |    print("eval")
+            |    calls
+            |
+            |closure_twice(x: -> int) -> int
+            |    val g = () -> x
+            |    g() + g()
+            |
+            |print(closure_twice(tick()))
+            |print(calls)
+            |""".stripMargin) shouldBe "eval\neval\n3\n2\n"
+    }
+
+    // An argument with an effect, so the environment has to hold the callable itself: a capture of
+    // anything else would print a different count, or none.
+    "a nested function evaluates the argument at every read" in {
+      run("""static var calls: int = 0
+            |
+            |tick() -> int
+            |    calls += 1
+            |    print("eval")
+            |    calls
+            |
+            |nested_twice(x: -> int) -> int
+            |    inner() -> int = x * 10
+            |    inner() + inner()
+            |
+            |print(nested_twice(tick()))
+            |print(calls)
+            |""".stripMargin) shouldBe "eval\neval\n30\n2\n"
+    }
+
+    "a closure that outlives the call evaluates the argument when it is called" in {
+      run("""static var calls: int = 0
+            |
+            |tick() -> int
+            |    calls += 1
+            |    print("eval")
+            |    calls
+            |
+            |later(x: -> int) -> &Fn() -> int = () -> x * 100
+            |
+            |val f = later(tick())
+            |print("made")
+            |print(f())
+            |print(f())
+            |print(calls)
+            |""".stripMargin) shouldBe "made\neval\n100\neval\n200\n2\n"
+    }
+
+    "a closure inside a nested function reaches it through both" in {
+      run("""deep(x: -> int) -> int
+            |    inner() -> int
+            |        val g = () -> x * 2
+            |        g()
+            |    inner()
+            |
+            |print(deep(21))
+            |""".stripMargin) shouldBe "42\n"
+    }
+
+    // Walking the closure's body must hand the frame back as it found it, so the body's own reads
+    // after one are still calls.
+    "the body still calls it after a closure is written" in {
+      run("""after(x: -> int) -> int
+            |    val g = () -> 1
+            |    x + g()
+            |
+            |print(after(41))
+            |""".stripMargin) shouldBe "42\n"
+    }
+
+    "calling it inside a closure is refused, as it is in the body" in {
+      val body    = err("""in_body(x: -> int) -> int = x() + 1
+                           |
+                           |print(in_body(41))
+                           |""".stripMargin)
+      val closure = err("""in_closure(x: -> int) -> int
+                           |    val g = () -> x() + 1
+                           |    g()
+                           |
+                           |print(in_closure(41))
+                           |""".stripMargin)
+
+      body should include("type 'int' has no method 'call'")
+      closure should include("type 'int' has no method 'call'")
+    }
+  }
+
   "what it refuses" - {
 
     "a struct field written by name, which is storage and not a call" in {

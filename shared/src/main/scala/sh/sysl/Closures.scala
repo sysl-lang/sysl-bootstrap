@@ -278,8 +278,18 @@ trait Closures extends CallAnalysis {
     // Every capture is read where the closure is *formed* (`reference/expressions.md § Closures`),
     // so a value is copied in and a `&T` takes a share — which is what the ordinary field-by-field
     // construction of a struct already does, and the reason capture needed no rule of its own.
-    TStructNew(struct, captured.map(n => analyzeExpr(Ident(n).setPos(pos)))).setPos(pos)
+    TStructNew(struct, captured.map(n => captureRead(Ident(n).setPos(pos)))).setPos(pos)
   }
+
+  /** What a capture is formed from where the environment is built. A name is read as the body around
+   * it reads it, with one exception: a by-name parameter, whose read is a *call*. What the body
+   * captures is the callable the call made of the argument, so the argument runs at each read
+   * inside the body and never at the capture (`reference/types.md § A parameter passed by name`).
+   */
+  private def captureRead(id: Ident): TExpr =
+    lookupOpt(id.name) match
+      case Some((u, ty)) if byNameLocals(u) => capturedFields.getOrElse(u, TLoad(u, ty))
+      case _                                => analyzeExpr(id)
 
   /** The nested functions of one block, lowered together (`reference/declarations.md`).
    *
@@ -395,7 +405,7 @@ trait Closures extends CallAnalysis {
     // captured from further out is the field it reaches there, and the address taken is of the one
     // variable rather than of a copy of it.
     val addresses = captured.map { n =>
-      val place = analyzeExpr(Ident(n))
+      val place = captureRead(Ident(n))
 
       TAddrOf(place, Type.Ptr(place.ty))
     }
