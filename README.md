@@ -3,7 +3,6 @@
 </p>
 
 <p align="center">
-  <a href="https://central.sonatype.com/artifact/sh.sysl/sysl_3"><img alt="Maven Central" src="https://img.shields.io/maven-central/v/sh.sysl/sysl_3"></a>
   <a href="https://github.com/sysl-lang/homebrew-tap"><img alt="Homebrew" src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsysl-lang%2Fhomebrew-tap%2Fmain%2FFormula%2Fsysl.rb&search=version%20%22(%5B%5E%22%5D%2B)%22&replace=%241&label=homebrew&color=fbb040"></a>
   <a href="https://github.com/sysl-lang/sysl-bootstrap/commits"><img alt="Last Commit" src="https://img.shields.io/github/last-commit/sysl-lang/sysl-bootstrap"></a>
   <img alt="License" src="https://img.shields.io/github/license/sysl-lang/sysl-bootstrap">
@@ -47,7 +46,7 @@ owns.
 
 The site lives in **[sysl-lang/sysl.sh](https://github.com/sysl-lang/sysl.sh)**, which drives this
 compiler as a published dependency. That is deliberate rather than incidental: a website documents
-the *released* language, so its pages are checked against whatever version is on Central, and a page
+the *released* language, so its pages are checked against whatever version is on GitHub Packages, and a page
 demonstrating something only `dev` can do would be wrong for the person reading it.
 
 **There used to be a `design/` directory here as well** — twenty-nine chapters carrying each
@@ -208,14 +207,14 @@ development.
 The command line takes paths, because a program on disk is what it is for. A tool that *generated*
 the source it wants compiled — a documentation harness holding a page's code block, an editor with an
 unsaved buffer, a test with an inline program — has no file and no reason to make one. The same
-compiler is on Maven Central and takes a string:
+compiler is published to GitHub Packages and takes a string:
 
 ```scala
+resolvers += "GitHub Packages" at "https://maven.pkg.github.com/sysl-lang/sysl-bootstrap"
 libraryDependencies += "sh.sysl" %% "sysl" % "0.0.153"   // %%% in a cross-project
 ```
 
-The Maven Central badge at the top of this page is the published version, so it is what to check this
-line against.
+The latest GitHub release is the published version, so it is what to check this line against.
 
 ```scala
 import sh.sysl.api.Sysl
