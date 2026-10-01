@@ -132,9 +132,9 @@ private extern "sysl_cpu_count" c_cpu_count() -> long
  * taken offline is not one a program can schedule work on, so it is not counted.
  *
  * It is never less than one, since no program runs on zero processors, and a caller dividing work
- * by it should not have to say so. **It needs an operating system to ask**, so a freestanding
- * program calling it is refused rather than told a number nobody measured; on a hosted system with
- * no POSIX `sysconf` behind it, the answer is that one.
+ * by it should not have to say so. **It needs an operating system to ask, and says so**: a module
+ * that has given up `os` is refused at the call. Where there is no POSIX `sysconf` to ask -- a
+ * freestanding image, WASI -- the answer is that one.
  */
 @needs(os)
 cpu_count() -> usize
