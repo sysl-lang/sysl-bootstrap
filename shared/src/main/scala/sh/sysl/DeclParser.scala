@@ -808,7 +808,7 @@ trait DeclParser extends ExprParser {
         def decl(tp: TypeParams)(items: List[Either[AssocDecl, MethodDecl]]) =
           TraitDecl(name, tp.names, items.collect { case Right(m) => m }, tp.bounds,
             supers.getOrElse(Nil), tdefaults = tp.defaults,
-            assocs = items.collect { case Left(a) => a })
+            assocs = items.collect { case Left(a) => a }, tvalues = tp.values)
 
         noPacks(tp0, "a trait") ~> whereOn(tp0) >> { tp =>
           if supers.isEmpty then body ^^ decl(tp) else opt(body) ^^ (m => decl(tp)(m.getOrElse(Nil)))

@@ -1097,6 +1097,12 @@ case class TraitDecl(
       * every applied argument list, and from the key an implementation is filed under.
       */
     assocs: List[AssocDecl] = Nil,
+    /** Which of `tparams` stand for **values** — the `N` of `trait FromBytes[const N: usize]` —
+      * and at what type, exactly as a struct's are (`reference/generics.md § A parameter may stand
+      * for a value`). An implementation is filed under the value it fixes, so `FromBytes[2]` and
+      * `FromBytes[4]` for one type are two implementations, as two type arguments would be.
+      */
+    tvalues: Map[String, TypeRef] = Map.empty,
 ) extends Stmt {
 
   /** Every parameter a member's signature may name: the trait's own, then its associated types. The

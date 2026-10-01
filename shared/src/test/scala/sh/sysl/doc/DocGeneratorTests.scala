@@ -584,4 +584,116 @@ class DocGeneratorTests extends AnyFreeSpec with Matchers {
       text should not include "{#"
     }
   }
+
+  "what a page used to get wrong" - {
+
+    "a module summary broken across two lines is printed once, as the lead, and not again" in {
+      val text = page(
+        "/** A module whose first\n * sentence spans two lines. And more.\n */\n\nmodule m\n\nf() -> int = 1")
+
+      text should include("summary: \"A module whose first sentence spans two lines.\"")
+      text should include("---\n\nAnd more.\n")
+      text should not include "A module whose first\n"
+    }
+
+    "an opaque struct keeps the word, and shows no layout a reader may not use" in {
+      sig("opaque struct Handle") shouldBe "opaque struct Handle"
+      sig("opaque struct Conn\n    fd: int") shouldBe "opaque struct Conn"
+    }
+
+    "a private field is shown, and marked" in {
+      sig("struct S\n    x: int\n    private y: int\n    private[m] z: int") shouldBe
+        "struct S\n    x: int\n    private y: int\n    private[m] z: int"
+    }
+
+    "a string default is printed as it would be written" in {
+      sig("""say(sep: string = "a\"b", nl: string = "\n", bs: string = "\\") -> int = 0""") shouldBe
+        """say(sep: string = "a\"b", nl: string = "\n", bs: string = "\\") -> int"""
+    }
+
+    "a type alias is an alias, rendered as it was declared" in {
+      sig("type Meters = real") shouldBe "type Meters = real"
+      only("module m\n\ntype Meters = real").of(ApiModel.Kind.Alias).map(_.name) shouldBe List("Meters")
+    }
+
+    "a derived subtype keeps its new, its range and its predicate" in {
+      sig("type Percent = new int within 0..<101") shouldBe "type Percent = new int within 0..<101"
+    }
+
+    "a by-name parameter is printed as it was declared, not as the thunk its body sees" in {
+      sig("f(m: -> int) -> int = m") shouldBe "f(m: -> int) -> int"
+    }
+
+    "a default keeps the grouping its parentheses gave it" in {
+      sig("f(a: int = -(3 * 4), b: int = (1 + 2) * 2, c: int = 1 - (2 - 3)) -> int = a") shouldBe
+        "f(a: int = -(3 * 4), b: int = (1 + 2) * 2, c: int = 1 - (2 - 3)) -> int"
+      sig("f(a: int = 1 + 2 * 3, b: int = 1 - 2 - 3) -> int = a") shouldBe
+        "f(a: int = 1 + 2 * 3, b: int = 1 - 2 - 3) -> int"
+    }
+
+    "an extern is shown as a caller reaches it: the link symbol is left out" in {
+      sig("extern \"abs\" c_abs(n: int) -> int") shouldBe "extern c_abs(n: int) -> int"
+      sig("extern \"__stdoutp\" out: *u8") shouldBe "extern out: *u8"
+    }
+
+    "a module val is a value, rendered as a constant is" in {
+      sig("val zero: int = 0") shouldBe "val zero: int = 0"
+    }
+
+    "the three kinds get groups of their own, in the page's order" in {
+      val m = only("module m\n\ntype Meters = real\n\nextern \"abs\" c_abs(n: int) -> int\n\n" +
+        "extern errno: int\n\nval zero: int = 0\n\nconst one: int = 1\n\nf() -> int = 1\n\nstruct S\n    x: int")
+
+      m.of(ApiModel.Kind.Value).map(_.name) shouldBe List("zero")
+      m.of(ApiModel.Kind.Extern).map(_.name) shouldBe List("c_abs", "errno")
+      m.of(ApiModel.Kind.Alias).map(_.name) shouldBe List("Meters")
+
+      val groups = MarkdownWriter.modulePage(m).text.linesIterator.filter(_.startsWith("## ")).toList
+
+      groups shouldBe
+        List("## Index", "## Constants", "## Values", "## Functions", "## Externs", "## Types", "## Aliases")
+    }
+
+    "a doc comment above an alias is the alias's, not the module's headline" in {
+      val m = only("module m\n\n/** An alias. */\ntype Meters = real")
+
+      m.summary shouldBe ""
+      m.symbols.head.summary shouldBe "An alias."
+    }
+
+    "--private shows a type's private methods, marked, and the default leaves them out" in {
+      val src = "module m\n\nstruct S\n    x: int\n\n    private hidden(self) -> int = self.x\n\n" +
+        "    shown(self) -> int = self.x"
+
+      modules(src).head.symbols.head.members.map(_.name) shouldBe List("shown")
+
+      val all = modules(src, includePrivate = true).head
+
+      all.symbols.head.members.map(_.signature) shouldBe
+        List("private hidden(self) -> int", "shown(self) -> int")
+      MarkdownWriter.modulePage(all).text should include("| `hidden` | `private hidden(self) -> int` |")
+    }
+
+    "--private marks a private top-level declaration, so it is not mistaken for API" in {
+      modules("module m\n\nprivate helper(n: int) -> int = n", includePrivate = true)
+        .head.symbols.head.signature shouldBe "private helper(n: int) -> int"
+    }
+
+    "a @param naming no parameter is left off the page, as the compiler refuses it" in {
+      val text = page("module m\n\n/** Bits.\n * @param a bits\n * @param nope not one\n */\nbits(a: int) -> int = a")
+
+      text should include("| `a` | bits |")
+      text should not include "nope"
+    }
+
+    "a @param naming a method's receiver is kept, as the compiler admits it" in {
+      val text = page("module m\n\nstruct S\n    x: int\n\n    /** Gets.\n     * @param self it\n     */\n" +
+        "    get(self) -> int = self.x")
+
+      text should include("| `get` |")
+      only("module m\n\nstruct S\n    x: int\n\n    /** Gets.\n     * @param self it\n     */\n" +
+        "    get(self) -> int = self.x").symbols.head.members.head.doc.get.params.map(_.subject) shouldBe
+        List(Some("self"))
+    }
+  }
 }

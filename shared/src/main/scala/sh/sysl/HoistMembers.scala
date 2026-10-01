@@ -103,7 +103,9 @@ trait HoistMembers extends HoistImpl {
       bounds = tr.bounds ++ m.bounds +
         (selfName -> List(BoundRef(tr.name, tr.tparams.map(NamedType(_, Nil))))),
       variadic = m.variadic,
-      tvalues = m.tvalues,
+      // A trait's value parameter stands at a value inside its defaults, as a struct's does inside
+      // its methods — without it the `N` of `trait Bytes[const N: usize]` names nothing there.
+      tvalues = tr.tvalues ++ m.tvalues,
       tpacks = m.tpacks,
       noinline = m.noinline,
       cold = m.cold,

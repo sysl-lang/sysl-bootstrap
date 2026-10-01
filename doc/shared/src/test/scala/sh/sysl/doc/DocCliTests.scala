@@ -190,6 +190,63 @@ class DocCliTests extends AnyFreeSpec with Matchers {
 
       DocCli.run(List("library", "--out", dir, "--check")) shouldBe 1
     }
+
+    "is 1 when --check finds the page of a module that no longer exists" in {
+      // A renamed or removed module leaves its page behind, documenting an API nobody can import.
+      // A check that only compared the pages it would write could never see it.
+      val dir = out("check-orphan")
+
+      DocCli.run(List("library", "--out", dir)) shouldBe 0
+
+      writeFile(s"$dir/sysl-gone.md", readFile(s"$dir/sysl-text.md"))
+
+      DocCli.run(List("library", "--out", dir, "--check")) shouldBe 1
+    }
+
+    "regenerating removes that page, so the check it failed can pass" in {
+      val dir = out("regen-orphan")
+
+      DocCli.run(List("library", "--out", dir)) shouldBe 0
+
+      writeFile(s"$dir/sysl-gone.md", readFile(s"$dir/sysl-text.md"))
+
+      DocCli.run(List("library", "--out", dir)) shouldBe 0
+      isFile(s"$dir/sysl-gone.md") shouldBe false
+      DocCli.run(List("library", "--out", dir, "--check")) shouldBe 0
+    }
+
+    "a hand-written page beside the generated ones is neither stale nor removed" in {
+      val dir = out("hand-written")
+
+      DocCli.run(List("library", "--out", dir)) shouldBe 0
+
+      writeFile(s"$dir/notes.md", "---\ntitle: notes\n---\n\nwritten by hand\n")
+
+      DocCli.run(List("library", "--out", dir, "--check")) shouldBe 0
+      DocCli.run(List("library", "--out", dir)) shouldBe 0
+      isFile(s"$dir/notes.md") shouldBe true
+    }
+  }
+
+  "a doc comment the compiler would refuse" - {
+
+    "is reported in the compiler's words, and the pages are still written" in {
+      val tree = "target/doc-cli-tests/param-tree"
+
+      sh.sysl.Project.discard(tree)
+      sh.sysl.Project.makeDirectories(tree)
+      writeFile(s"$tree/q.sysl",
+        "module demo.q\n\n/** Bits.\n * @param a bits\n * @param nope not one\n */\nbits(a: int) -> int = a\n")
+
+      val err  = new java.io.ByteArrayOutputStream
+      val dir  = out("param-out")
+      val code = Console.withErr(err)(DocCli.run(List(tree, "--out", dir)))
+
+      code shouldBe 0
+      err.toString should include("q.sysl:")
+      err.toString should include("warning: 'nope' is not a parameter of this declaration — it has a")
+      readFile(s"$dir/demo-q.md") should not include "nope"
+    }
   }
 
   /** The `--site` path: generate, then render with juicer, in one command.

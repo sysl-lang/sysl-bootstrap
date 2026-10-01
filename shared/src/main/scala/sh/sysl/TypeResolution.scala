@@ -88,13 +88,25 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
    * come through here, so `Self` means the same thing in a checked body and in a run one.
    */
   protected def withSelf(fname: String, subst: Map[String, Type]): Map[String, Type] =
-    genericOuter.getOrElse(fname, Map.empty) ++
+    // A trait's **value** parameter fixed by one of the block's own — `impl[const M: usize]
+    // Bytes[M] for Bits[M]` — is whatever that parameter is here: zero for the walk that checks the
+    // body, the subject's own `M` at an instantiation. A body reads it as a value only once it is one.
+    settledOuter(genericOuter.getOrElse(fname, Map.empty), subst) ++
       genericSelf.get(fname).fold(subst) { (ref, scope) =>
         // Read where the subject was written, which for an inherited default is the `impl` block
         // rather than the trait the rest of the declaration came from. The substitution itself is
         // resolved types and means the same thing anywhere.
         subst + (selfName -> inScope(scope)(resolveType(ref, subst)))
       }
+
+  /** A block's trait arguments with each of the block's own **value** parameters replaced by what
+    * `subst` makes it — the stand-in it was filed under is a name, and a length has to be a value.
+    */
+  protected def settledOuter(outer: Map[String, Type], subst: Map[String, Type]): Map[String, Type] =
+    outer.map {
+      case (k, Type.Abstract(n, _)) if subst.get(n).exists(_.isInstanceOf[Type.ConstArg]) => k -> subst(n)
+      case kv                                                                            => kv
+    }
 
   /** Rewrites `Self` in a written type reference to the reference it stands for.
    *
@@ -143,8 +155,8 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
     bounds.map((tp, refs) => tp -> refs.map(b => BoundRef(b.name, b.args.map(spell)).setPos(b.pos)))
 
   protected def resolveBound(b: BoundRef, subst: Map[String, Type]): Type.Bound = at(b.pos) {
-    val written = b.args.map(resolveType(_, subst))
     val key     = traitKey(b.name)
+    val written = traitArgs(key, b.args, subst)
     var args    = written
 
     for k <- key; decl <- traitDecls.get(k) do
@@ -683,12 +695,35 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
     else
       val tparams = typeKey(n).fold(List.empty[String])(nominalTparams)
 
-      argRefs.zipWithIndex.map { (ref, i) =>
-        tparams.lift(i).filter(values.contains) match
-          case Some(tp) => valueArg(ref, recover(Type.Unknown)(resolveType(values(tp), Map.empty)), subst)
-          case None     => underTypeArg(resolveType(ref, subst))
-      }
+      argsAgainst(tparams, values, argRefs, subst, ref => underTypeArg(resolveType(ref, subst)))
   }
+
+  /** Written arguments read against the parameters they stand at: a value where the declaration
+   * wrote `const`, folded to the constant that goes in the identity, and `typeArg` everywhere else.
+   */
+  private def argsAgainst(
+      tparams: List[String],
+      values: Map[String, TypeRef],
+      argRefs: List[TypeRef],
+      subst: Map[String, Type],
+      typeArg: TypeRef => Type,
+  ): List[Type] =
+    argRefs.zipWithIndex.map { (ref, i) =>
+      tparams.lift(i).filter(values.contains) match
+        case Some(tp) => valueArg(ref, recover(Type.Unknown)(resolveType(values(tp), Map.empty)), subst)
+        case None     => typeArg(ref)
+    }
+
+  /** A **trait's** written arguments, read the way a generic type's are — so `FromBytes[4]` applies
+   * the trait to the value 4 at its `const N: usize`, and `FromBytes[u8]` there is refused in the
+   * words a struct's value parameter refuses a type with (`reference/generics.md § A parameter may
+   * stand for a value`). Every place that applies a trait — a bound, an `impl`, an object — reads
+   * its arguments here, so a value argument is one constant wherever the trait is written.
+   */
+  protected def traitArgs(key: Option[String], refs: List[TypeRef], subst: Map[String, Type]): List[Type] =
+    key.flatMap(traitDecls.get) match
+      case Some(d) if d.tvalues.nonEmpty => argsAgainst(d.tparams, d.tvalues, refs, subst, resolveType(_, subst))
+      case _                             => refs.map(resolveType(_, subst))
 
   /** One **value** argument: the expression it was written as, folded to the constant that goes in
    * the type's identity.
@@ -778,7 +813,7 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
             err(s"'$a' is an associated type of '${qn(key)}', which an object fixes by name rather " +
               s"than by position — write '$sigil${qn(key)}[$a = …]'")
 
-          val written = posRefs.map(resolveType(_, subst))
+          val written = traitArgs(Some(key), posRefs, subst)
 
           // **The one unambiguous case is written without the name**, and it is the common one: a
           // trait with no parameters of its own and exactly one associated type has only one thing a

@@ -84,14 +84,17 @@ object Signature {
     case IntLit(value, suffix)  => s"$value${suffix.getOrElse("")}"
     case FloatLit(text, suffix) => s"$text${suffix.getOrElse("")}"
     case BoolLit(value)         => value.toString
-    case StrLit(value)          => "\"" + value + "\""
+    case StrLit(value)          => "\"" + strText(value) + "\""
     case CharLit(cp)            => s"'${charText(cp)}'"
     case NullLit()              => "null"
     case UnitLit()              => "()"
     case Ident(name)            => name
     case Field(recv, name)      => s"${exprText(recv)}.$name"
-    case Unary(op, operand)     => s"$op${exprText(operand)}"
-    case Binary(op, l, r)       => s"${exprText(l)} $op ${exprText(r)}"
+    case Unary(op, operand)     => s"$op${operandText(operand, PrefixPower, right = false)}"
+    case Binary(op, l, r)       =>
+      val p = infixPower(op)
+
+      s"${operandText(l, p, right = false)} $op ${operandText(r, p, right = true)}"
     case Tuple(elements)        => s"(${elements.map(exprText).mkString(", ")})"
     case Call(callee, args)     => s"${exprText(callee)}(${args.map(exprText).mkString(", ")})"
     case ArrayLit(elements)     => s"[${elements.map(exprText).mkString(", ")}]"
@@ -102,13 +105,56 @@ object Signature {
    * Rendering the raw codepoint would put a literal newline inside quotes on the page, which is both
    * wrong as sysl and invisible as prose.
    */
-  private def charText(cp: Int): String = cp match
+  private def charText(cp: Int): String = escaped(cp, '\'')
+
+  /** One operand of an operator binding at `p`, parenthesized where the parser would otherwise read
+   * it differently.
+   *
+   * The tree records no parentheses, so they are put back from the operators' binding powers: an
+   * operand binding more loosely than the operator it sits under is parenthesized, and so is a right
+   * operand binding exactly as tightly, every infix operator here grouping to the left. Written
+   * bare, `-(3 * 4)` printed as `-3 * 4` and `(a + b) * 2` as `a + b * 2` — each a different value.
+   */
+  private def operandText(e: Expr, p: Int, right: Boolean): String = e match
+    case Binary(op, _, _) =>
+      val q = infixPower(op)
+
+      if q < p || (right && q == p) then s"(${exprText(e)})" else exprText(e)
+    case _ => exprText(e)
+
+  /** How tightly a prefix operator holds its operand: above every infix operator. */
+  private val PrefixPower = 70
+
+  /** How tightly an infix operator binds, as `ExprParser`'s ladder reads it, loosest first. */
+  private def infixPower(op: String): Int = op match
+    case "||"                                   => 10
+    case "&&"                                   => 20
+    case "==" | "!=" | "<" | "<=" | ">" | ">=" => 30
+    case "|"                                    => 40
+    case "^"                                    => 42
+    case "&"                                    => 44
+    case "+" | "-"                              => 50
+    case "*" | "/" | "%" | "<<" | ">>"          => 60
+    case _                                      => 0
+
+  /** A string literal's interior, escaped as it would have been written: `"a\"b"`, `"\n"`.
+   *
+   * The literal's value is what the lexer decoded, so a default of `"\n"` holds a real newline, and
+   * printing it back unescaped broke the signature across two lines of the fence.
+   */
+  private def strText(value: String): String =
+    value.codePoints.toArray.map(escaped(_, '"')).mkString
+
+  /** One codepoint inside a literal quoted by `quote`: the quote itself, a backslash and the control
+   * characters take the escape the lexer reads; everything else is itself.
+   */
+  private def escaped(cp: Int, quote: Char): String = cp match
     case 0x0A => "\\n"
     case 0x0D => "\\r"
     case 0x09 => "\\t"
     case 0x00 => "\\0"
-    case 0x27 => "\\'"
     case 0x5C => "\\\\"
+    case c if c == quote => s"\\$quote"
     case c if c < 0x20 || c == 0x7F => f"\\u{$c%x}"
     case c    => String.valueOf(Character.toChars(c))
 
@@ -170,6 +216,9 @@ object Signature {
    */
   private def paramTypeText(p: Param): String = (p.rest, p.typ) match
     case (true, ArrayType(None, elem, true)) => s"...${typeText(elem)}"
+    // A by-name `m: -> int` is parsed to the thunk type `() -> int` its body sees; the caller
+    // writes an `int`, so the declaration's form is what goes on the page.
+    case (_, FnType(Nil, ret, true)) if p.byName => typeText(ret)
     case _                                   => typeText(p.typ)
 
   /** The parameter list with its parentheses, variadic marker included. */
@@ -232,8 +281,13 @@ object Signature {
    * "there is state here you cannot reach" is information rather than noise.
    */
   def struct(s: StructDecl): String =
-    val head = s"struct ${s.name}${tparamsText(s.tparams, s.bounds, s.tvalues, Set.empty, s.tdefaults)}"
+    val tps  = tparamsText(s.tparams, s.bounds, s.tvalues, Set.empty, s.tdefaults)
+    val head = s"${if s.opaque then "opaque " else ""}struct ${s.name}$tps"
 
+    // AN OPAQUE STRUCT IS ITS HEAD ALONE. Its layout is withheld from every module but its own
+    // (`reference/ffi.md § opaque`), so its fields are nothing a reader of the API may use — and it
+    // may declare no body at all, which is the C-handle case and why it needs no `end` either.
+    //
     // A STRUCT WITH NO FIELDS CARRIES ITS `end`, and that marker is required rather than optional —
     // one of the four cases the org's end-marker rule names. It is the only thing distinguishing a
     // deliberately empty body from one whose author forgot to indent it, and the compiler refuses
@@ -243,8 +297,38 @@ object Signature {
     // So rendering the head alone puts something on the page that is not sysl. Found by compiling
     // the juicerapi demo's blocks; `Stdout`, `Stderr` and `TtyWriter` are the real cases in the
     // library.
-    if s.fields.isEmpty then s"$head\nend ${s.name}"
-    else s"$head\n${s.fields.map(f => s"    ${paramText(f)}").mkString("\n")}"
+    if s.opaque then head
+    else if s.fields.isEmpty then s"$head\nend ${s.name}"
+    else s"$head\n${s.fields.map(f => s"    ${visText(f.vis)}${paramText(f)}").mkString("\n")}"
+
+  /** The visibility a declaration was written with, followed by a space, or nothing where public. */
+  def visText(vis: Visibility): String = vis match
+    case Visibility.Public         => ""
+    case Visibility.File           => "private "
+    case Visibility.Scoped(module) => s"private[$module] "
+
+  /** `type Name = [new] Base [within lo..hi] [where predicate]`, as it was written. */
+  def typeDecl(t: TypeDecl): String =
+    val derived = if t.derived then "new " else ""
+    val range   = t.range.map { r =>
+      s" within ${exprText(r.lo)}${if r.exclusiveHi then "..<" else ".."}${exprText(r.hi)}"
+    }
+    val pred = t.pred.map(p => s" where ${exprText(p)}")
+
+    s"type ${t.name} = $derived${typeText(t.base)}${range.getOrElse("")}${pred.getOrElse("")}"
+
+  /** An `extern` function, as a caller reaches it. The C symbol it links against is left out: it is
+   * the binding's business, not the caller's, and it differs between platforms (`__stdoutp`).
+   */
+  def externFunc(e: ExternDecl): String =
+    s"extern ${e.name}${paramsText(e.params, e.variadic)}${retText(e.retType)}"
+
+  /** An `extern` variable: a C global, named and typed, its link symbol left out likewise. */
+  def externVar(e: ExternVarDecl): String = s"extern ${e.name}: ${typeText(e.typ)}"
+
+  /** A module-level `val`: its type where one was written, and its value as a constant's is. */
+  def valDecl(v: ValDecl): String =
+    s"val ${v.name}${v.typ.map(t => s": ${typeText(t)}").getOrElse("")} = ${exprText(v.value)}"
 
   /** An enum's head and its variants, payloads included. */
   def enumDecl(e: EnumDecl): String =
