@@ -151,8 +151,15 @@ class ArcCodegenTests extends AnyFreeSpec with CodegenSupport {
   "a field through a reference reaches past the header" in {
     val out = ir(point + "var p: &Point = Point(1, 2)\np.y = 9")
 
-    out should include regex raw"getelementptr %arc\.Point, ptr %t\d+, i32 0, i32 2"
-    out should include regex raw"getelementptr %struct\.Point, ptr %t\d+, i32 0, i32 1"
+    // Slot 3 is the payload (slots 0 to 2 are the header: strong count, drop, weak count); the field GEP reads it, then
+    // indexes `y` within it, and the store of 9 lands on that address.
+    val field = raw"%(t\d+) = getelementptr %arc\.Point, ptr %t\d+, i32 0, i32 3".r.findAllMatchIn(out).map(_.group(1)).toList
+    val stores = field.flatMap { f =>
+      raw"%(t\d+) = getelementptr %struct\.Point, ptr %$f, i32 0, i32 1".r.findAllMatchIn(out).map(_.group(1))
+    }
+
+    field should not be empty
+    stores.exists(s => out.contains(s"store i32 9, ptr %$s")) shouldBe true
   }
 
   // Deliberately silent: `print` renders through a slice of a local buffer, and a slice carries an
