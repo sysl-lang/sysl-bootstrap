@@ -7,6 +7,70 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.154 — 2026-10-01
+
+**a comparison missing its right operand says 'expression expected'**
+
+A comparison with nothing usable on its right now says `expression expected` instead of telling you about a range you never wrote. Nothing else changes in how programs compile.
+
+### Behaviour changes
+
+None. Every program that compiled on 0.0.153 compiles to the same thing on 0.0.154, and every program it refused is still refused. The one change is the **wording and the reason** of one parse error (below); its position is the same as before.
+
+### Fixes
+
+#### A comparison missing its right operand says `expression expected`, not `'..' expected`
+
+**Before:** when the right side of a comparison was missing, or was something that cannot be an operand, the parser reported the range operator:
+
+```sysl
+val c = true
+var z = 1 < if c then 1 else 2
+```
+```
+error: '..' expected
+  --> main.sysl:2:13
+```
+
+`print(1 < )` got the same message, as did every other comparison operator (`==`, `!=`, `<=`, `>=`, `>`) and the second link of a chain (`print(1 < 2 < )`). No range was involved. A comparison's operand is parsed as a range expression, and the last thing that rule tries is a bare `..`. Every alternative failed at the same token, the last failure won the tie, and so the message named the range.
+
+**Now** the same position gets `error: expression expected`. The range rule is labelled as an expression, the same way the unary rule already was, so a failure at its first token names what was missing. Parse results do not change. The range's own refusal, `'..=' is not a range — inclusive is 'a..b' and exclusive is 'a..<b'`, is still reported as before. (99e0306e)
+
+### Tests
+
+- `ParseDiagnosticTests § a comparison with no value on its right wants a value, not a range`: 4 new cases.
+  - Nothing after the operator: `print(1 < )` at 1:11.
+  - An `if` as the right operand at 2:13.
+  - All six comparison operators, plus the second link of a chain at 1:15.
+  - The `..=` refusal still naming the range.
+- `ArcCodegenTests` "a field through a reference reaches past the header" used to match the weak-count store at header slot 2. It now asserts the real field access: a GEP into slot 3 (the payload), the GEP for `y` within it, and the `store i32 9` landing on that address. (0acf71ad)
+
+### Documentation
+
+- The README now says sysl is not published to Maven Central and points to GitHub Packages, where the jars are. (ef803a9a)
+- No page on sysl.sh quoted the old `'..' expected` refusal, so the site needed only the version pin.
+
+### Install
+
+```
+brew install sysl-lang/tap/sysl      # or: brew upgrade sysl
+```
+
+The tarballs for macOS arm64, Linux x86_64 and Linux arm64 are attached to this release. The `sh.sysl:sysl_3:0.0.154` jars are on GitHub Packages (`https://maven.pkg.github.com/sysl-lang/sysl-bootstrap`). As of 0.0.153, sysl is not published to Maven Central.
+
+### Verification
+
+- **Native gate on the tagged tree (80c8695b): GREEN, 12,282 succeeded and 0 failed.** That is 416 suites: 6 ran alone and 410 in 46 chunks. Nothing timed out and nothing was retried. The gate covers syslNative and syslDocNative. It took 51:58, after a cleaned warnings census.
+- **Warnings census, cleaned:** JVM two, JS three, Native three, syslDocJVM one, syslDocNative two. That is the expected count, and every warning belongs to a dependency or is build infrastructure.
+- **Release tarball:** extracted to a scratch prefix and run. `sysl --version` prints `sysl 0.0.154`, `sysl-doc` is present, and the comparison above reports `expression expected` at 2:13.
+- **brew:** `brew test sysl` passes, and the installed `sysl --version` prints `sysl 0.0.154`. The Linux glibc floor, measured in the release run, is 2.34.
+- **sysl.sh on 0.0.154:** 1,415 tests pass with 0 failures. Of those, 1,395 are DocsTests.
+- **Org sweep with the release tarball's own binary: 74 builds, 74 green.**
+  - 54 ran under `sysl test .`, 12 under `sysl build .` and 5 under `sysl build-c <dir>`.
+  - Three repos fail the bare command by design and were run as their READMEs say. `freertos` against a freshly built FreeRTOS-Kernel POSIX port: **84 passed**. `libpq` against a scratch PostgreSQL: **51 passed**. `quickjs-ng` with its include path: **33 passed**.
+  - `pico`: `build-lib --target thumbv6m-freestanding` gets as far as the pico-sdk's generated `cyw43_arch.h`, which means the sysl type-check passed.
+  - Not swept, being kernel or board repos that need a toolchain or SDK this machine does not have: `pico2`, `zephyr`, `picokit`, `ogol-pico`, `ogol-pico2`, `solder-pico2`, `zephyr-demo`, `pico-scratch`. Also not swept, being infrastructure: `sysl-bootstrap`, `sysl` (the self-hosted compiler), `sysl.sh`, `homebrew-tap`, `github-profile` and `svd`.
+
 ## 0.0.153 — 2026-10-01
 
 **start now, wait later; value-parameter defaults and trait value parameters**
