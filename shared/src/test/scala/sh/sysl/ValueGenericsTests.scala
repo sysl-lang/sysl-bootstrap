@@ -462,4 +462,165 @@ class ValueGenericsTests extends AnyFreeSpec with RunSupport with CodegenSupport
             |print(f(a))""".stripMargin) shouldBe "7\n"
     }
   }
+
+  /** A **trait** may take a value parameter too, as Rust's traits take const generics: everything a
+   * struct's value parameter does — declared, named at an `impl`, a bound and an object, defaulted,
+   * held to its type — a trait's does in the same words.
+   */
+  "a trait's value parameter" - {
+    val bytes = """trait Bytes[const N: usize]
+                  |    bytes(self) -> [N]u8
+                  |    size(self) -> usize = N
+                  |struct W
+                  |    x: u8
+                  |""".stripMargin
+
+    /** It was parsed and dropped, so `N` was read as a **type** parameter: `impl Sized[int]` compiled
+     * and `impl Sized[4]` was refused as a value where a type belongs. A type there is the mistake
+     * now, said in the words a struct's value parameter says it in.
+     */
+    "is a value, so a type written for it is refused" in {
+      err("""trait Sized[const N: usize]
+            |    size(self) -> usize
+            |struct W
+            |    x: int
+            |impl Sized[int] for W
+            |    size(self) -> usize = 3
+            |print(1)""".stripMargin) should include(
+        "'int' is a type, and this argument stands where the declaration wrote 'const'")
+    }
+
+    "is fixed by an impl, and the members read it in their signatures and bodies" in {
+      run(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [4]u8 = [self.x, 0, 0, 0]
+                    |val w = W(7)
+                    |print(w.size())
+                    |print(w.bytes()[0])
+                    |print(w.bytes().len)""".stripMargin) shouldBe "4\n7\n4\n"
+    }
+
+    "and an impl's signature must agree with the value it fixed" in {
+      err(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [2]u8 = [self.x, 0]
+                    |print(1)""".stripMargin) should include("returns [2]u8, but trait 'Bytes' declares [4]u8")
+    }
+
+    "is named by a bound" in {
+      run(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [4]u8 = [self.x, 0, 0, 0]
+                    |f[T: Bytes[4]](x: T) -> usize = x.size() * 10
+                    |print(f(W(1)))""".stripMargin) shouldBe "40\n"
+    }
+
+    "and a bound at another value is not met" in {
+      err(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [4]u8 = [self.x, 0, 0, 0]
+                    |f[T: Bytes[2]](x: T) -> usize = x.size()
+                    |print(f(W(1)))""".stripMargin) should include("Bytes[2]")
+    }
+
+    "is solved from a use where a bound leaves it open" in {
+      run(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [4]u8 = [self.x, 0, 0, 0]
+                    |first[T: Bytes[N], const N: usize](x: T, pad: [N]u8) -> usize = x.size() + pad.len
+                    |var p: [4]u8 = [0, 0, 0, 0]
+                    |print(first(W(1), p))""".stripMargin) shouldBe "8\n"
+    }
+
+    /** Two values are two implementations, exactly as two type arguments are — and a bound at one
+     * of them is what picks between them.
+     */
+    "at two values is two implementations, chosen by the value" in {
+      run("""trait Width[const N: usize]
+            |    width(self) -> usize = N
+            |struct X
+            |    x: int
+            |impl Width[2] for X
+            |impl Width[4] for X
+            |two[T: Width[2]](x: T) -> usize = x.width()
+            |four[T: Width[4]](x: T) -> usize = x.width()
+            |print(two(X(0)))
+            |print(four(X(0)))""".stripMargin) shouldBe "2\n4\n"
+    }
+
+    "but twice at one value is refused" in {
+      err("""trait Width[const N: usize]
+            |    width(self) -> usize = N
+            |struct X
+            |    x: int
+            |impl Width[2] for X
+            |impl Width[2] for X
+            |print(1)""".stripMargin) should include("already implements")
+    }
+
+    "may be implemented by a generic impl abstracting over a value" in {
+      run(bytes + """struct Bits[const M: usize]
+                    |    raw: [M]u8
+                    |impl[const M: usize] Bytes[M] for Bits[M]
+                    |    bytes(self) -> [M]u8 = self.raw
+                    |var r: [3]u8 = [9, 8, 7]
+                    |val b = Bits(r)
+                    |print(b.size())
+                    |print(b.bytes()[2])""".stripMargin) shouldBe "3\n7\n"
+    }
+
+    "takes its default where an impl leaves it out" in {
+      run("""trait Hash[const N: usize = 32]
+            |    digest_len(self) -> usize = N
+            |struct Sha
+            |    x: int
+            |impl Hash for Sha
+            |f[T: Hash[32]](x: T) -> usize = x.digest_len()
+            |print(f(Sha(0)))""".stripMargin) shouldBe "32\n"
+    }
+
+    "and a default may use an earlier value parameter" in {
+      run("""trait Pair[const A: usize, const B: usize = A]
+            |    total(self) -> usize = A + B
+            |struct P
+            |    x: int
+            |impl Pair[3] for P
+            |print(P(0).total())""".stripMargin) shouldBe "6\n"
+    }
+
+    "and a default that does not fit is refused at the trait" in {
+      err("""trait Hash[const N: u8 = 300]
+            |    digest_len(self) -> u8 = N
+            |print(1)""".stripMargin) should include("does not fit u8: 300")
+    }
+
+    "and a value argument that does not fit is refused" in {
+      err("""trait Small[const N: u8]
+            |    n(self) -> u8 = N
+            |struct S
+            |    x: int
+            |impl Small[300] for S
+            |print(1)""".stripMargin) should include("does not fit u8: 300")
+    }
+
+    "is fixed by a trait object" in {
+      run(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [4]u8 = [self.x, 0, 0, 0]
+                    |val o: &Bytes[4] = W(5)
+                    |print(o.size())
+                    |print(o.bytes()[0])""".stripMargin) shouldBe "4\n5\n"
+    }
+
+    "and an object leaving it out takes the default" in {
+      run("""trait Hash[const N: usize = 32]
+            |    digest_len(self) -> usize = N
+            |struct Sha
+            |    x: int
+            |impl Hash for Sha
+            |val o: &Hash = Sha(0)
+            |print(o.digest_len())""".stripMargin) shouldBe "32\n"
+    }
+
+    "or is refused where there is none" in {
+      err(bytes + """impl Bytes[4] for W
+                    |    bytes(self) -> [4]u8 = [self.x, 0, 0, 0]
+                    |val o: &Bytes = W(5)
+                    |print(1)""".stripMargin) should include("trait 'Bytes' takes 1 type argument")
+    }
+  }
 }

@@ -824,5 +824,8 @@ trait DeclTables extends Reporting {
    * knowing which kind of declaration it is asking about.
    */
   protected def nominalValues(base: String): Map[String, TypeRef] =
-    structDecls.get(base).map(_.tvalues).orElse(enumDecls.get(base).map(_.tvalues)).getOrElse(Map.empty)
+    structDecls.get(base).map(_.tvalues)
+      .orElse(enumDecls.get(base).map(_.tvalues))
+      .orElse(traitDecls.get(base).map(_.tvalues))
+      .getOrElse(Map.empty)
 }

@@ -694,7 +694,7 @@ trait Hoisting extends HoistMembers {
                   // so it stands in for itself: enough for the arguments to resolve and for two
                   // requirements of one trait to be compared, and the same stand-in whether it was
                   // written out or arrived from the required trait's own default.
-                  val bound = resolveBound(s, abstractSubst(tr.tparams, tr.bounds) ++ selfBinding(abstractSelf))
+                  val bound = resolveBound(s, abstractSubst(tr.tparams, tr.bounds, tr.tvalues) ++ selfBinding(abstractSelf))
 
                   if path.contains(skey) then
                     err(s"trait '${qn(skey)}' requires itself, through " +

@@ -51,9 +51,23 @@ trait ImplTarget extends ImplConformance {
     // a `&Buf[T]` registers `Buf` at this block's `T`, and `sysl.container.Heap[T: Ord]` then reads
     // its own elements back at a stand-in bounded by something else entirely. The diagnostic lands in
     // the library, names `Ord`, and has nothing to do with the block that caused it.
-    val written =
-      if impl.tparams.isEmpty then impl.traitArgs.map(resolveType(_, declared))
-      else sandboxed(impl.traitArgs.map(resolveType(_, declared)))
+    //
+    // A **value** argument is read as the trait's parameter declares it (`traitArgs`), and one that
+    // is a value parameter of this block — `impl[const M: usize] Bytes[M] for Bits[M]` — stands in
+    // for itself, as a type parameter does: the block is filed once, and each subject's own `M`
+    // replaces the stand-in, where the zero a generic body is checked at would file it at zero.
+    def own(ref: TypeRef): Option[Type] = ref match
+      case NamedType(n, Nil) if impl.tvalues.contains(n)      => Some(Type.Abstract(n, Nil))
+      case ValueArgType(Ident(n)) if impl.tvalues.contains(n) => Some(Type.Abstract(n, Nil))
+      case _                                                  => None
+
+    def read() =
+      traitArgs(Some(impl.traitName), impl.traitArgs, declared).zip(impl.traitArgs).zipWithIndex.map {
+        case ((t, ref), i) if tr.tvalues.contains(tr.tparams.lift(i).getOrElse("")) => own(ref).getOrElse(t)
+        case ((t, _), _)                                                            => t
+      }
+
+    val written = if impl.tparams.isEmpty then read() else sandboxed(read())
 
     val subject = sandboxed(resolveType(impl.forType, declared))
 

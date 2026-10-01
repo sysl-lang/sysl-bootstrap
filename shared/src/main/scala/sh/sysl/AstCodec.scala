@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 59
+  val Version: Int = 60
 
   private val Magic = "sysl-ast"
 
@@ -501,9 +501,9 @@ object AstCodec {
           // the way the package chose, compiled from source or read back from an artifact.
           opt(cn)(e => { pos(e); opt(e.symbol)(sref) })
 
-        case TraitDecl(n, tps, ms, bs, sups, vs, tds, as) =>
+        case TraitDecl(n, tps, ms, bs, sups, vs, tds, as, tvs) =>
           tok("trt"); sref(n); list(tps)(sref); list(ms)(method); bounds(bs); list(sups)(bound)
-          vis(vs); tdefaults(tds); list(as)(assocDecl)
+          vis(vs); tdefaults(tds); list(as)(assocDecl); tdefaults(tvs)
 
         case ImplDecl(tn, ft, ms, tps, bs, targs, tds, ov, tvs, tpk, as) =>
           tok("impl"); sref(tn); typ(ft); list(ms)(method); list(tps)(sref); bounds(bs)
@@ -919,7 +919,7 @@ object AstCodec {
             opt(at(ExportAttr(opt(sref())))))
         case "trt" =>
           TraitDecl(sref(), list(sref()), list(method()), bounds(), list(bound()), vis(), tdefaults(),
-            list(assocDecl()))
+            list(assocDecl()), tdefaults())
         case "impl" =>
           ImplDecl(sref(), typ(), list(method()), list(sref()), bounds(), list(typ()), tdefaults(), bool(),
             tdefaults(), list(sref()).toSet, list(assocBind()))

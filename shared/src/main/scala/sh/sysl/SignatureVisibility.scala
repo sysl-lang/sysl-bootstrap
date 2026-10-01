@@ -95,7 +95,7 @@ trait SignatureVisibility extends TypeResolution {
         // `Self::Item`: a projection is read off a bound, and the one thing known about `Self` in a
         // trait's own declaration is that it implements the trait being declared. Everywhere else
         // `Self` stands in for itself with nothing promised, which is all those places need.
-        val own   = abstractSubst(t.tparams, t.bounds)
+        val own   = abstractSubst(t.tparams, t.bounds, t.tvalues)
         val subst = own + (selfName -> Type.Abstract(selfName, List(Type.Bound(key, t.tparams.map(own)))))
 
         for m <- t.methods do
