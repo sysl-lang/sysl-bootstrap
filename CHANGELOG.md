@@ -7,6 +7,114 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.153 — 2026-10-01
+
+**start now, wait later; value-parameter defaults and trait value parameters**
+
+`sysl.process.start` runs several programs at once, `sysl.cpu_count()` says how many to run, a value parameter's default now means something, a trait may take value parameters, `sysl doc` gets ten page fixes, and three programs that used to crash the compiler or fail inside clang now get a refusal or a working build.
+
+### Behaviour changes
+
+#### `= N` on a value parameter now means something — and on a function it is refused
+
+**Before:** `struct Ring[T, const N: usize = 4]` parsed the default and ignored it, so `Ring[int]` was refused as *"takes 2 type arguments"*; on a function, `total[const N: usize = 3](xs: [N]int)` was silently accepted and the default did nothing.
+
+**Now:** a value default on a struct or enum works exactly as a type default does — it fills the gap a use leaves, counts toward the same arity, may share a list with type defaults, and may be a constant expression over the value parameters before it (`[const M: usize, const N: usize = M * 2]`). `Ring[int]` is `Ring[int, 4]`, one instantiation. The default has to fit the parameter's type (`[const N: u8 = 300]` is refused: *"the default for 'N' does not fit byte: 300"*).
+
+On a function, a method or an `impl` block a value default is **refused**, since those parameters are solved from what the call is given:
+
+```
+error: 'N' is a value parameter of the function 'total', whose type parameters are solved from what it is given rather than written where it is used — so '= 3' has nothing to stand in for
+```
+
+**A program that wrote `= N` on a function's value parameter compiled on 0.0.152 and is refused on 0.0.153** — delete the default; it never did anything. (cee9a94f)
+
+#### A written value argument that does not fit its parameter's type is refused
+
+**Before:** a value argument was not checked against its parameter's type where it was written — `-1` for a `const N: usize` surfaced only later, as *"an array cannot have -1 elements"*, and only where it sized an array. **Now** it is refused at the argument itself: `this argument does not fit usize: -1`, and `this argument does not fit byte: 300` for a `u8`. A program that passed an out-of-range value argument that nothing downstream happened to reject is refused. (cee9a94f, 7dcd6f62)
+
+#### `const N` on a trait now declares a value parameter, where 0.0.152 read it as a type parameter
+
+**Before:** `trait Bytes[const N: usize]` parsed, but the analyzer silently read `N` as a *type* parameter, so a member signature `[N]u8` and an `impl Bytes[4]` did not mean what they said. **Now** a trait takes value parameters exactly as a struct does: members read `N` in their signatures and default bodies, `impl Bytes[4] for W` fixes it, a generic block abstracts over it (`impl[const M: usize] Bytes[M] for Bits[M]`), bounds and trait objects name it at a value (`f[T: Bytes[4]]`, `&Bytes[4]`), two values are two implementations side by side, and a default (`trait Hash[const N: usize = 32]`) fills a use that leaves it out. The value is checked against the parameter's type wherever it is written. **A program that wrote `trait T[const N: …]` and relied on `N` being a type now gets a value parameter.** (0dd0eaee)
+
+**Otherwise none for a program that compiled on 0.0.152.** Every fix below turns a compiler crash or a clang failure into either a refusal with a source location or a program that builds.
+
+### New API
+
+#### `sysl.process.start` and `Child.wait` — start a program now, wait for it later
+
+```
+start(program: string, args: []const string = [], dir: string = "", env: []const Var = [],
+      stderr: bool = false, timeout: int = 0) -> Result[&Child, IoError]
+
+struct Child
+    wait(*self) -> Result[Output, IoError]
+```
+
+`start` is `capture` with the wait taken out: same arguments, same meanings, and `wait` answers exactly what `capture` would have — the same `Output`, the same `TimedOut`. `capture` is now written as `start` followed by `wait`, so the two cannot disagree. Start several children and wait for them in any order; they run at the same time, and because output still goes through temporary files rather than pipes, no child can block on a full pipe while its parent waits for another. A program that is not there is refused at `start` (`NotFound`), not at the wait. `timeout` is measured from `start` and kept by `wait`; waiting twice answers the first answer again. A `Child` owns its child: dropping one that was never waited for stops it (the same two steps a timeout takes) and reaps it, so no zombie is left, and its output files are removed.
+
+#### `sysl.cpu_count() -> usize`
+
+In the root module beside `os()` and `cpu()`: the number of logical processors online on the machine the program is *running* on — the number to size a pool of workers by. Never less than one. It is `@needs(os)`, so a module that has given up `os` is refused at the call; where there is no POSIX `sysconf` (a freestanding image, WASI) it answers one.
+
+9 new library tests cover both (`StdSelfTests.floor` 875 → 884). (06b8b976)
+
+### Fixes
+
+#### A jump nested inside a deferred statement is refused instead of overflowing the stack
+
+**Before:** the direct forms `defer return 1` and `defer break` were refused, but the same jump one level down — `defer if c then return 1`, `defer if i == 1 then break` — was scheduled. Laying the jump down runs the block's deferred statements, of which it is one, so the emitter recursed until the compiler died with a `StackOverflowError`.
+
+**Now:** a deferred statement may not contain a jump that leaves it — a `return`, or a `break`/`continue` of a loop outside it — at any depth. It is refused during analysis with the direct form's message, anchored at the jump, once per deferred statement:
+
+```
+error: a deferred statement runs while its block is being left, so it cannot 'return' — there is no exit left to take. Compute what the function returns before the block ends
+```
+
+A loop written inside the deferred statement is its own, so its `break` and `continue` stay inside and are fine; so is a jump inside a closure or a nested function written there. (91fe162d)
+
+#### A local declared by a deferred statement no longer trips clang in a block with several exits
+
+**Before:** a deferred statement is laid down once per edge that leaves its block. One that declared a local, in a block with more than one exit, emitted `%j.addr` once per copy, and clang refused the module: `multiple definition of local value named 'j.addr'`. After that was fixed, a deferred `ref` binding and a deferred array whose view escapes still failed the same way, because their address is a register computed where the declaration stands rather than a stack slot.
+
+**Now:** a stack slot is shared by every copy (91fe162d), and a register-valued address takes a name of its own in each further copy — `%r.addr`, then `%r.d1.addr`, `%r.d2.addr` — the names the self-hosted compiler gives (d528eee3).
+
+#### An `extern` followed by a sysl function of the same name reports the refusal instead of crashing at the call
+
+**Before:** declaring an `extern`, then a sysl function with the same name, then calling that name took the compiler down with `NoSuchElementException: key not found: <name>.2` out of `CallCore.callOverloaded`, and the refusal the second declaration had earned was never printed. The declaration had been counted into the name's overload set before the check that refused it, so the set held a key naming nothing.
+
+**Now:** the refusal is made after the tables are filled, like the other checks in that chain, so the declaration's refusal is what is printed and nothing is said at the call. (8ba86fa4)
+
+### `sysl doc` — ten page defects fixed
+
+`sysl-doc` printed pages that were wrong in ten ways; every one is fixed, and regenerating a package's pages with 0.0.153 changes them. (b0f65d60)
+
+- **A summary wrapped over two lines was printed twice** — once as the summary and again as the body. It is printed once.
+- **`opaque` was dropped** from an opaque struct's signature, and **a private field was unmarked**, so it read as public. Both are now shown as declared.
+- **Aliases, externs and module `val`s were missing altogether.** They get groups of their own — `## Values`, `## Externs`, `## Aliases` — in the order the self-hosted writer prints them; an extern shows its sysl name, not its link symbol.
+- **`--private` showed private types and functions but hid private methods.** It shows them.
+- **A `@param` naming no parameter was rendered** as though it documented one. It is dropped, and the CLI warns about it.
+- **`--check` passed with an orphaned page** — a generated page whose module no longer exists. It now fails on one, and a regenerate deletes it; a hand-written page beside the generated ones is left alone.
+- **Signatures misprinted three things**: a string default came out unescaped, a by-name parameter was printed wrongly, and the parentheses that group a default expression were dropped. All three print as the source spells them.
+
+### Tests
+
+- `DeferTests` grows from 46 to 89: the nested jump refused at each depth and loop shape (a `return` under an `if`, `break`/`continue` of the surrounding loop, labelled jumps to an outer loop), jumps that stay inside the statement running correctly, and deferred locals — plain, `ref` and escaping arrays — in blocks with two, three and more exits building and running.
+- `DefaultTypeParamTests § a value parameter's default`: 13 new cases — a struct and an enum taking the default, type and value defaults filling together, a default naming an earlier value parameter, the filled and written spellings being one instantiation, ordering (a defaulted parameter before an undefaulted one; a default naming a later one), a default and a written argument that do not fit their type, a default that is not a value, and the refusal on a function, a method and an `impl` block; `ValueGenericsTests` changes one expected wording to the new "does not fit" refusal, and gains the block "a trait's value parameter" — members reading it, impls at a value, generic impls, bounds, objects, two values side by side, defaults and the does-not-fit refusal.
+- `DocGeneratorTests` +16 and `DocCliTests` +4, one or more per generator defect above, including the orphaned page under `--check` and the warning for a refused `@param`.
+- `OverloadTests` asks each of the four overload refusals again with a call below it, and requires the refusal and nothing at the call.
+
+### Site
+
+sysl.sh pins 0.0.153. `library/process.md § Starting now, waiting later` covers `start` and `Child` with several children running at once, and `library/core.md` `cpu_count`; the generated API pages are regenerated. `reference/generics.md § A parameter may carry a default` now covers a value parameter's default, and `§ A trait declares one too` a trait's value parameter, with a runnable `Ring[int]` and the refusal on a function as an `error` block. And it says both rules the fixes made visible: `reference/statements.md § defer` states what a deferred statement may not contain, with the refusal as an `error` block and a loop inside a deferred statement as a runnable one; `reference/inline-assembly.md § What an operand may be` states that a name bound by `ref` is not an operand, with the refusal and the copy-into-a-`var` form beside it.
+
+### Verification
+
+- **Native gate on the tagged tree (06b8b976): GREEN — 12,278 succeeded, 0 failed**, 416 suites (6 alone, 410 in 46 chunks), nothing timed out, nothing retried; syslNative and syslDocNative; `StdSelfTests` runs the library's `@test` functions against a floor of 884. 44:05 for the suite, after a cleaned warnings census.
+- **Warnings census, cleaned, every platform**: compile clean; doc totals JVM 2 / JS 3 / Native 3 / syslDocJVM 1 / syslDocNative 2, every one named — `Reader.scala:26:6` (scala-parser-combinators' own source), the Scala.js `Set.scala:62:15` scaladoc crash inside the Scala standard library, `Option -classpath was updated`, and `-Xplugin is currently not supported`. No sysl-owned warning.
+- dev's CI run on the tagged commit (06b8b976): green.
+- **Org sweep with the release tarball's own binary: 74 builds, 74 green** — 56 by `sysl test .`, the rest by `sysl build .` or `sysl build-c <dir>`. Under the bare command `freertos` and `libpq` are red by design (no kernel headers supplied; no server), so both were run as their READMEs say: `freertos` against a freshly built FreeRTOS-Kernel POSIX port, **84 passed**; `libpq` against a scratch PostgreSQL, **51 passed**. Not swept, being board or infrastructure repos: pico, pico2, picokit, ogol-pico, ogol-pico2, solder-pico2, zephyr, zephyr-demo, pico-scratch, svd, sysl.sh, homebrew-tap, github-profile.
+
 ## 0.0.152 — 2026-09-30
 
 **run caches keyed by where a program is, and diagnostics that name what the source spells**
