@@ -91,16 +91,22 @@ trait TypeResolution extends GenericInstantiation, Aliasing, WrittenTypes, Const
     // A trait's **value** parameter fixed by one of the block's own — `impl[const M: usize]
     // Bytes[M] for Bits[M]` — is whatever that parameter is here: zero for the walk that checks the
     // body, the subject's own `M` at an instantiation. A body reads it as a value only once it is one.
-    genericOuter.getOrElse(fname, Map.empty).map {
-      case (k, Type.Abstract(n, _)) if subst.get(n).exists(_.isInstanceOf[Type.ConstArg]) => k -> subst(n)
-      case kv                                                                            => kv
-    } ++
+    settledOuter(genericOuter.getOrElse(fname, Map.empty), subst) ++
       genericSelf.get(fname).fold(subst) { (ref, scope) =>
         // Read where the subject was written, which for an inherited default is the `impl` block
         // rather than the trait the rest of the declaration came from. The substitution itself is
         // resolved types and means the same thing anywhere.
         subst + (selfName -> inScope(scope)(resolveType(ref, subst)))
       }
+
+  /** A block's trait arguments with each of the block's own **value** parameters replaced by what
+    * `subst` makes it — the stand-in it was filed under is a name, and a length has to be a value.
+    */
+  protected def settledOuter(outer: Map[String, Type], subst: Map[String, Type]): Map[String, Type] =
+    outer.map {
+      case (k, Type.Abstract(n, _)) if subst.get(n).exists(_.isInstanceOf[Type.ConstArg]) => k -> subst(n)
+      case kv                                                                            => kv
+    }
 
   /** Rewrites `Self` in a written type reference to the reference it stands for.
    *

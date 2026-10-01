@@ -502,7 +502,7 @@ class ValueGenericsTests extends AnyFreeSpec with RunSupport with CodegenSupport
     "and an impl's signature must agree with the value it fixed" in {
       err(bytes + """impl Bytes[4] for W
                     |    bytes(self) -> [2]u8 = [self.x, 0]
-                    |print(1)""".stripMargin) should include("returns [2]u8, but trait 'Bytes' declares [4]u8")
+                    |print(1)""".stripMargin) should include("returns [2]byte, but trait 'Bytes' declares [4]byte")
     }
 
     "is named by a bound" in {
@@ -527,20 +527,32 @@ class ValueGenericsTests extends AnyFreeSpec with RunSupport with CodegenSupport
                     |print(first(W(1), p))""".stripMargin) shouldBe "8\n"
     }
 
-    /** Two values are two implementations, exactly as two type arguments are — and a bound at one
-     * of them is what picks between them.
+    /** Two values are two implementations, exactly as two type arguments are
+     * (`MultipleImplementationTests`): an object's table points at the one its type names, and a
+     * member taking no argument has nothing a direct call could pick by.
      */
-    "at two values is two implementations, chosen by the value" in {
+    "at two values is two implementations, each object reaching its own" in {
       run("""trait Width[const N: usize]
             |    width(self) -> usize = N
             |struct X
             |    x: int
             |impl Width[2] for X
             |impl Width[4] for X
-            |two[T: Width[2]](x: T) -> usize = x.width()
-            |four[T: Width[4]](x: T) -> usize = x.width()
-            |print(two(X(0)))
-            |print(four(X(0)))""".stripMargin) shouldBe "2\n4\n"
+            |val two: &Width[2] = X(0)
+            |val four: &Width[4] = X(0)
+            |print(two.width())
+            |print(four.width())""".stripMargin) shouldBe "2\n4\n"
+    }
+
+    "and a direct call with no argument to pick by is told so" in {
+      err("""trait Width[const N: usize]
+            |    width(self) -> usize = N
+            |struct X
+            |    x: int
+            |impl Width[2] for X
+            |impl Width[4] for X
+            |print(X(0).width())""".stripMargin) should include(
+        "'width' comes from 2 implementations of one trait on X, and the arguments do not say which was meant")
     }
 
     "but twice at one value is refused" in {
@@ -586,7 +598,7 @@ class ValueGenericsTests extends AnyFreeSpec with RunSupport with CodegenSupport
     "and a default that does not fit is refused at the trait" in {
       err("""trait Hash[const N: u8 = 300]
             |    digest_len(self) -> u8 = N
-            |print(1)""".stripMargin) should include("does not fit u8: 300")
+            |print(1)""".stripMargin) should include("the default for 'N' does not fit byte: 300")
     }
 
     "and a value argument that does not fit is refused" in {
@@ -595,7 +607,7 @@ class ValueGenericsTests extends AnyFreeSpec with RunSupport with CodegenSupport
             |struct S
             |    x: int
             |impl Small[300] for S
-            |print(1)""".stripMargin) should include("does not fit u8: 300")
+            |print(1)""".stripMargin) should include("this argument does not fit byte: 300")
     }
 
     "is fixed by a trait object" in {

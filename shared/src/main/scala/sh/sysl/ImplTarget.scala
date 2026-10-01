@@ -102,13 +102,11 @@ trait ImplTarget extends ImplConformance {
    * the trait's `T` and one written in the type that `T` is are the same signature.
    */
   protected def signatures(home: MemberHome): Map[String, Type] =
-    home.outer ++ {
-      if home.tparams.isEmpty then home.self
-      else
-        val abstracts = abstractSubst(home.tparams, home.bounds, home.tvalues, home.tpacks)
+    if home.tparams.isEmpty then home.outer ++ home.self
+    else
+      val abstracts = abstractSubst(home.tparams, home.bounds, home.tvalues, home.tpacks)
 
-        abstracts + (selfName -> resolveType(home.selfRef, abstracts))
-    }
+      settledOuter(home.outer, abstracts) ++ abstracts + (selfName -> resolveType(home.selfRef, abstracts))
 
   /** The type an `impl` is for, and where its members belong.
    *
