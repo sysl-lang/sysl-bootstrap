@@ -7,6 +7,84 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.155 — 2026-10-02
+
+**a by-name parameter is a call inside a closure too**
+
+A parameter passed by name is now read the same way everywhere in its function: inside a closure, inside a nested function, and in the body after either one. Each read evaluates the argument. One spelling that 0.0.154 accepted is now refused (below).
+
+### Behaviour changes
+
+**Calling a by-name parameter inside a closure or nested function is now refused.** In 0.0.154 that was the only way to read one there. Write the bare name instead, as the body always required.
+
+```sysl
+f(x: -> int) -> int
+    val g = () -> x() + 1      // 0.0.154: compiled. 0.0.155: refused.
+    g()
+```
+```
+error: type 'int' has no method 'call'
+```
+
+The fix is to drop the parentheses: `val g = () -> x + 1`. In the function's own body, `x()` was always refused with this message. A closure is now treated the same way.
+
+**What 0.0.154 refused and now compiles:**
+
+- A bare read inside a closure or nested function. `val g = () -> x + 1` was refused with `'+' needs '$F0: sysl.Add'` and then `'+' needs matching types, got a closure and int`.
+- A bare read in the function's **own body**, when it comes after any closure or nested function. `val g = () -> 1` followed by `x + g()` was refused with `'+' needs '$F0: sysl.Add[int]'`. With the closure removed, the same line compiled.
+
+Every other program compiles to the same thing as on 0.0.154. Nothing in the org wrote `x()` inside a closure. A grep of every repo under sysl-lang, and of slate-language, found no by-name parameter in any package or program. The only matches are parse-test strings in the self-hosted compiler. So nothing needed fixing for this release.
+
+### Fixes
+
+#### A by-name parameter read in a closure or nested function is a call (020a7276)
+
+`reference/types.md § A parameter passed by name` says: *"Each use is an evaluation, because each use is a call."* Inside a closure or nested function in the body, the compiler did not follow that rule. A read there gave the thunk itself, not its value.
+
+There were two causes, both in one mechanism. `analyzeNested` calls `resetFunction`, which cleared `byNameLocals`. Nothing marked the captured names as by-name again, so the closure's body read the thunk. Nothing restored the set afterwards either, so the function's own reads after a closure stopped being calls as well. Now the by-name mark follows a captured name into the closure's scope, and is restored when the closure ends (`FunctionBodies.scala`).
+
+Building the closure's environment has to capture the callable itself, not call it. `captureRead` in `Closures.scala` does this for a closure's fields and for a nested group's addresses. So the argument is evaluated at each read inside the closure, and never at capture.
+
+### Tests
+
+`ByNameTests`: 8 new cases. All of them failed before the fix.
+
+- a closure of the body calls it
+- a nested function of the body calls it
+- a closure evaluates the argument at every call of it
+- a nested function evaluates the argument at every read
+- a closure that outlives the call evaluates the argument when it is called
+- a closure inside a nested function reaches it through both
+- the body still calls it after a closure is written
+- calling it inside a closure is refused, as it is in the body
+
+### Documentation
+
+`reference/types.md § A parameter passed by name` on sysl.sh has a new runnable block. In it, a closure reads a by-name parameter and is called twice, and the argument runs once per call, printing `11` and then `21`. One sentence was also added: the rule holds inside a closure or nested function too. DocsTests runs the block, so the fixed behaviour stays pinned.
+
+### Install
+
+```
+brew install sysl-lang/tap/sysl      # or: brew upgrade sysl
+```
+
+The tarballs for macOS arm64, Linux x86_64 and Linux arm64 are attached to this release. The `sh.sysl:sysl_3:0.0.155` jars are on GitHub Packages (`https://maven.pkg.github.com/sysl-lang/sysl-bootstrap`). sysl is not published to Maven Central.
+
+### Verification
+
+- **Native gate on the tagged tree (a34479bc, which is 020a7276 plus the version bump): GREEN, 12,290 succeeded and 0 failed.** That is 416 suites in 46 chunks plus the groups that run alone. Nothing timed out and nothing was retried. The gate covers syslNative and syslDocNative. It took 57:04, after a cleaned warnings census. The fix had landed on a targeted gate, so this is its first full run.
+- **Warnings census, cleaned:** JVM two, JS three, Native three, syslDocJVM one, syslDocNative two. That is the expected count, and every warning belongs to a dependency or is build infrastructure.
+- **Release tarball:** extracted to a scratch prefix and run. `sysl --version` prints `sysl 0.0.155`, and `sysl-doc` is present. The 0.0.154 reproductions now behave as described above. `val g = () -> x + 1` prints `42`. `x + g()` after a closure prints `42`. `x()` in a closure is refused with `type 'int' has no method 'call'`. The new sysl.sh block prints `11`, `21`, `2`.
+- **GitHub Packages:** all four artifacts (the pom, the jar, the sources jar and the javadoc jar) answer 302.
+- **brew:** `brew test sysl` passes, and the installed `sysl --version` prints `sysl 0.0.155`. The Linux glibc floor, measured in the release run, is 2.34 on both architectures.
+- **sysl.sh on 0.0.155:** 1,416 tests pass with 0 failures. Of those, 1,396 are DocsTests. The new block was checked by mutation: changing its expected output to `11 11 2`, which is what evaluating the argument once at capture would print, turned DocsTests red on exactly that block (`types.md` program 26). Restoring it turned the suite green again.
+- **Org sweep with the release tarball's own binary: 77 builds, 71 green under the bare command.**
+  - 54 ran under `sysl test .`, 12 under `sysl build .` and 5 under `sysl build-c <dir>`.
+  - Four repos fail the bare command by design and were run as their READMEs say. `freertos` against a freshly built FreeRTOS-Kernel POSIX port: **84 passed**. `libpq` against a scratch PostgreSQL: **51 passed**. `quickjs-ng` with its include path: **33 passed**.
+  - `pico`: `build-lib --target thumbv6m-freestanding` gets as far as the pico-sdk's generated `cyw43_arch.h`, which means the sysl type-check passed.
+  - `pico2` and `zephyr` refuse the bare command by design, through their `requires { headers }` clause.
+  - Not swept, being kernel or board repos that need a toolchain or SDK this machine does not have: `zephyr`, `picokit`, `ogol-pico`, `ogol-pico2`, `solder-pico2`, `zephyr-demo`, `pico-scratch`. Also not swept, being infrastructure: `sysl-bootstrap`, `sysl` (the self-hosted compiler), `sysl.sh`, `homebrew-tap`, `github-profile` and `svd`.
+
 ## 0.0.154 — 2026-10-01
 
 **a comparison missing its right operand says 'expression expected'**
