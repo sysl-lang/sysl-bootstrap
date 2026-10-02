@@ -257,7 +257,7 @@ class TargetCapabilityTests extends AnyFreeSpec with Matchers {
 
     val noOs = everything - Capability.Os - Capability.Posix
 
-    val sys = "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+    val sys = "sys/a.sysl" -> ("module sys\n\n@needs(os)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
       "plain() -> int = 3\n")
 
     "so a program importing the declaration beside it builds" in {
@@ -281,6 +281,26 @@ class TargetCapabilityTests extends AnyFreeSpec with Matchers {
       e shouldNot include("which requires 'os'")
       // One per capability the declaration names, each the call's; none about the module.
       withClue(e)(all(e.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
+    }
+  }
+
+  /** A machine with an operating system that is not POSIX still has `sysl.fs`, which requires `os`
+   * and nothing more (`reference/modules.md § Capabilities are a module property`: *"`os` and `posix`
+   * are exactly the declaration"*). `sysl.fs.publish` importing `sysl.posix.rand` once made the
+   * module require `posix` too, so such a machine was refused the filesystem.
+   */
+  "sysl.fs on a machine with an os that is not POSIX" - {
+
+    val noPosix = everything - Capability.Posix
+
+    "is reached, publishing included" in {
+      accepted(noPosix)("main.sysl" -> ("import sysl.fs.write_text_atomic\n\n" +
+        "print(sysl.fs.exists(\"/\"))\nprint(write_text_atomic(\"/nonexistent/x\", \"\").is_ok())\n")) should include("define")
+    }
+
+    "while the POSIX module it once imported is still refused there" in {
+      refused(noPosix)("main.sysl" -> "print(sysl.posix.rand.seed_from_os().is_some())\n") should include(
+        "this reaches 'sysl.posix.rand', which requires 'posix'")
     }
   }
 

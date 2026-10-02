@@ -4,7 +4,8 @@ module sysl.fs
 import sysl.sync.Atomic
 import sysl.time.now
 #if posix
-import sysl.posix.rand.seed_from_os
+import sysl.encoding.get_u64_le
+import sysl.slices.as_mut_ptr
 #endif
 
 // Putting a file or a directory where other processes may be reading it, so that none of them ever
@@ -121,7 +122,18 @@ end pending_token
  * one case the count cannot separate, and is why the kernel is asked first.
  */
 #if posix
-private drawn_token() -> u64 = seed_from_os().unwrap_or(u64(now().us))
+private drawn_token() -> u64
+    var b: [8]u8
+
+    if c_getentropy(as_mut_ptr(b), b.len) != 0 then return u64(now().us)
+
+    get_u64_le(b).unwrap_or(u64(now().us))
+
+// `getentropy(2)` is declared here rather than reached through `sysl.posix.rand`, whose `seed_from_os`
+// is the same call. `sysl.fs` is the portable filesystem: it requires `os` and nothing more, and the
+// POSIX calls under it are how this host implements it, like the `unlink` and `rename` beside it. An
+// import of a `@requires(posix)` module would charge `posix` to every program reaching `sysl.fs`.
+private extern "getentropy" c_getentropy(buf: *u8, n: usize) -> int
 #else
 private drawn_token() -> u64 = u64(now().us)
 #endif

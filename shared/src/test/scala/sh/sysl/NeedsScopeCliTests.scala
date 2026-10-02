@@ -38,7 +38,7 @@ class NeedsScopeCliTests extends LibraryCliSupport {
   }
 
   private val sys =
-    "sys/a.sysl" -> "module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\nplain() -> int = 3\n"
+    "sys/a.sysl" -> "module sys\n\n@needs(os)\nnow() -> bool = sysl.fs.exists(\"/\")\n\nplain() -> int = 3\n"
 
   "a '@needs(os)' declaration in a board program's own module" - {
 
@@ -60,6 +60,42 @@ class NeedsScopeCliTests extends LibraryCliSupport {
       said shouldNot include("which requires 'os'")
       // One per capability the declaration names, each the call's; none about the module.
       withClue(said)(all(said.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
+    }
+  }
+
+  // `sysl.fs` requires `os` and not `posix` (`reference/modules.md § Capabilities are a module
+  // property`), so a project saying its machine has an operating system that is not POSIX builds and
+  // runs a program that reads and writes the filesystem.
+  "a project whose machine has an os that is not POSIX" - {
+
+    val notPosix = PackageConfig.FileName -> "capabilities { os = true, posix = false }\n"
+
+    "reaches sysl.fs" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      val root = tree(notPosix,
+        "main.sysl" -> ("import sysl.fs.{make_temp_dir, read_text, write_text}\nimport sysl.path.join\n\n" +
+          "val at = join(make_temp_dir(\"pub\").unwrap(), \"x\")\n\n" +
+          "write_text(at, \"hi\").unwrap()\nprint(read_text(at).unwrap())\n"))
+
+      ran(Config(command = "run", file = root)) should include("hi")
+    }
+
+    // Publishing names its pending file partly from the wall clock, and `sysl.time` reads no clock of
+    // its own: the host's supplier is `sysl.posix.time`, which a machine without POSIX does not link
+    // (`library/sysl/time/clock.sysl`). So the link names the seam left unsupplied -- never a
+    // capability refusal of `sysl.fs`.
+    "and publishing through it asks the project for a clock" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      val root = tree(notPosix,
+        "main.sysl" -> "import sysl.fs.write_text_atomic\n\nprint(write_text_atomic(\"/nonexistent/x\", \"\").is_ok())\n")
+
+      val (state, said) = diagnostics(Config(command = "run", file = root))
+
+      state should not be 0
+      said should include("sysl_wall_us")
+      said shouldNot include("which requires 'posix'")
     }
   }
 

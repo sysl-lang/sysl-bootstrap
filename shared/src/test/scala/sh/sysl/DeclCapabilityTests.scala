@@ -217,10 +217,9 @@ class DeclCapabilityTests extends AnyFreeSpec with RunSupport with CodegenSuppor
         all(each) should include(s"this reaches '$who', which needs ")
       }
 
-    // `posix` rather than `os`: `sysl.fs` reaches the POSIX modules under it on every hosted target,
-    // so its requirement as the module graph counts it is both, and a body covers what its
-    // annotation names. `posix` implies `os`, so this names both.
-    val sys = "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+    // `os` is the whole of it: `sysl.fs` is the portable filesystem and requires `os` alone, POSIX
+    // being how this host implements it rather than something its reachers are charged.
+    val sys = "sys/a.sysl" -> ("module sys\n\n@needs(os)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
       "plain() -> int = 3\n")
 
     "so a module that gave os up imports the declaration beside it" in {
@@ -243,7 +242,7 @@ class DeclCapabilityTests extends AnyFreeSpec with RunSupport with CodegenSuppor
     // that said nothing and calls one that did inherits the need: its callers are refused, at their
     // call, and the module it sits in is still importable for everything else.
     "an unannotated function calling it passes the need on to ITS callers" in {
-      val relay = "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+      val relay = "sys/a.sysl" -> ("module sys\n\n@needs(os)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
         "relay() -> bool = now()\n\nplain() -> int = 3\n")
 
       val e = errOf(relay, "main.sysl" -> "@no_os\n\nimport sys.relay\n\nprint(relay())\n")
@@ -279,10 +278,36 @@ class DeclCapabilityTests extends AnyFreeSpec with RunSupport with CodegenSuppor
     // A closure inside such a body is reached only through it, so it is covered with it.
     "and a closure written inside the body is covered with it" in {
       runOf(
-        "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool\n" +
+        "sys/a.sysl" -> ("module sys\n\n@needs(os)\nnow() -> bool\n" +
           "    val ask = (p: string) -> sysl.fs.exists(p)\n    ask(\"/\")\n\nplain() -> int = 3\n"),
         "main.sysl"  -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n",
       ) shouldBe "3\n"
+    }
+  }
+
+  /** `sysl.fs` is an operating system's filesystem, not POSIX's, and it charges `os` and nothing more
+   * (`reference/modules.md § Capabilities are a module property`: *"A module's effective requirement
+   * is its own uses plus the requirements of every module it imports"* — and `sysl.fs` imports no
+   * `@requires(posix)` module). Its `publish` once imported `sysl.posix.rand` for its entropy, which
+   * made every program reaching the filesystem require `posix` as well.
+   */
+  "sysl.fs requires 'os' and not 'posix'" - {
+
+    "so a program that gave posix up still reads the filesystem" in {
+      runOf("main.sysl" -> "@no_posix\n\nprint(sysl.fs.exists(\"/\"))\n") shouldBe "true\n"
+    }
+
+    "and publishes through it, which is the part that draws entropy" in {
+      runOf("main.sysl" -> ("@no_posix\n\nimport sysl.fs.{make_temp_dir, read_text, write_text_atomic}\n" +
+        "import sysl.path.join\n\nval at = join(make_temp_dir(\"pub\").unwrap(), \"x\")\n\n" +
+        "write_text_atomic(at, \"hi\").unwrap()\nprint(read_text(at).unwrap())\n")) shouldBe "hi\n"
+    }
+
+    "while a program that gave os up is still refused at the reference, for 'os'" in {
+      val e = errOf("main.sysl" -> "@no_os\n\nprint(sysl.fs.exists(\"/\"))\n")
+
+      e should include("this reaches 'sysl.fs', which requires 'os', and this module declared 'no os'")
+      e shouldNot include("posix")
     }
   }
 
