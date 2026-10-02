@@ -211,7 +211,7 @@ compiler is published to GitHub Packages and takes a string:
 
 ```scala
 resolvers += "GitHub Packages" at "https://maven.pkg.github.com/sysl-lang/sysl-bootstrap"
-libraryDependencies += "sh.sysl" %% "sysl" % "0.0.155"   // %%% in a cross-project
+libraryDependencies += "sh.sysl" %% "sysl" % "0.0.156"   // %%% in a cross-project
 ```
 
 The latest GitHub release is the published version, so it is what to check this line against.
