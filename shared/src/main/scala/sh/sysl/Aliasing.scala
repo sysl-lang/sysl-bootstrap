@@ -328,11 +328,37 @@ trait Aliasing extends RefBindings {
         case _ => ()
     case _ => ()
 
+  /** The `&sync` box a view of this place would count against, if the place lies inside one
+   * (`reference/arrays.md § What is still refused`).
+   *
+   * A view keeps its storage alive by holding a share of the box the storage sits in, and it records
+   * nothing about whether that box's count is atomic — so it takes and gives back its share the
+   * ordinary way, which races with every other domain holding the same box. The walk follows the
+   * hops that keep a place inside one object — a field, an array element — through to the box
+   * they are in. A view or a raw pointer on the way is storage of its own, and a box that is not
+   * `&sync` is one a non-atomic count is right for, so either ends the walk with nothing to refuse.
+   */
+  private def syncOwner(place: TExpr): Option[Type] = place match
+    case TField(recv, _, _)                       => syncOwner(recv)
+    case TIndex(recv, _, _) if farSide(recv.ty)   => None
+    case TIndex(recv, _, _)                       => syncOwner(recv)
+    case TDeref(op, _) =>
+      Type.underlying(Type.unqualified(op.ty)) match
+        case r @ Type.Ref(_, true) => Some(r)
+        case _                     => None
+    case TLoad(n, _) if refPlaces.contains(n)     => syncOwner(refPlaces(n))
+    case _                                        => None
+
   /** The same refusal for the other way to reach storage that outlives the expression: a view of it
    * that may be written. A `[]const T` is left alone, since giving up the write is exactly what makes
    * the alias carry no promise it could break.
    */
   protected def checkSliceable(base: TExpr, view: Type): Unit =
+    for box <- syncOwner(base) do
+      err(s"a slice does not record whether its owner's count is atomic, so storage inside a " +
+        s"'${show(box)}' cannot be sliced — a view of it would take its share of the box with a count " +
+        "update that is not atomic. Read it by index, or walk it with 'for'")
+
     // Slicing a view makes a view of **its** storage, which is on the far side and no clause's to
     // read — `self.elems[..<self.count]` shares the buffer's elements and leaves its length alone.
     if !Type.readOnlyView(view) && !farSide(base.ty) then

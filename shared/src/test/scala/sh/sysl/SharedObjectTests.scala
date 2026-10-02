@@ -448,4 +448,114 @@ class SharedObjectTests extends AnyFreeSpec with CodegenSupport with RunSupport 
         include("wants the concurrency model of '06'")
     }
   }
+
+  // An array FIELD of a `&sync` box is the same storage one hop in: a view of it holds its share of
+  // the box, and takes and gives back that share with an ordinary load-add-store, racing every
+  // other domain that holds the box. Found by TSan on an audio ring (`r.samples[a..<b]`), where the
+  // emitted IR read `@arc.retain_maybe` on a box every other count of which was `atomicrmw`.
+  "a view of storage inside a '&sync' box is refused, whatever the path to it" - {
+
+    val ring =
+      """struct Inner
+        |    a: [4]u8
+        |struct Ring
+        |    samples: [8]i16
+        |    inner: Inner
+        |total(xs: []const i16) -> int
+        |    var s = 0
+        |    for x in xs
+        |        s += int(x)
+        |    s
+        |val r: &sync Ring = Ring([1, 2, 3, 4, 5, 6, 7, 8], Inner([9, 10, 11, 12]))
+        |""".stripMargin
+
+    // The line every refusal below is on: the one after the prelude.
+    val at = ring.linesIterator.length + 1
+
+    val refusal =
+      "a slice does not record whether its owner's count is atomic, so storage inside a " +
+        "'&sync Ring' cannot be sliced — a view of it would take its share of the box with a count " +
+        "update that is not atomic. Read it by index, or walk it with 'for'"
+
+    "a range of an array field" in {
+      val e = err(ring + "val v = r.samples[2..<5]\nprint(v.len)\n")
+      e should include(refusal)
+      e should include(s"<input>:$at:18")
+    }
+
+    "the whole of an array field" in {
+      val e = err(ring + "val v = r.samples[..]\nprint(v.len)\n")
+      e should include(refusal)
+      e should include(s"<input>:$at:18")
+    }
+
+    "an array inside a by-value field of the box" in {
+      val e = err(ring + "val v = r.inner.a[1..<3]\nprint(v.len)\n")
+      e should include(refusal)
+      e should include(s"<input>:$at:18")
+    }
+
+    "an array field handed to a parameter that takes a view" in {
+      val e = err(ring + "print(total(r.samples))\n")
+      e should include(refusal)
+      e should include(s"<input>:$at:15")
+    }
+
+    // The innermost box is the one the view would count against, and so the one named.
+    "an array inside a '&sync' box reached through another" in {
+      val e = err(
+        """struct Cell
+          |    a: [4]u8
+          |struct Outer
+          |    c: &sync Cell
+          |val o: &sync Outer = Outer(Cell([1, 2, 3, 4]))
+          |val v = o.c.a[..]
+          |print(v.len)
+          |""".stripMargin)
+      e should include("storage inside a '&sync Cell' cannot be sliced")
+      e should include("<input>:6:14")
+    }
+  }
+
+  "and what the refusal points to instead still works" - {
+
+    val ring =
+      """struct Ring
+        |    samples: [8]i16
+        |total(xs: []const i16) -> int
+        |    var s = 0
+        |    for x in xs
+        |        s += int(x)
+        |    s
+        |""".stripMargin
+
+    "walking an array field of a '&sync' box with 'for'" in {
+      run(ring + """val r: &sync Ring = Ring([1, 2, 3, 4, 5, 6, 7, 8])
+                   |var s = 0
+                   |for x in r.samples
+                   |    s += int(x)
+                   |print(s)
+                   |""".stripMargin) shouldBe "36\n"
+    }
+
+    "reading and writing it by index" in {
+      run(ring + """val r: &sync Ring = Ring([1, 2, 3, 4, 5, 6, 7, 8])
+                   |r.samples[3] = 40
+                   |print(r.samples[3] + r.samples[7])
+                   |""".stripMargin) shouldBe "48\n"
+    }
+
+    "a view of the same field through an ordinary '&' box" in {
+      run(ring + """val r: &Ring = Ring([1, 2, 3, 4, 5, 6, 7, 8])
+                   |print(total(r.samples[2..<5]), total(r.samples))
+                   |""".stripMargin) shouldBe "12 36\n"
+    }
+
+    "a view of a copy taken out of the '&sync' box" in {
+      run(ring + """val r: &sync Ring = Ring([1, 2, 3, 4, 5, 6, 7, 8])
+                   |val mine = r.samples
+                   |print(total(mine[2..<5]))
+                   |""".stripMargin) shouldBe "12\n"
+    }
+  }
 }
