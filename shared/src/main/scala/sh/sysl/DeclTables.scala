@@ -287,6 +287,26 @@ trait DeclTables extends Reporting {
    */
   protected var bodyNeeds: Set[String] = Set.empty
 
+  /** What a declaration's `@needs(...)` covers, implications folded in. A name nothing has heard of
+   * covers nothing; `checkNeedsNames` refuses it.
+   */
+  protected def coveredBy(needs: List[String]): Set[String] =
+    needs.filter(Capability.implies.contains).flatMap(Capability.closure).toSet
+
+  /** Runs `body` — the resolution of a declaration's **signature** — as covered by that
+   * declaration's `@needs(...)`, exactly as its body is. A parameter or result naming a type of a
+   * gated module is something only a caller of the declaration meets, so it is charged to them
+   * rather than to the module holding the declaration (`reference/modules.md § A declaration may
+   * name what reaching it needs`). What the declaration covers replaces what the enclosing walk
+   * covered: a signature is the declaration's own, wherever the request to resolve it came from.
+   */
+  protected def inSignature[A](needs: List[String])(body: => A): A = {
+    val saved = bodyNeeds
+    bodyNeeds = coveredBy(needs)
+    try body
+    finally bodyNeeds = saved
+  }
+
   /** Every lowered body whose declaration covered a capability, by the name the body was emitted
    * under — a function's own, and each closure or nested function lowered inside it, which is filed
    * under a name no declaration carries. `DeclCapabilities` reads it to leave such a body alone for

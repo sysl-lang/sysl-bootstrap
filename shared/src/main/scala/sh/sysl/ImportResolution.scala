@@ -74,7 +74,7 @@ trait ImportResolution extends TraitLookup {
     // a module's parent without being one — so it asks only that the path lead somewhere.
     if decl.wildcard then
       if !moduleNames(path) then err(s"no module is called '$written'")
-      dependsOn(path)
+      dependsOn(path, imported = true)
       acc.copy(wildcards = acc.wildcards :+ path)
     else if decl.selectors.nonEmpty then
       if !namesModule(path) then err(s"no module is called '$written'")
@@ -108,7 +108,7 @@ trait ImportResolution extends TraitLookup {
    * than reported as the collision with itself that it is.
    */
   private def bindModule(bound: String, module: String, acc: Imports): Imports = {
-    dependsOn(module)
+    dependsOn(module, imported = true)
 
     if bound == module then acc
     else {
@@ -125,7 +125,7 @@ trait ImportResolution extends TraitLookup {
   private def bindName(bound: String, module: String, name: String, acc: Imports): Imports = {
     val key = Modules.qualify(module, name)
 
-    dependsOn(module)
+    dependsOn(module, imported = true)
     checkImportName(bound, acc)
 
     if declsRegistered then checkDeclared(key, s"$module.$name")

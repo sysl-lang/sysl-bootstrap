@@ -149,8 +149,10 @@ trait SignatureVisibility extends TypeResolution {
 
     // An `extern` is here too: it is registered as a function, and a symbol the linker resolves is
     // no less able to hand back a type the caller cannot name.
+    // Under the declaration's own `@needs(...)`, because reading a type's name records the module
+    // it is in, and a signature is charged as the body is: to whoever calls the declaration.
     for (key, d) <- funcDecls.toList do
-      expose(key, d.tparams.toSet, d.bounds, signature(d.params, d.retType))
+      inSignature(d.needs)(expose(key, d.tparams.toSet, d.bounds, signature(d.params, d.retType)))
 
     // The three declarations that are a **name and one type**: a `const`, a module-level `val`, and
     // an `extern` variable. Each is the same hole a public function returning a private type is,

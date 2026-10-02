@@ -336,6 +336,11 @@ trait Hoisting extends HoistMembers {
    * it. Reporting the mistake must not also remove the thing it is about.
    */
   protected def hoistFunc(stmt: Stmt): Unit = stmt match
+    case f: FuncDecl   => inSignature(f.needs)(hoistOne(stmt))
+    case e: ExternDecl => inSignature(e.needs)(hoistOne(stmt))
+    case _             => hoistOne(stmt)
+
+  private def hoistOne(stmt: Stmt): Unit = stmt match
     case original: FuncDecl =>
       val f = callBounds(original.tparams, original.params).fold(original) { (tps, ps, bs) =>
         original.copy(tparams = tps, params = ps, bounds = original.bounds ++ bs).setPos(original.pos)

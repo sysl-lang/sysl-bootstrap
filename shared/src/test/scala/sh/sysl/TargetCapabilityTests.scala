@@ -282,6 +282,40 @@ class TargetCapabilityTests extends AnyFreeSpec with Matchers {
       // One per capability the declaration names, each the call's; none about the module.
       withClue(e)(all(e.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
     }
+
+    // The declaration's own import and its signature are the callers' too, on a machine as under a
+    // clause — `DeclCapabilityTests`' "a '@needs' declaration's import and signature are charged to
+    // its callers".
+    val viaImport = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
+      "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\nplain() -> int = 3\n")
+
+    val viaSignature = "sys/a.sysl" -> ("module sys\n\n@needs(os)\n" +
+      "now(f: string) -> Result[unit, sysl.fs.IoError] = sysl.fs.write_bytes(f, \"x\".bytes)\n\n" +
+      "plain() -> int = 3\n")
+
+    "and so are the import its body writes through and the types its signature names" in {
+      for (sys, call) <- List(viaImport -> "now(\"/tmp/x\")", viaSignature -> "now(\"/tmp/x\").is_ok()") do
+        accepted(noOs)(sys, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should include("define")
+
+        val e = refused(noOs)(sys, "main.sysl" -> s"import sys.now\n\nprint($call)\n")
+
+        e should include("this reaches 'sys.now', which needs 'os', and")
+        e should include("main.sysl:3:7")
+        e shouldNot include("which requires 'os'")
+        withClue(e)(all(e.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
+    }
+
+    "while an import or a signature a shipping declaration uses is still the module's" in {
+      val sharedImport = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
+        "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\n" +
+        "keep(f: string) -> bool = write_bytes(f, \"y\".bytes).is_ok()\n\nplain() -> int = 3\n")
+      val plainSignature =
+        "sys/a.sysl" -> "module sys\n\nkind(e: sysl.fs.IoError) -> int = 1\n\nplain() -> int = 3\n"
+
+      for sys <- List(sharedImport, plainSignature) do
+        refused(noOs)(sys, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should
+          include("which requires 'os'")
+    }
   }
 
   /** A machine with an operating system that is not POSIX still has `sysl.fs`, which requires `os`

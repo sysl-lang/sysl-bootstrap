@@ -76,7 +76,9 @@ trait OpaqueResults extends AbstractBodies {
 
         recover(Type.Unknown)(at(f.pos)(inDecl(f.name) {
           val subst  = withSelf(f.name, abstractSubst(f.tparams, f.bounds, f.tvalues, f.tpacks))
-          val params = f.params.map(p => (p.name, recover(Type.Unknown)(resolveType(p.typ, subst))))
+          val params = inSignature(f.needs) {
+            f.params.map(p => (p.name, recover(Type.Unknown)(resolveType(p.typ, subst))))
+          }
 
           analyzeBodyWith(f.name, f, subst, params, Type.Unknown).body.ty
         }))

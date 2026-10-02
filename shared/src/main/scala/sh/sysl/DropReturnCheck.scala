@@ -49,7 +49,9 @@ trait DropReturnCheck extends TypeResolution {
       if !isDropMember(key) then
         for
           ret  <- decl.retType
-          ty   <- resolvedQuietly(key, ret)
+          // Under the declaration's own `@needs(...)`: resolving the type records the module it is
+          // in, and a signature is charged as the body is, to whoever calls the declaration.
+          ty   <- inSignature(decl.needs)(resolvedQuietly(key, ret))
           held <- dropByValue(ty)
         do
           warn(

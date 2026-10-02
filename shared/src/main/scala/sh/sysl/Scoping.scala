@@ -205,14 +205,14 @@ trait Scoping extends DeclTables {
    * A path that names no module is not one either: an import may be written for one that does not
    * exist, and the diagnostic for that says so far better than a graph built around it could.
    */
-  protected def dependsOn(to: String): Unit =
+  protected def dependsOn(to: String, imported: Boolean = false): Unit =
     if to != currentModule && to != Modules.root && moduleNames(to) then
       moduleEdges.getOrElseUpdate((currentModule, to), currentPos)
 
       val scaffolding = inTestBody || currentFile.exists(testOnlyFiles.contains)
 
       edgeUses.getOrElseUpdate((currentModule, to), mutable.LinkedHashMap.empty)
-        .getOrElseUpdate(EdgeUse(bodyNeeds, scaffolding), currentPos)
+        .getOrElseUpdate(EdgeUse(bodyNeeds, scaffolding, imported), currentPos)
 
   /** One way a module reached another, as the capability question needs it told apart from the
    * rest: what the declaration it was written in **covers** — what its `@needs(...)` said reaching
@@ -220,8 +220,13 @@ trait Scoping extends DeclTables {
    * written in **scaffolding**, a `@tests` file or a test, which no build but `sysl test` keeps
    * (`reference/modules.md § A declaration may name what reaching it needs`, `§ A @tests file
    * states its own capabilities`).
+   *
+   * An **imported** use is the `import` itself rather than a reference through it. An import says
+   * which names a file may write, not what the module ships, so it is charged by what its file's
+   * declarations do with it: one whose module's references into the target are all inside
+   * `@needs(...)` declarations is covered by what they all cover (`GatedModules.effective`).
    */
-  protected case class EdgeUse(covers: Set[String], scaffolding: Boolean)
+  protected case class EdgeUse(covers: Set[String], scaffolding: Boolean, imported: Boolean = false)
 
   /** Every distinct `EdgeUse` of each edge `moduleEdges` holds, with where the first of that kind
    * was written. `GatedModules` reads it: a module's requirement is what its *shipping, uncovered*

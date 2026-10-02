@@ -70,7 +70,8 @@ trait GatedModules extends AnalyzerBase {
       val needed = requirements()
 
       for
-        ((from, to), uses) <- edgeUses.toList
+        ((from, to), made) <- edgeUses.toList
+        uses = effective(made)
         given_up = givenUp(from) if given_up.nonEmpty
         // What a reference written inside a `@needs(...)` declaration reaches is out of reach of its
         // callers for what that declaration names, and `DeclCapabilities` refuses them at the call —
@@ -176,5 +177,23 @@ trait GatedModules extends AnalyzerBase {
   private def charged(from: String, to: String, requires: Set[String]): Set[String] =
     edgeUses.get((from, to)) match
       case None       => requires
-      case Some(uses) => uses.keys.filterNot(_.scaffolding).flatMap(u => requires -- u.covers).toSet
+      case Some(uses) =>
+        effective(uses).map(_._1).filterNot(_.scaffolding).flatMap(u => requires -- u.covers).toSet
+
+  /** One edge's uses with each `import` charged by what the module's references along the edge are
+   * charged with.
+   *
+   * **An import is charged by its uses** (`reference/modules.md § A declaration may name what
+   * reaching it needs`): a file that imports `sysl.fs.write_bytes` for its one `@needs(os)` function
+   * has said what that function may write, not that the module reads files. So an import covers
+   * whatever every shipping reference along the same edge covers — nothing, the moment one of them
+   * sits in an unannotated declaration, which then charges the module at the import as it always
+   * did. An import nothing references is charged as written, since there is no use to read it by.
+   */
+  private def effective(uses: collection.Map[EdgeUse, Option[Pos]]): List[(EdgeUse, Option[Pos])] = {
+    val made   = uses.keys.filter(u => !u.imported && !u.scaffolding).map(_.covers)
+    val lifted = made.reduceOption(_ & _).getOrElse(Set.empty)
+
+    uses.toList.map((u, p) => if u.imported then (u.copy(covers = u.covers ++ lifted), p) else (u, p))
+  }
 }

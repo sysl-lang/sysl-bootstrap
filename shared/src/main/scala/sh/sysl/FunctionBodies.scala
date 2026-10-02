@@ -263,7 +263,7 @@ trait FunctionBodies extends ModuleStorage {
     // What the declaration said reaching it needs is its callers' to answer, so what its body
     // reaches is not its module's for those capabilities (`reference/modules.md § A declaration may
     // name what reaching it needs`). A name nothing has heard of is `checkNeedsNames`' to refuse.
-    bodyNeeds = f.needs.filter(Capability.implies.contains).flatMap(Capability.closure).toSet
+    bodyNeeds = coveredBy(f.needs)
     if bodyNeeds.nonEmpty then bodyCovers(name) = bodyNeeds
     // A member's body sees `Self` alongside whatever type parameters it was instantiated with, so
     // the one substitution answers both questions and nothing downstream has to know the difference.
@@ -471,7 +471,7 @@ trait FunctionBodies extends ModuleStorage {
     if constSelf then constSelfInsts += name
 
     if !funcInsts.contains(name) then
-      inDecl(f.name) {
+      inDecl(f.name)(inSignature(f.needs) {
         val plain = withSelf(f.name, f.tparams.zip(targs).toMap)
         // `Self` and the `self` parameter are moved to the read-only view together, and they have to
         // be: the block writes its receiver as `[]T` rather than as `Self`, so the parameter is not
@@ -483,7 +483,7 @@ trait FunctionBodies extends ModuleStorage {
           (if constSelf then constReceiver(params) else params,
            f.retType.map(resolveReturn(_, subst)).getOrElse(Type.Unit))
         pending.enqueue((name, f, subst))
-      }
+      })
 
     name
   }

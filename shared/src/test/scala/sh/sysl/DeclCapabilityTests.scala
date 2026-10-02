@@ -285,6 +285,62 @@ class DeclCapabilityTests extends AnyFreeSpec with RunSupport with CodegenSuppor
     }
   }
 
+  /** The two halves of a `@needs` declaration the body rule did not reach: the **file's import** its
+   * body writes through, and its **signature**. Both are what a caller of the declaration meets and
+   * nobody else does, so both are charged to the callers (`reference/modules.md § A declaration may
+   * name what reaching it needs`) — while an import or a signature a shipping, unannotated
+   * declaration uses is still the module's.
+   */
+  "a '@needs' declaration's import and signature are charged to its callers" - {
+
+    val plainMain = "main.sysl" -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n"
+
+    val viaImport = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
+      "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\nplain() -> int = 3\n")
+
+    val viaSignature = "sys/a.sysl" -> ("module sys\n\n@needs(os)\n" +
+      "now(f: string) -> Result[unit, sysl.fs.IoError] = sysl.fs.write_bytes(f, \"x\".bytes)\n\n" +
+      "plain() -> int = 3\n")
+
+    "an import used only inside '@needs(os)' bodies leaves the module importable" in {
+      runOf(viaImport, plainMain) shouldBe "3\n"
+    }
+
+    "a gated type named only in a '@needs(os)' signature leaves the module importable" in {
+      runOf(viaSignature, plainMain) shouldBe "3\n"
+    }
+
+    "and calling either declaration is refused at the call only" in {
+      for (sys, call) <- List(viaImport -> "now(\"/tmp/x\")", viaSignature -> "now(\"/tmp/x\").is_ok()") do
+        val e = errOf(sys, "main.sysl" -> s"@no_os\n\nimport sys.now\n\nprint($call)\n")
+
+        e should include("this reaches 'sys.now', which needs 'os', and this module declared '@no_os'")
+        e should include("main.sysl:5:7")
+        e shouldNot include("which requires 'os'")
+        withClue(e)(all(e.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
+    }
+
+    "an import an unannotated declaration also uses still costs the whole module, at the import" in {
+      val e = errOf(
+        "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
+          "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\n" +
+          "keep(f: string) -> bool = write_bytes(f, \"y\".bytes).is_ok()\n\nplain() -> int = 3\n"),
+        plainMain)
+
+      e should include("this reaches 'sys', which requires 'os', and this module declared 'no os'")
+      e should include("main.sysl:3:1")
+    }
+
+    "a gated type in an unannotated declaration's signature still costs the whole module" in {
+      val e = errOf(
+        "sys/a.sysl" -> "module sys\n\nkind(e: sysl.fs.IoError) -> int = 1\n\nplain() -> int = 3\n",
+        plainMain)
+
+      e should include("this reaches 'sys', which requires 'os', and this module declared 'no os'")
+      e should include("main.sysl:3:1")
+    }
+  }
+
   /** `sysl.fs` is an operating system's filesystem, not POSIX's, and it charges `os` and nothing more
    * (`reference/modules.md § Capabilities are a module property`: *"A module's effective requirement
    * is its own uses plus the requirements of every module it imports"* — and `sysl.fs` imports no

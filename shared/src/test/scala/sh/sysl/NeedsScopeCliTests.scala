@@ -61,6 +61,42 @@ class NeedsScopeCliTests extends LibraryCliSupport {
       // One per capability the declaration names, each the call's; none about the module.
       withClue(said)(all(said.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
     }
+
+    // The import the declaration's body writes through, and a gated type its signature names, are
+    // what its callers meet and nobody else does — so neither costs the module either.
+    val viaImport = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
+      "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\nplain() -> int = 3\n")
+
+    val viaSignature = "sys/a.sysl" -> ("module sys\n\n@needs(os)\n" +
+      "now(f: string) -> Result[unit, sysl.fs.IoError] = sysl.fs.write_bytes(f, \"x\".bytes)\n\n" +
+      "plain() -> int = 3\n")
+
+    "nor does the import its body writes through, or a type its signature names" in {
+      for (sys, call) <- List(viaImport -> "now(\"/tmp/x\")", viaSignature -> "now(\"/tmp/x\").is_ok()") do
+        val ok = tree(sys, PackageConfig.FileName -> board, "main.sysl" -> "import sys.plain\n\nprint(plain())\n")
+
+        emitted(Config(command = "emit-llvm", file = ok)) should include("define")
+
+        val calls = tree(sys, PackageConfig.FileName -> board,
+          "main.sysl" -> s"import sys.now\n\nprint($call)\n")
+        val (status, said) = diagnostics(Config(command = "emit-llvm", file = calls))
+
+        status should not be 0
+        said should include("this reaches 'sys.now', which needs 'os', and 'thumbv6m-freestanding' does not provide it")
+        said shouldNot include("which requires 'os'")
+    }
+
+    "while one a shipping declaration also uses still costs the module" in {
+      val shared = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
+        "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\n" +
+        "keep(f: string) -> bool = write_bytes(f, \"y\".bytes).is_ok()\n\nplain() -> int = 3\n")
+      val root = tree(shared, PackageConfig.FileName -> board, "main.sysl" -> "import sys.plain\n\nprint(plain())\n")
+
+      val (status, said) = diagnostics(Config(command = "emit-llvm", file = root))
+
+      status should not be 0
+      said should include("which requires 'os'")
+    }
   }
 
   // `sysl.fs` requires `os` and not `posix` (`reference/modules.md § Capabilities are a module
