@@ -7,6 +7,83 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.156 — 2026-10-02
+
+**a view inside a &sync box is refused**
+
+One fix, released as an exception to the bootstrap freeze: a view of an array inside a `&sync` box is now refused, because it raced.
+
+### Behaviour changes
+
+**A view of an array inside a `&sync` box (a field, a nested field, or one passed to a `[]T` parameter) is now refused.** It took the box's share with a count update that was not atomic, which raced with every other domain holding the box. Index it or walk it with `for`.
+
+```sysl
+struct Ring
+    samples: [8]f32
+
+first(r: &sync Ring) -> f32
+    val v = r.samples[0..<4]        // 0.0.155: compiled, and raced. 0.0.156: refused.
+    v[0]
+```
+```
+error: a slice does not record whether its owner's count is atomic, so storage inside a '&sync Ring' cannot be sliced — a view of it would take its share of the box with a count update that is not atomic. Read it by index, or walk it with 'for'
+```
+
+`r.samples[i]` and `for s in r.samples` take no share and still compile. Slicing the same field through an ordinary `&Ring`, or slicing a copy taken out of the `&sync` box, is unchanged.
+
+### Fixes
+
+#### Refuse a view of storage inside a `&sync` box, not only of a `&sync` array (9dddcb97)
+
+A view keeps its storage alive by holding a share of the box the storage sits in, and it records nothing about whether that box's count is atomic, so it takes and gives back the share with a plain load-add-store. The analyzer already refused slicing a `&sync [N]T` for that reason. An array field reached through a `&sync` box was accepted: `r.samples[a..<b]`, `r.samples[..]`, `r.inner.a[..]`, and `r.samples` handed to a `[]T` parameter. Each of those updated the box's count non-atomically, racing every other domain that held the box. ThreadSanitizer found it on an audio ring buffer.
+
+`checkSliceable` (`Aliasing.scala`) now walks the place through fields and array elements to the box it lies in (`syncOwner`), and refuses when that box is `&sync`. Both slice paths, an explicit slice and the coercion of an array to a view, go through it. This is analysis only: no code generation or ABI changes, and every program 0.0.155 accepted that is not one of these shapes compiles to the same thing.
+
+### Tests
+
+`SharedObjectTests`: 9 new cases.
+
+Refused:
+- a range of an array field
+- the whole of an array field
+- an array inside a by-value field of the box
+- an array field handed to a parameter that takes a view
+- an array inside a `&sync` box reached through another
+
+Still accepted:
+- walking an array field of a `&sync` box with `for`
+- reading and writing it by index
+- a view of the same field through an ordinary `&` box
+- a view of a copy taken out of the `&sync` box
+
+### Documentation
+
+`reference/arrays.md` on sysl.sh shows the new refusal as an `error` block, and a runnable block that indexes the field and walks it with `for`. DocsTests runs both.
+
+### Install
+
+```
+brew install sysl-lang/tap/sysl      # or: brew upgrade sysl
+```
+
+The tarballs for macOS arm64, Linux x86_64 and Linux arm64 are attached to this release. The `sh.sysl:sysl_3:0.0.156` jars are on GitHub Packages (`https://maven.pkg.github.com/sysl-lang/sysl-bootstrap`). sysl is not published to Maven Central.
+
+### Verification
+
+- **Native gate on the tagged tree (ce156318, which is 9dddcb97 plus the version bump): GREEN, 12,299 succeeded and 0 failed.** That is 416 suites in 46 chunks plus the groups that run alone. Nothing timed out and nothing was retried. The gate covers syslNative and syslDocNative. It took 63:39, after a cleaned warnings census. The fix had landed on a targeted JVM gate (16 suites, 471 passed), so this is its first full run.
+- **Warnings census, cleaned:** JVM two, JS three, Native three, syslDocJVM one, syslDocNative two. That is the expected count, and every warning belongs to a dependency or is build infrastructure.
+- **Release tarball:** extracted to a scratch prefix and run. `sysl --version` prints `sysl 0.0.156`, and `sysl-doc` is present. The example above is refused with the message shown; under 0.0.155 the same program compiled and printed `1`. Indexing the field and walking it with `for` compiles and runs.
+- **GitHub Packages:** all four artifacts (the pom, the jar, the sources jar and the javadoc jar) answer 302.
+- **brew:** `brew test sysl` passes, and the installed `sysl --version` prints `sysl 0.0.156`. The Linux glibc floor, measured in the release run, is 2.34 on both architectures.
+- **sysl.sh on 0.0.156:** 1,418 tests pass with 0 failures. Of those, 1,398 are DocsTests. Both new blocks on `reference/arrays.md` were checked by mutation. Changing the error block's last clause to "walk it with a loop" made program 38 fail, and changing the expected output to `40 71` made program 39 fail. Nothing else failed, and restoring them turned the suite green again.
+- **Org sweep with the release tarball's own binary: 79 builds, 73 green under the bare command.**
+  - 57 ran under `sysl test .`, 11 under `sysl build .` and 5 under `sysl build-c <dir>`. `musicbox`, `miniaudio` and `musicbox-miniaudio` are green.
+  - Four repos fail the bare command by design and were run as their READMEs say. `freertos` against a freshly built FreeRTOS-Kernel POSIX port: **84 passed**. `libpq` against a scratch PostgreSQL: **51 passed**. `quickjs-ng` with its include path: **33 passed**.
+  - `pico`: `build-lib --target thumbv6m-freestanding` gets as far as the pico-sdk's generated `cyw43_arch.h`, which means the sysl type-check passed.
+  - `pico2` and `zephyr` refuse the bare command by design, through their `requires { headers }` clause.
+  - Not swept, being kernel or board repos that need a toolchain or SDK this machine does not have: `picokit`, `ogol-pico`, `ogol-pico2`, `solder-pico2`, `zephyr-demo`, `pico-scratch`. Also not swept, being infrastructure: `sysl-bootstrap`, `sysl` (the self-hosted compiler), `sysl.sh`, `homebrew-tap`, `github-profile` and `svd`.
+- **Outside the org: `slate` is affected.** A clean clone of `slate-language/slate` at 0.1.12 (f951392), built with `sysl build .`, is refused at two lines of its test file `tests_actor_probe.sysl` (180 and 182). Both lines slice `box.said[0..<box.said_len]` and `box.got[0..<box.got_len]` through a `&sync ProbeBox`, which is exactly the shape this release refuses. The fix belongs in slate: copy the bytes out by index, or slice a copy of the array. It is not made here.
+
 ## 0.0.155 — 2026-10-02
 
 **a by-name parameter is a call inside a closure too**
