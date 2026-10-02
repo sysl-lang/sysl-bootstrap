@@ -32,6 +32,8 @@ trait ModuleStorage extends ModuleFiles {
     // Storage a test file declared is scaffolding, and so is anything its initializer lowers to —
     // the same rule a body gets, asked here because an initializer is analyzed outside every body.
     inTestBody = testOnlyDecls(key)
+    // Storage carries no `@needs`, so an initializer covers nothing whatever body ran last.
+    bodyNeeds = Set.empty
 
     val init = analyzeExpr(decl.value, Some(ty))
 
@@ -106,6 +108,8 @@ trait ModuleStorage extends ModuleFiles {
     val ty   = globalType(key)
 
     inTestBody = testOnlyDecls(key)
+    // Storage carries no `@needs`, so an initializer covers nothing whatever body ran last.
+    bodyNeeds = Set.empty
 
     val written = decl.init.map { e =>
       val t = analyzeExpr(e, Some(ty))

@@ -195,6 +195,97 @@ class DeclCapabilityTests extends AnyFreeSpec with RunSupport with CodegenSuppor
     }
   }
 
+  /** What a `@needs(os)` declaration's **body** reaches is charged to whoever reaches the
+   * declaration, and to nobody else (`reference/modules.md § A declaration may name what reaching it
+   * needs`: *"what it says is charged to whoever reaches it rather than to whoever holds it"*).
+   *
+   * Until this the body counted twice. Its reference into `sysl.fs` was an edge of the module graph
+   * like any other, so the whole module came to require `os` — and a `@no_os` program importing only
+   * the declaration beside it was refused at the import, which is the granularity the annotation
+   * exists to give, taken away again by the module graph.
+   */
+  "a '@needs' body is charged to its callers, not to its module" - {
+
+    // Every diagnostic is the call's refusal of `who`. The declaration check walks once per
+    // capability, so a `@needs(posix)` declaration reached from a module without `os` is refused
+    // once for each; what must not be there is any refusal that is not about the call.
+    def onlyAtTheCall(e: String, who: String): Unit =
+      withClue(e) {
+        val each = e.split("error:").toList.drop(1)
+
+        each should not be empty
+        all(each) should include(s"this reaches '$who', which needs ")
+      }
+
+    // `posix` rather than `os`: `sysl.fs` reaches the POSIX modules under it on every hosted target,
+    // so its requirement as the module graph counts it is both, and a body covers what its
+    // annotation names. `posix` implies `os`, so this names both.
+    val sys = "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+      "plain() -> int = 3\n")
+
+    "so a module that gave os up imports the declaration beside it" in {
+      runOf(sys, "main.sysl" -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n") shouldBe "3\n"
+    }
+
+    // The refusal that remains is the call's, once, at the call — not that one with the module's
+    // stacked on top at the import, which named a module the reader had every right to import.
+    "and calling the declaration is refused at the call only, and not at the import" in {
+      val e = errOf(sys, "main.sysl" -> "@no_os\n\nimport sys.now\n\nprint(now())\n")
+
+      e should include("this reaches 'sys.now', which needs 'os', and this module declared '@no_os'")
+      e should include("main.sysl:5:7")
+      e shouldNot include("which requires 'os'")
+      onlyAtTheCall(e, "sys.now")
+    }
+
+    // `reference/modules.md`: "It is **transitive**, because reaching is: a module that gave a
+    // capability up may not arrive at such a declaration through a third that has it." So a function
+    // that said nothing and calls one that did inherits the need: its callers are refused, at their
+    // call, and the module it sits in is still importable for everything else.
+    "an unannotated function calling it passes the need on to ITS callers" in {
+      val relay = "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+        "relay() -> bool = now()\n\nplain() -> int = 3\n")
+
+      val e = errOf(relay, "main.sysl" -> "@no_os\n\nimport sys.relay\n\nprint(relay())\n")
+
+      e should include("this reaches 'sys.now', which needs 'os', and this module declared '@no_os'")
+      e should include("main.sysl:5:7")
+      e shouldNot include("which requires 'os'")
+      onlyAtTheCall(e, "sys.now")
+
+      runOf(relay, "main.sysl" -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n") shouldBe "3\n"
+      runOf(relay, "main.sysl" -> "import sys.relay\n\nprint(relay())\n") shouldBe "true\n"
+    }
+
+    // The floor stays the floor: a body that did NOT say it needs `os` and reaches `sysl.fs` makes
+    // its module require it, exactly as before, so the import is still where a '@no_os' program hears.
+    "while an unannotated body that reaches sysl.fs still costs the whole module" in {
+      errOf(
+        "sys/a.sysl" -> "module sys\n\nnow() -> bool = sysl.fs.exists(\"/\")\n\nplain() -> int = 3\n",
+        "main.sysl"  -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n",
+      ) should include("this reaches 'sys', which requires 'os', and this module declared 'no os'")
+    }
+
+    // What the declaration covers is what it NAMES. A '@needs(heap)' body says nothing about `os`,
+    // so its reference into `sysl.fs` is still the module's.
+    "and a body covers only what its own annotation names" in {
+      errOf(
+        "sys/a.sysl" -> ("module sys\n\n@needs(heap)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+          "plain() -> int = 3\n"),
+        "main.sysl"  -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n",
+      ) should include("this reaches 'sys', which requires 'os'")
+    }
+
+    // A closure inside such a body is reached only through it, so it is covered with it.
+    "and a closure written inside the body is covered with it" in {
+      runOf(
+        "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool\n" +
+          "    val ask = (p: string) -> sysl.fs.exists(p)\n    ask(\"/\")\n\nplain() -> int = 3\n"),
+        "main.sysl"  -> "@no_os\n\nimport sys.plain\n\nprint(plain())\n",
+      ) shouldBe "3\n"
+    }
+  }
+
   /** A declaration that dropped the annotation on the way through an archive would be a capability
     * requirement that held inside the library and nowhere else — the check it asks for is made at
     * the **call**, and the calls an artifact is read for are all in the consumer.

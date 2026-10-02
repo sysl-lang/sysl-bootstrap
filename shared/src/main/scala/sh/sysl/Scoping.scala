@@ -209,6 +209,28 @@ trait Scoping extends DeclTables {
     if to != currentModule && to != Modules.root && moduleNames(to) then
       moduleEdges.getOrElseUpdate((currentModule, to), currentPos)
 
+      val scaffolding = inTestBody || currentFile.exists(testOnlyFiles.contains)
+
+      edgeUses.getOrElseUpdate((currentModule, to), mutable.LinkedHashMap.empty)
+        .getOrElseUpdate(EdgeUse(bodyNeeds, scaffolding), currentPos)
+
+  /** One way a module reached another, as the capability question needs it told apart from the
+   * rest: what the declaration it was written in **covers** — what its `@needs(...)` said reaching
+   * it needs, which is charged to its callers rather than to its module — and whether it was
+   * written in **scaffolding**, a `@tests` file or a test, which no build but `sysl test` keeps
+   * (`reference/modules.md § A declaration may name what reaching it needs`, `§ A @tests file
+   * states its own capabilities`).
+   */
+  protected case class EdgeUse(covers: Set[String], scaffolding: Boolean)
+
+  /** Every distinct `EdgeUse` of each edge `moduleEdges` holds, with where the first of that kind
+   * was written. `GatedModules` reads it: a module's requirement is what its *shipping, uncovered*
+   * references reach, and a refusal lands at the first reference that is actually refused rather
+   * than at the first reference of all.
+   */
+  protected val edgeUses =
+    mutable.LinkedHashMap.empty[(String, String), mutable.LinkedHashMap[EdgeUse, Option[Pos]]]
+
   // --- capabilities ---------------------------------------------------------------------
 
   /** What each module gave up, and where the clause that said so was written (`reference/modules.md

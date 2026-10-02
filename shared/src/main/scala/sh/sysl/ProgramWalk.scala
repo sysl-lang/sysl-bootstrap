@@ -60,6 +60,10 @@ trait ProgramWalk extends OpaqueResults with DropReturnCheck {
       val here = moduleOf(u)
       val base = Scope(here, Imports.empty, Some(u.source))
 
+      // Known before the imports are read, since an import a `@tests` file writes is scaffolding
+      // like the rest of it, and the module graph asks which edges are.
+      if u.testOnly then testOnlyFiles += u.source
+
       base.copy(imports = inScope(base)(gatherImports(u.body, autoImported(here))))
     }
 

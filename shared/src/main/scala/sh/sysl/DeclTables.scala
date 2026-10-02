@@ -272,6 +272,28 @@ trait DeclTables extends Reporting {
    */
   protected var inTestBody = false
 
+  /** What the declaration whose body is being analyzed said reaching it needs, with implications
+   * folded in — empty outside every body and in a body whose declaration wrote no `@needs(...)`
+   * (`reference/modules.md § A declaration may name what reaching it needs`).
+   *
+   * **A capability named here is charged to the declaration's callers, so nothing its body reaches
+   * is charged to its module for that capability.** That is the whole of what makes `@needs` finer
+   * than a module clause: a module holding one `@needs(os)` function that reads a file is still a
+   * module a `@no_os` program may import the rest of. The module graph and the declaration check
+   * both read it, through `dependsOn` and `bodyCovers`.
+   *
+   * Carried rather than looked up for the reason `inTestBody` is: a closure has no declaration to
+   * ask, and a closure written in such a body is reached only through it.
+   */
+  protected var bodyNeeds: Set[String] = Set.empty
+
+  /** Every lowered body whose declaration covered a capability, by the name the body was emitted
+   * under — a function's own, and each closure or nested function lowered inside it, which is filed
+   * under a name no declaration carries. `DeclCapabilities` reads it to leave such a body alone for
+   * what it covers.
+   */
+  protected val bodyCovers = mutable.HashMap.empty[String, Set[String]]
+
   /** Every type an id has been asked for, by the id it got — the collision check `TypeId` says it
    * owes (`02`).
    *

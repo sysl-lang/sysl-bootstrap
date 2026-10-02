@@ -338,6 +338,7 @@ trait AnalyzerBase extends Scoping {
     // declaration walked would make a closure lowered outside any of them — in `main`, in a module
     // `val`'s initializer — inherit whether *that* was a test.
     inTestBody = false
+    bodyNeeds = Set.empty
     resetLocals()
     byNameLocals = Set.empty
     loops = Nil

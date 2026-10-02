@@ -245,6 +245,80 @@ class TargetCapabilityTests extends AnyFreeSpec with Matchers {
     }
   }
 
+  /** The same rule as `DeclCapabilityTests`' *"a '@needs(os)' body is charged to its callers"*, with
+   * the machine rather than a clause taking `os` away — which is the board program's case, where
+   * nothing in the source says `@no_os` and `package.hocon` says `os = false`
+   * (`reference/modules.md § The target's half needs no clause at all`).
+   *
+   * The program's own modules are asked the target's half, so the body's reference was refused
+   * twice over: at the reference inside the body, and at whatever imported the module.
+   */
+  "a '@needs(os)' body on a machine with no os is its callers' question" - {
+
+    val noOs = everything - Capability.Os - Capability.Posix
+
+    val sys = "sys/a.sysl" -> ("module sys\n\n@needs(posix)\nnow() -> bool = sysl.fs.exists(\"/\")\n\n" +
+      "plain() -> int = 3\n")
+
+    "so a program importing the declaration beside it builds" in {
+      accepted(noOs)(sys, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should include("define")
+    }
+
+    // The body reaching a declaration that is itself '@needs(os)' — `sysl.cpu_count` — is the
+    // other mechanism, `DeclCapabilities`, which asked the body's module and refused it there.
+    "including where the body reaches another '@needs(os)' declaration" in {
+      accepted(noOs)(
+        "sys/a.sysl" -> "module sys\n\n@needs(os)\ncores() -> usize = sysl.cpu_count()\n\nplain() -> int = 3\n",
+        "main.sysl"  -> "import sys.plain\n\nprint(plain())\n") should include("define")
+    }
+
+    "and calling it is refused at the call only, naming the machine" in {
+      val e = refused(noOs)(sys, "main.sysl" -> "import sys.now\n\nprint(now())\n")
+
+      e should include("this reaches 'sys.now', which needs 'os', and")
+      e should include("does not provide it")
+      e should include("main.sysl:3:7")
+      e shouldNot include("which requires 'os'")
+      // One per capability the declaration names, each the call's; none about the module.
+      withClue(e)(all(e.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
+    }
+  }
+
+  /** A `@tests` file is dropped by every build but `sysl test`, so what it imports is not something
+   * its module ships (`reference/modules.md § A @tests file states its own capabilities`: *"nothing
+   * it declares reaches a program that links this module"*). Its imports and bodies were edges of
+   * the module graph like any other, so a library whose tests read a fixture off disk could not be
+   * used by a board program at all — `sysl-lang/musicbox` 0.1.1's `notation_tests.sysl` is the case.
+   */
+  "a library's '@tests' file costs a program that links the library nothing" - {
+
+    val noOs = everything - Capability.Os - Capability.Posix
+
+    val notes = List(
+      "notes/notes.sysl"       -> "module notes\n\nrender() -> int = 5\n",
+      "notes/notes_tests.sysl" -> ("module notes\n@tests\n\nimport sysl.fs.exists\n\n@test\n" +
+        "reads_a_fixture() =\n    assert(exists(\"/\"))\n"),
+    )
+
+    "on a machine with no os" in {
+      acceptedWith(noOs)(notes*)("main.sysl" -> "import notes.render\n\nprint(render())\n") should include(
+        "define")
+    }
+
+    "nor in a module that gave os up" in {
+      acceptedWith(everything)(notes*)("main.sysl" -> "@no_os\n\nimport notes.render\n\nprint(render())\n") should
+        include("define")
+    }
+
+    // The shipping half is unchanged: the same import in the library's ordinary file is still the
+    // module's, and still refused at the program's reference to it.
+    "while the same import in a shipping file is still the module's" in {
+      refusedWith(noOs)(
+        "notes/notes.sysl" -> "module notes\n\nimport sysl.fs.exists\n\nrender() -> int = if exists(\"/\") then 5 else 0\n")(
+        "main.sysl" -> "import notes.render\n\nprint(render())\n") should include("this reaches 'notes', which requires 'os'")
+    }
+  }
+
   /** A `@tests` file states what a module's tests need, which may be more than the module itself
    * gave up (`reference/modules.md § A @tests file states its own capabilities`). **Only the
    * module's half of the two-level rule moves.**

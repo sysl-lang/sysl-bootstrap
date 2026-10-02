@@ -104,6 +104,8 @@ trait FunctionBodies extends ModuleStorage {
     // inside a test is scaffolding exactly as the test is, and nothing about the lowered body says
     // so once the reset has cleared where it came from.
     val savedInTest = inTestBody
+    // And what the enclosing declaration covers, since the closure is reached only through it.
+    val savedNeeds = bodyNeeds
 
     try
       resetFunction()
@@ -116,6 +118,8 @@ trait FunctionBodies extends ModuleStorage {
       importStack = Imports.empty :: savedImports
       currentOwner = owner
       inTestBody = savedInTest
+      bodyNeeds = savedNeeds
+      if bodyNeeds.nonEmpty then bodyCovers(name) = bodyNeeds
       retTy = declaredResult.getOrElse(Type.Unknown)
       retIsList = false
       // A nested function states its own signature, so a `...` on one is its own tail to walk; a
@@ -205,6 +209,7 @@ trait FunctionBodies extends ModuleStorage {
       currentMemberName = savedMember
       currentOwner = savedOwner
       inTestBody = savedInTest
+      bodyNeeds = savedNeeds
       scopes = savedScopes
       used.clear(); used ++= savedUsed
       readOnlyLocals.clear(); readOnlyLocals ++= savedReadOnly
@@ -255,6 +260,11 @@ trait FunctionBodies extends ModuleStorage {
     // off `name`: an instantiation of a generic written in a test file is scaffolding exactly as the
     // generic is, and its mangled key is in no table that remembers which file wrote it.
     inTestBody = f.test.isDefined || testOnlyDecls(f.name)
+    // What the declaration said reaching it needs is its callers' to answer, so what its body
+    // reaches is not its module's for those capabilities (`reference/modules.md § A declaration may
+    // name what reaching it needs`). A name nothing has heard of is `checkNeedsNames`' to refuse.
+    bodyNeeds = f.needs.filter(Capability.implies.contains).flatMap(Capability.closure).toSet
+    if bodyNeeds.nonEmpty then bodyCovers(name) = bodyNeeds
     // A member's body sees `Self` alongside whatever type parameters it was instantiated with, so
     // the one substitution answers both questions and nothing downstream has to know the difference.
     tsubst = subst ++ memberSelf.getOrElse(name, Map.empty)

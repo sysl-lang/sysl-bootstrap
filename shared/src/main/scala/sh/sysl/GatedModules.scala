@@ -70,11 +70,16 @@ trait GatedModules extends AnalyzerBase {
       val needed = requirements()
 
       for
-        ((from, to), pos) <- moduleEdges.toList
+        ((from, to), uses) <- edgeUses.toList
         given_up = givenUp(from) if given_up.nonEmpty
+        // What a reference written inside a `@needs(...)` declaration reaches is out of reach of its
+        // callers for what that declaration names, and `DeclCapabilities` refuses them at the call —
+        // so for those capabilities the reference itself is not this check's to refuse. The first
+        // reference that IS refused is the one reported, so the caret lands on a line to change.
+        (use, pos) <- uses.find((u, _) => (given_up & (needed.getOrElse(to, Set.empty) -- u.covers)).nonEmpty)
         // The least of them by name where a reference is refused for more than one reason, so the
         // message does not vary between runs with the iteration order of a set.
-        cap <- (given_up & needed.getOrElse(to, Set.empty)).toList.sorted.headOption
+        cap <- (given_up & (needed.getOrElse(to, Set.empty) -- use.covers)).toList.sorted.headOption
       do
         // Moved outright rather than through `at`, which would leave the cursor wherever the
         // finished walk left it when an edge carries no position of its own.
@@ -146,7 +151,7 @@ trait GatedModules extends AnalyzerBase {
         case None if path(m) => Set.empty
         case None            =>
           val own   = moduleRequires.get(m).map(_.keySet).getOrElse(Set.empty) & Capability.environment
-          val below = deps.getOrElse(m, Nil).flatMap(of(_, path + m)).toSet
+          val below = deps.getOrElse(m, Nil).flatMap(d => charged(m, d, of(d, path + m))).toSet
           val all   = own ++ below
 
           out(m) = all
@@ -155,4 +160,21 @@ trait GatedModules extends AnalyzerBase {
     for m <- deps.keySet ++ moduleRequires.keySet do of(m, Set.empty)
     out
   }
+
+  /** Which of what `to` requires the edge from `from` passes on to `from` itself — and so to every
+   * module that reaches `from`.
+   *
+   * **Two kinds of reference pass nothing on.** One written in **scaffolding** — a `@tests` file, a
+   * test — is dropped by every build but `sysl test`, so what it reaches is not something the module
+   * ships (`reference/modules.md § A @tests file states its own capabilities`); counting it would
+   * refuse a board program over a library's test fixtures. And one written inside a declaration that
+   * said `@needs(...)` passes on nothing that declaration names, because that is charged to whoever
+   * calls it (`reference/modules.md § A declaration may name what reaching it needs`) — counting it
+   * would make one `@needs(os)` function cost a `@no_os` importer the whole module, which is the
+   * granularity the annotation exists to give.
+   */
+  private def charged(from: String, to: String, requires: Set[String]): Set[String] =
+    edgeUses.get((from, to)) match
+      case None       => requires
+      case Some(uses) => uses.keys.filterNot(_.scaffolding).flatMap(u => requires -- u.covers).toSet
 }

@@ -73,7 +73,11 @@ trait DeclCapabilities extends NoAlloc {
         // A generic is answered for by the body it was written as, exactly as `NoAlloc` answers it:
         // an instantiation belongs to whoever chose the type, in a module of their own, and is
         // reported at *their* call.
-        for f <- funcs if !genericInsts(f.name) do
+        // A body whose own declaration needs the capability is left alone for it: what that body
+        // reaches is charged to whoever reaches the declaration, and they are checked at their call.
+        // Asked of its module instead, a program's own `@needs(os)` function on a machine with no
+        // OS would be refused for doing exactly what its annotation says it does.
+        for f <- funcs if !genericInsts(f.name) && !bodyCovers.get(f.name).exists(_(cap)) do
           check(f.body, Modules.moduleOf(f.name), scaffolding(f.name))
         for v <- vals; init <- v.init do
           check(init, Modules.moduleOf(v.symbol), scaffolding(v.symbol))
