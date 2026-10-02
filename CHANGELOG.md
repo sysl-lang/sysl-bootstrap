@@ -7,6 +7,106 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.157 — 2026-10-02
+
+**a @needs body is charged to its callers, not its module**
+
+Two capability fixes, released as an exception to the bootstrap freeze. A `@needs` declaration's body is charged to the functions that call it, not to the whole module holding it. A `@tests` file no longer counts toward its module's requirement. And `sysl.fs` requires `os` alone, which is what `library/fs.md` has always said.
+
+### Behaviour changes
+
+**Programs that were refused now build. Nothing that built before is refused now.**
+
+- **A `@no_os` program can import a module that holds a `@needs(os)` function, as long as it never calls that function.** The same goes for a program whose target lacks `os`. The call itself is still refused, at the call. Before, the function's body counted toward the whole module's requirement, so the program was refused at the `import` line as well.
+- **An os-less program can link a library whose `@tests` file uses `sysl.fs`.** A `@tests` file is dropped by every build except `sysl test`, and now its imports and bodies are dropped from the module's requirement too. musicbox 0.1.1 hit this: its `notation_tests.sysl` reads fixtures with `sysl.fs`, so a board program could not link it.
+- **A `@no_posix` program can use `sysl.fs`.** So can a project that declares `os = true, posix = false`. Before, `sysl.fs` imported `sysl.posix.rand` on every hosted target, so every program that reached the filesystem was made to require `posix`.
+
+```sysl
+module store
+
+@needs(os)
+present() -> bool = sysl.fs.exists("/")       // touches the filesystem
+
+plain() -> int = 3                             // reaches nothing
+```
+```sysl
+@no_os
+
+import store.plain
+
+print(plain())
+```
+
+In 0.0.156 this program was refused at the import. In 0.0.157 it builds and prints `3`. A call to `present` from it is still refused, at the call:
+
+```
+error: this reaches 'store.present', which needs 'os', and this module declared '@no_os'
+ --> main.sysl:5:7
+```
+
+### Fixes
+
+#### A `@needs` body and a `@tests` file are not charged to their module (8dd5b9ab)
+
+`reference/modules.md` says that what a `@needs` declaration reaches "is charged to whoever reaches it rather than to whoever holds it". The analyzer did not do that. The body's reference into `sysl.fs` was an ordinary edge in the module graph, so the whole module came to require `os` (and `posix`).
+
+`Scoping.dependsOn` now records, for each use, which capabilities the enclosing declaration covers. `FunctionBodies` sets this from the function's `@needs`, and a closure written inside the body inherits it. `GatedModules` leaves those capabilities out of the module's requirement and out of the edge check, and `DeclCapabilities` does not refuse such a body for what it covers. A body covers only what its own annotation names: a `@needs(heap)` function that reaches `sysl.fs` still makes its module require `os`. An unannotated function that calls a `@needs(os)` one passes the need on to its own callers, because reaching is transitive.
+
+Uses made in scaffolding (a `@tests` file, or a test body) no longer go into the module's requirement. `testOnlyFiles` is now filled before imports are read, so an import in such a file is known to be scaffolding.
+
+#### `sysl.fs` requires `os`, not `posix` (050a2769)
+
+`library/sysl/fs/publish.sysl` drew its temporary-file entropy from `sysl.posix.rand` under `#if posix`, which is true on every hosted target. A module is charged the requirements of everything it imports, so `sysl.fs` came to require `posix`. It now declares `getentropy(2)` as a private extern under `#if posix`, the way `sysl.fs` already declares `unlink`, `rename` and `opendir`, and falls back to the clock where there is no POSIX. These POSIX calls are how this host implements the module, and the module's users are not charged for them.
+
+### Tests
+
+`DeclCapabilityTests`, `TargetCapabilityTests` and a new suite, `NeedsScopeCliTests`. The new suite drives a real `package.hocon` (`thumbv6m-freestanding` with `os = false`) and `--lib`, and it runs the library's own `sysl test` on the host.
+
+Now accepted:
+- a module that gave up `os` imports the declaration beside a `@needs(os)` one
+- a closure written inside a `@needs` body is covered with the body
+- a board program that only renders links a library whose `@tests` file reads `sysl.fs`, and the library's `sysl test` still runs that file on a host
+- a program importing the declaration beside a `@needs(os)` one builds, including where that body reaches another `@needs(os)` declaration
+- a program that gave up `posix` reads the filesystem, and publishes through it, which is the part that draws entropy
+- `sysl.fs` on a machine with an os that is not POSIX, publishing included
+
+Still refused:
+- calling the `@needs(os)` declaration, at the call only and not at the import, naming the machine
+- an unannotated function calling it, which passes the need on to its own callers
+- an unannotated body that reaches `sysl.fs`, which still costs the whole module
+- a body reaching past what its own annotation names
+- a program that gave up `os`, at its reference to `sysl.fs`, for `os`
+- the POSIX module `sysl.fs` once imported, on a machine without POSIX
+- the same import in a shipping file (not a `@tests` file), which is still charged to the module
+
+### Documentation
+
+`reference/modules.md` on sysl.sh now says three things. A `@needs` declaration's body is charged to its callers, not to its module. A function that says nothing passes the need on. A `@tests` file's imports are not charged to the module. It also says that a target the config says nothing about provides everything, `os` included, and that `capabilities { os = false }` is what makes a board refuse `sysl.fs`.
+
+### Install
+
+```
+brew install sysl-lang/tap/sysl      # or: brew upgrade sysl
+```
+
+The tarballs for macOS arm64, Linux x86_64 and Linux arm64 are attached to this release. The `sh.sysl:sysl_3:0.0.157` jars are on GitHub Packages (`https://maven.pkg.github.com/sysl-lang/sysl-bootstrap`). sysl is not published to Maven Central.
+
+### Verification
+
+- **Native gate: inherited from the landing gate.** 050a2769 was gated with the full Native gate: GREEN, 12,287 succeeded and 0 failed, in 92:08, covering syslNative and syslDocNative. Nothing timed out and nothing was retried. The tag is 99fd46f4, which is 050a2769 plus the version bump and nothing else, so the suite was not re-run.
+- **Warnings census, cleaned:** JVM two, JS three, Native three, syslDocJVM one, syslDocNative two. That is the expected count, and every warning belongs to a dependency or is build infrastructure.
+- **Release tarball:** extracted to a scratch prefix and run. `sysl --version` prints `sysl 0.0.157`, and `sysl-doc` is present. The `@no_os` program above prints `3`. A `@no_posix` program printing `sysl.fs.exists("/")` prints `true`. Under 0.0.156 both programs were refused, the first at its import and the second at its reference to `sysl.fs`. The call to `present` is refused at the call with the message shown.
+- **GitHub Packages:** all four artifacts (the pom, the jar, the sources jar and the javadoc jar) answer 302.
+- **brew:** `brew test sysl` passes, and the installed `sysl --version` prints `sysl 0.0.157`. The Linux glibc floor, measured in the release run, is 2.34 on both architectures.
+- **sysl.sh on 0.0.157:** 1,418 tests pass with 0 failures. Of those, 1,398 are DocsTests, including the new prose on `reference/modules.md`.
+- **Org sweep with the release tarball's own binary: 79 builds, 73 green under the bare command.**
+  - 57 ran under `sysl test .`, 11 under `sysl build .` and 5 under `sysl build-c <dir>`.
+  - Four repos fail the bare command by design and were run as their READMEs say. `freertos` against the FreeRTOS-Kernel POSIX port: **84 passed**. (Its first run, alongside the other README runs on a loaded machine, stopped making progress after 71 tests. Run again alone, it passed all 84.) `libpq` against a scratch PostgreSQL: **51 passed**. `quickjs-ng` with its include path: **33 passed**.
+  - `pico`: `build-lib --target thumbv6m-freestanding` gets as far as the pico-sdk's generated `cyw43_arch.h`, which means the sysl type-check passed.
+  - `pico2` and `zephyr` refuse the bare command by design, through their `requires { headers }` clause.
+  - Not swept, being kernel or board repos that need a toolchain or SDK this machine does not have: `picokit`, `ogol-pico`, `ogol-pico2`, `solder-pico2`, `zephyr-demo`, `pico-scratch`. Also not swept, being infrastructure: `sysl-bootstrap`, `sysl` (the self-hosted compiler), `sysl.sh`, `homebrew-tap`, `github-profile` and `svd`.
+- **Outside the org, `slate`:** a clean clone of `slate-language/slate` at dev (c359e6b, 0.1.14). With the tarball's binary, `sysl test .` passes 2,436 tests with 0 failures, and both `sysl build .` and `sysl build . --features webview` (the desktop edition) build.
+
 ## 0.0.156 — 2026-10-02
 
 **a view inside a &sync box is refused**
