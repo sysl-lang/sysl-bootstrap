@@ -101,7 +101,13 @@ trait ExprSupport extends SpecialForms with PatternAnalysis with StmtAnalysis {
       // it says nothing about which module wrote it — but *this* is a path a file wrote, in the
       // terms of the body being read, so the dependency it makes is recorded here
       // (`reference/modules.md § The module graph is acyclic`).
-      dependsOn(module)
+      // A path that goes on through a **type** — `sysl.fs.IoError.NotFound` — names it and runs
+      // nothing, exactly as the unqualified spelling does (`EdgeUse.named`).
+      val head = Modules.qualify(module, rest.head)
+      val typed = structDecls.contains(head) || enumDecls.contains(head) ||
+        constrainedDecls.contains(head) || variantOwners.contains(head)
+
+      dependsOn(module, named = Option.when(typed)(head))
       rest.tail.foldLeft[Expr](Ident(Modules.qualify(module, rest.head)))((acc, n) => Field(acc, n))
         .setPos(e.pos)
 

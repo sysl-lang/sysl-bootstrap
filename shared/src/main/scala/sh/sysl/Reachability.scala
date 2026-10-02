@@ -355,6 +355,20 @@ object Reachability {
    * looser, because the case that would otherwise escape — making an allocating sink and reaching it
    * through a trait object — is exactly the case where the erasure is in the module's own tree.
    */
+  /** The functions this tree runs **itself** — what it calls, whose address it takes, and the
+   * implementations behind every table it erased a value into — without following any of them.
+   *
+   * It is the `written` reading of one tree, which is the capability question's: a dynamic call
+   * through a trait object some other body built is that body's choice, while a table this tree
+   * filled is code it handed over to be run.
+   */
+  def calledBy(root: Any, vtables: List[TVtable]): Set[String] = {
+    val refs   = summarize(root, vtables, written = true)
+    val filled = vtables.filter(t => refs.erased(t.name)).flatMap(_.slots.map(_.target))
+
+    refs.calls ++ filled
+  }
+
   private def summarize(root: Any, vtables: List[TVtable], written: Boolean): Refs = {
     val vals    = mutable.HashSet.empty[String]
     val calls   = mutable.HashSet.empty[String]

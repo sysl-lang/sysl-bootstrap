@@ -440,6 +440,13 @@ trait ProgramWalk extends OpaqueResults with DropReturnCheck {
     // And which module a reference lands in is what decides whether a module that gave up an
     // environment capability was allowed to make it, so this asks the same settled graph
     // (`reference/modules.md § Capabilities are a module property`).
+    //
+    // What a body runs is read off the finished tree first, since a method call is settled there and
+    // nowhere a name is resolved (`reference/modules.md § A type costs what it runs`).
+    val shipsNot = testOnlyDecls.toSet ++ tests.map(_.func) ++ hooks.map(_.func)
+
+    chargeCalls((tfuncs ++ closureFuncs).toList, tvals.toList, vtables.values.toList, tmain, mainScope.module,
+      shipsNot)
     checkGatedModules()
 
     // Which structs can lie inside one that carries invariant clauses is likewise only settled now,

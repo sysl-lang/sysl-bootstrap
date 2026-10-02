@@ -109,7 +109,8 @@ trait Scoping extends DeclTables {
    * what its key means.
    */
   protected def resolveName(written: String, quiet: Boolean = false,
-                            inReach: String => Boolean = visible)(declared: String => Boolean): Option[String] = {
+                            inReach: String => Boolean = visible, named: Boolean = false)(
+                            declared: String => Boolean): Option[String] = {
     val dot = written.lastIndexOf('.')
 
     // A candidate this file may not name is **reported** rather than passed over, so that resolution
@@ -180,7 +181,11 @@ trait Scoping extends DeclTables {
     // The one *source* reference that arrives already spelled this way is a qualified value path,
     // and `Analyzer.throughModule`, which spells it in the terms of the body that wrote it, records
     // that edge itself.
-    if !quiet && written.indexOf(Modules.sep.toInt) < 0 then key.foreach(k => dependsOn(Modules.moduleOf(k)))
+    //
+    // A **type** named here is recorded as named rather than as reached: naming one runs nothing, so
+    // what its module requires is not charged for it (`EdgeUse.named`).
+    if !quiet && written.indexOf(Modules.sep.toInt) < 0 then
+      key.foreach(k => dependsOn(Modules.moduleOf(k), named = Option.when(named)(k)))
     key
   }
 
@@ -205,14 +210,14 @@ trait Scoping extends DeclTables {
    * A path that names no module is not one either: an import may be written for one that does not
    * exist, and the diagnostic for that says so far better than a graph built around it could.
    */
-  protected def dependsOn(to: String, imported: Boolean = false): Unit =
+  protected def dependsOn(to: String, imported: Boolean = false, named: Option[String] = None): Unit =
     if to != currentModule && to != Modules.root && moduleNames(to) then
       moduleEdges.getOrElseUpdate((currentModule, to), currentPos)
 
       val scaffolding = inTestBody || currentFile.exists(testOnlyFiles.contains)
 
       edgeUses.getOrElseUpdate((currentModule, to), mutable.LinkedHashMap.empty)
-        .getOrElseUpdate(EdgeUse(bodyNeeds, scaffolding, imported), currentPos)
+        .getOrElseUpdate(EdgeUse(bodyNeeds, scaffolding, imported, named), currentPos)
 
   /** One way a module reached another, as the capability question needs it told apart from the
    * rest: what the declaration it was written in **covers** — what its `@needs(...)` said reaching
@@ -225,8 +230,15 @@ trait Scoping extends DeclTables {
    * which names a file may write, not what the module ships, so it is charged by what its file's
    * declarations do with it: one whose module's references into the target are all inside
    * `@needs(...)` declarations is covered by what they all cover (`GatedModules.effective`).
+   *
+   * A **named** use names a type — a struct, an enum, a variant, a trait, an alias — and carries
+   * the key it named. **Naming a type runs nothing**, so it charges nothing (`reference/modules.md §
+   * A type costs what it runs`): what a type's module requires is paid by whoever calls one of its
+   * methods, and by whoever holds a value of it **that can die**, since a destructor is code the
+   * type runs wherever that happens. `GatedModules` asks the key which of the two it is.
    */
-  protected case class EdgeUse(covers: Set[String], scaffolding: Boolean, imported: Boolean = false)
+  protected case class EdgeUse(covers: Set[String], scaffolding: Boolean, imported: Boolean = false,
+                               named: Option[String] = None)
 
   /** Every distinct `EdgeUse` of each edge `moduleEdges` holds, with where the first of that kind
    * was written. `GatedModules` reads it: a module's requirement is what its *shipping, uncovered*
@@ -621,7 +633,8 @@ trait Scoping extends DeclTables {
    * table growing a case for aliases; `aliasedKey` is the identity for everything that is not one.
    */
   protected def typeKey(written: String): Option[String] =
-    resolveName(written)(n => structDecls.contains(n) || enumDecls.contains(n) || constrainedDecls.contains(n))
+    resolveName(written, named = true)(n =>
+      structDecls.contains(n) || enumDecls.contains(n) || constrainedDecls.contains(n))
       .map(followAlias)
 
   /** Whether a **type** answers to this name here, asked without resolving it.
@@ -652,7 +665,8 @@ trait Scoping extends DeclTables {
   protected def followAlias(key: String): String = key
 
   /** The key a written **trait** name resolves to. */
-  protected def traitKey(written: String): Option[String] = resolveName(written)(traitDecls.contains)
+  protected def traitKey(written: String): Option[String] =
+    resolveName(written, named = true)(traitDecls.contains)
 
   /** Whether a trait can be **named** from where the walk currently is, which is what its members'
    * reachability is measured by (`reference/modules.md § Visibility`).
@@ -811,7 +825,7 @@ trait Scoping extends DeclTables {
    * type is also the key `declAccess` is written under — see `resolveName`'s `inReach`.
    */
   protected def variantKey(written: String): Option[String] =
-    resolveName(written, inReach = variantVisible)(variantOwners.contains)
+    resolveName(written, inReach = variantVisible, named = true)(variantOwners.contains)
 
   /** The same, with the **expected type given the first word** — which is what a bare variant name
    * needs and `variantKey` alone cannot give it.
@@ -863,7 +877,7 @@ trait Scoping extends DeclTables {
   protected def variantKeyFor(written: String, expected: Option[Type]): Option[String] = {
     val wanted = expectedVariantKey(written, expected)
 
-    wanted.flatMap(key => resolveName(written, inReach = variantVisible)(_ == key))
+    wanted.flatMap(key => resolveName(written, inReach = variantVisible, named = true)(_ == key))
       .orElse(variantKey(written).map(near => wanted.getOrElse(near)))
   }
 

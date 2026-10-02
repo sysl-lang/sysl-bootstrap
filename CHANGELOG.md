@@ -7,6 +7,36 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+**a type costs what it runs, not what names it**
+
+One capability fix, released as an exception to the bootstrap freeze. It finishes what 0.0.157 and 0.0.158 began: a module was still charged a gated module's requirement whenever it *named* one of that module's types — in a field, a variant's payload, a signature or a type argument — though naming a type runs none of its code.
+
+### Behaviour changes
+
+**Programs that were refused now build. Nothing that built before is refused now, with one exception below.**
+
+- **Naming a type from a gated module charges nothing.** A module whose error enum wraps `sysl.fs.IoError` for its one `@needs(os)` function is importable by a `@no_os` program, or one whose target has `os = false`, for everything else it declares. So is a module naming the type in an unannotated signature, in a struct field, or as a type argument such as `Option[IoError]`; and a `@no_os` program may construct a value of such a type itself.
+- **What a type runs is still charged, where it runs.** Calling one of its methods charges its module, exactly as calling a function does. A type with a destructor (`impl Drop`) charges its module wherever a value of it can die — and so does every type that holds one, through a field, a `&T`, a slice or an array. The refusal then reads *"a 'sys.Handle' can die here, and its destructor reaches 'sys', which requires 'os'"*, at the place the type is named.
+- **The exception:** a method call is now charged by itself. It used to be charged only through the type's name, so a module that called a gated type's method on a value whose type it never wrote down (an inferred one) was not charged for it; it is now. A call made inside a generic instantiation is still not charged to the generic's module, since the type was its caller's choice.
+
+```sysl
+module store
+
+import sysl.fs.{IoError, write_bytes}
+
+enum Failure
+    Io(e: IoError)
+
+@needs(os)
+save(p: string) -> Result[unit, Failure] = write_bytes(p, "x".bytes).map_err((e) -> Io(e))
+
+version() -> int = 3
+```
+
+A `@no_os` program may now `import store.version`; before this release it was refused at the import, because `Failure` names `IoError`.
+
 ## 0.0.158 — 2026-10-02
 
 **a @needs declaration's import and signature are charged to its callers**

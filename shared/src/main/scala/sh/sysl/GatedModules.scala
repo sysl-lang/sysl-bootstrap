@@ -67,6 +67,9 @@ trait GatedModules extends AnalyzerBase {
     // Nothing narrowed anything and the target has everything, which is almost every compilation: the
     // walk below reads every edge, and one with no question to ask should pay nothing at all for it.
     if narrowed.nonEmpty || absent.nonEmpty then
+      diesMemo.clear()
+      instanceIndex = null
+
       val needed = requirements()
 
       for
@@ -77,7 +80,12 @@ trait GatedModules extends AnalyzerBase {
         // callers for what that declaration names, and `DeclCapabilities` refuses them at the call —
         // so for those capabilities the reference itself is not this check's to refuse. The first
         // reference that IS refused is the one reported, so the caret lands on a line to change.
-        (use, pos) <- uses.find((u, _) => (given_up & (needed.getOrElse(to, Set.empty) -- u.covers)).nonEmpty)
+        //
+        // A value that can die is reported ahead of the rest: the destructor is the code it costs,
+        // and the place it is held is the line to change, where the import that let it be named is
+        // only what made that line possible.
+        refused = uses.filter((u, _) => (given_up & (needed.getOrElse(to, Set.empty) -- u.covers)).nonEmpty)
+        (use, pos) <- refused.find(_._1.named.isDefined).orElse(refused.headOption)
         // The least of them by name where a reference is refused for more than one reason, so the
         // message does not vary between runs with the iteration order of a set.
         cap <- (given_up & (needed.getOrElse(to, Set.empty) -- use.covers)).toList.sorted.headOption
@@ -97,8 +105,66 @@ trait GatedModules extends AnalyzerBase {
               s"'${PackageConfig.FileName}' declares, so either this reference cannot be made on " +
               "this machine or the config is understating it"
 
-        recover(())(err(s"this reaches '$to', which requires '$cap', and $why"))
+        val what = use.named.fold("this")(k => s"a '${Modules.show(k)}' can die here, and its destructor")
+
+        recover(())(err(s"$what reaches '$to', which requires '$cap', and $why"))
   }
+
+  /** Charges every body for the code it **runs** in another module — the methods it calls, the
+   * functions whose address it takes, and the implementations behind each table it erased a value
+   * into (`reference/modules.md § A type costs what it runs`).
+   *
+   * **A free function is charged where its name is resolved, and a method is not**: `e.code()` names
+   * no module at all, the receiver's type does, and naming a type charges nothing. So what a body
+   * runs is read here, off the typed tree, where every call has been settled to the function it
+   * lands in. The use is recorded beside the ones resolution made and never in the module graph,
+   * since a method a body calls is not a dependency the graph is held acyclic over.
+   *
+   * **A generic instantiation is left out**, for the reason `DeclCapabilities` leaves it out: its type
+   * arguments were chosen by whoever instantiated it, in a module of their own, and charging the
+   * generic's module for them would refuse every program that used it.
+   */
+  protected def chargeCalls(
+      funcs: List[TFunc],
+      vals: List[TVal],
+      vtables: List[TVtable],
+      main: List[TStmt],
+      mainModule: String,
+      scaffolding: String => Boolean,
+  ): Unit =
+    if gateAsked then
+      def charge(tree: Any, from: String, covers: Set[String], test: Boolean): Unit =
+        for
+          to <- Reachability.calledBy(tree, vtables).map(Modules.moduleOf)
+          if to != from && to != Modules.root && moduleNames(to)
+        do
+          val use  = EdgeUse(covers, test)
+          val made = edgeUses.getOrElseUpdate((from, to), mutable.LinkedHashMap.empty)
+
+          // Only a kind of use the edge has not seen is worth placing: the first of a kind is what
+          // a refusal points at, and resolution has usually recorded the call's own name already.
+          if !made.contains(use) then made(use) = site(tree, to, vtables)
+
+      for f <- funcs if !genericInsts(f.name) do
+        charge(f.body, Modules.moduleOf(f.name), bodyCovers.getOrElse(f.name, Set.empty), scaffolding(f.name))
+      for v <- vals; init <- v.init do
+        charge(init, Modules.moduleOf(v.symbol), Set.empty, scaffolding(v.symbol))
+      charge(main, mainModule, Set.empty, test = false)
+
+  /** The smallest part of `tree` that still runs code in `to`, which is where a refusal's caret goes
+   * — the call, rather than the body around it.
+   */
+  private def site(tree: Any, to: String, vtables: List[TVtable]): Option[Pos] =
+    Reaches.parts(tree).find(Reachability.calledBy(_, vtables).exists(Modules.moduleOf(_) == to)) match
+      case Some(part) => site(part, to, vtables).orElse(Reaches.position(tree))
+      case None       => Reaches.position(tree)
+
+  /** Whether any module of this compilation has an environment capability out of reach — which is
+   * almost never, and is what lets both passes here cost nothing when it is not.
+   */
+  private def gateAsked: Boolean =
+    moduleNarrows.values.exists(c => (c.keySet & Capability.environment).nonEmpty) ||
+      Capability.environment.exists(c => !targetProvides(c))
 
   /** The environment capabilities `module` may not reach: what its own clause gave up, plus — for a
    * module of the program's own — whatever the target does not provide. The library's modules are
@@ -144,7 +210,9 @@ trait GatedModules extends AnalyzerBase {
    */
   private def requirements(): collection.Map[String, Set[String]] = {
     val out  = mutable.HashMap.empty[String, Set[String]]
-    val deps = moduleEdges.keys.toList.groupMap(_._1)(_._2)
+    // Over every edge a use was recorded on rather than over the module graph alone: a method a body
+    // calls is charged without being a dependency the graph is held acyclic over (`charges`).
+    val deps = edgeUses.keys.toList.groupMap(_._1)(_._2)
 
     def of(m: String, path: Set[String]): Set[String] =
       out.get(m) match
@@ -180,20 +248,86 @@ trait GatedModules extends AnalyzerBase {
       case Some(uses) =>
         effective(uses).map(_._1).filterNot(_.scaffolding).flatMap(u => requires -- u.covers).toSet
 
-  /** One edge's uses with each `import` charged by what the module's references along the edge are
+  /** One edge's uses as the capability question reads them: a type **named** and nothing more is
+   * charged nothing, and each `import` is charged by what the module's references along the edge are
    * charged with.
+   *
+   * **Naming a type runs nothing** (`reference/modules.md § A type costs what it runs`). A field, a
+   * variant's payload, a parameter or a result of a type from a gated module is a shape, and the
+   * module's requirement is the cost of its code — which a program pays where it calls a method
+   * (`chargeCalls`) and where a value of the type can **die**, since a destructor runs there. So a
+   * named use stands for nothing unless the type it named carries a destructor somewhere in what it
+   * holds; then it is a reference like any other, at the place the type was named.
    *
    * **An import is charged by its uses** (`reference/modules.md § A declaration may name what
    * reaching it needs`): a file that imports `sysl.fs.write_bytes` for its one `@needs(os)` function
    * has said what that function may write, not that the module reads files. So an import covers
    * whatever every shipping reference along the same edge covers — nothing, the moment one of them
    * sits in an unannotated declaration, which then charges the module at the import as it always
-   * did. An import nothing references is charged as written, since there is no use to read it by.
+   * did. An import whose every use only names a type is charged nothing, as those uses are; one
+   * nothing references at all is charged as written, since there is no use to read it by.
    */
   private def effective(uses: collection.Map[EdgeUse, Option[Pos]]): List[(EdgeUse, Option[Pos])] = {
-    val made   = uses.keys.filter(u => !u.imported && !u.scaffolding).map(_.covers)
-    val lifted = made.reduceOption(_ & _).getOrElse(Set.empty)
+    val all      = Capability.environment
+    val shipping = uses.keys.filter(u => !u.imported && !u.scaffolding).toList
+    val (free, run) = shipping.partition(u => u.named.exists(k => !dies(k)))
+    val lifted =
+      if run.nonEmpty then run.map(_.covers).reduce(_ & _)
+      else if free.nonEmpty then all
+      else Set.empty[String]
 
-    uses.toList.map((u, p) => if u.imported then (u.copy(covers = u.covers ++ lifted), p) else (u, p))
+    uses.toList.map { (u, p) =>
+      if u.imported then (u.copy(covers = u.covers ++ lifted), p)
+      else if u.named.exists(k => !dies(k)) then (u.copy(covers = u.covers ++ all), p)
+      else (u, p)
+    }
   }
+
+  /** Whether a value of the type `key` names can **die** running code: whether it, or anything it
+   * holds, has a destructor (`reference/memory.md § A destructor`).
+   *
+   * Asked of what the program instantiated, because what a type holds is decided per instantiation —
+   * `Holder[T]` holds whatever `T` was chosen — and a type nothing instantiated holds nothing a
+   * program could release. **What it holds is followed through `&T`, a slice and an array**, each of
+   * which releases what it refers to; **a `*T` and a `weak T` stop it**, owning nothing. A trait and
+   * an alias are answered by what they stand for: a trait is a set of methods, which are charged
+   * where called, and an alias is the type it names.
+   */
+  private def dies(key: String): Boolean =
+    diesMemo.getOrElseUpdate(key, {
+      val types = variantOwners.getOrElse(key, List(followAlias(key)))
+
+      types.exists(k => dropsDeclared(k) || instances.getOrElse(k, Nil).exists(holdsDrop(_, Set.empty)))
+    })
+
+  // Both asked only once the program's instantiations are settled, by `checkGatedModules`, which
+  // empties the memo first; the index is what keeps the question from being a scan per use.
+  private val diesMemo = mutable.HashMap.empty[String, Boolean]
+
+  private def instances: Map[String, List[Type]] =
+    if instanceIndex == null then
+      val made = structInsts.values.toList.map(s => s.base -> (s: Type)) :::
+        enumInsts.values.toList.map(e => e.base -> (e: Type))
+
+      instanceIndex = made.groupMap(_._1)(_._2)
+    instanceIndex
+
+  private var instanceIndex: Map[String, List[Type]] = null
+
+  private def holdsDrop(t: Type, seen: Set[String]): Boolean = t match
+    case _: Type.Ptr | _: Type.Weak => false
+    case Type.Ref(inner, _)         => holdsDrop(inner, seen)
+    case Type.Volatile(inner)       => holdsDrop(inner, seen)
+    case Type.Slice(elem, _)        => holdsDrop(elem, seen)
+    case Type.Array(_, elem)        => holdsDrop(elem, seen)
+    case s: Type.Struct if !seen(s.name) =>
+      val fields = structInsts.get(s.name).map(_.fields).getOrElse(s.fields)
+
+      dropsDeclared(s.base) || (fields.map(_._2) ::: s.targs).exists(holdsDrop(_, seen + s.name))
+    case e: Type.Enum if !seen(e.name) =>
+      val variants = enumInsts.get(e.name).map(_.variants).getOrElse(e.variants)
+
+      dropsDeclared(e.base) ||
+        (variants.flatMap(_.fields.map(_._2)) ::: e.targs).exists(holdsDrop(_, seen + e.name))
+    case _ => false
 }

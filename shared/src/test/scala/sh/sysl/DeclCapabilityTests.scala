@@ -331,13 +331,12 @@ class DeclCapabilityTests extends AnyFreeSpec with RunSupport with CodegenSuppor
       e should include("main.sysl:3:1")
     }
 
-    "a gated type in an unannotated declaration's signature still costs the whole module" in {
-      val e = errOf(
-        "sys/a.sysl" -> "module sys\n\nkind(e: sysl.fs.IoError) -> int = 1\n\nplain() -> int = 3\n",
-        plainMain)
-
-      e should include("this reaches 'sys', which requires 'os', and this module declared 'no os'")
-      e should include("main.sysl:3:1")
+    // This said the opposite until naming a type stopped charging anything: a signature is a shape,
+    // and an unannotated one names a gated type exactly as harmlessly as a `@needs` one does
+    // (`reference/modules.md § A type costs what it runs`; `TypeChargingTests` has the rule).
+    "a gated type in an unannotated declaration's signature costs nothing either, running nothing" in {
+      runOf("sys/a.sysl" -> "module sys\n\nkind(e: sysl.fs.IoError) -> int = 1\n\nplain() -> int = 3\n",
+        plainMain) shouldBe "3\n"
     }
   }
 

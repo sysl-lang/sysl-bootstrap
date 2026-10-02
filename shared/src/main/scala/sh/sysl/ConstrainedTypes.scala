@@ -51,7 +51,7 @@ trait ConstrainedTypes extends GenericInstantiation {
     while plainAlias(seen) && steps <= constrainedDecls.size do
       val next = inScope(scopeFor(seen)) {
         constrainedDecls(seen).base match
-          case NamedType(n, Nil) => resolveName(n)(k => structDecls.contains(k) || enumDecls.contains(k) ||
+          case NamedType(n, Nil) => resolveName(n, named = true)(k => structDecls.contains(k) || enumDecls.contains(k) ||
             constrainedDecls.contains(k))
           case _                 => None
       }

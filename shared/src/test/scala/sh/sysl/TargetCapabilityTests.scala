@@ -305,16 +305,34 @@ class TargetCapabilityTests extends AnyFreeSpec with Matchers {
         withClue(e)(all(e.split("error:").toList.drop(1)) should include("this reaches 'sys.now', which needs "))
     }
 
-    "while an import or a signature a shipping declaration uses is still the module's" in {
+    "while an import a shipping declaration uses is still the module's" in {
       val sharedImport = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n@needs(os)\n" +
         "now(f: string) -> bool = write_bytes(f, \"x\".bytes).is_ok()\n\n" +
         "keep(f: string) -> bool = write_bytes(f, \"y\".bytes).is_ok()\n\nplain() -> int = 3\n")
+
+      refused(noOs)(sharedImport, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should
+        include("which requires 'os'")
+    }
+
+    // A signature naming a gated type runs nothing, annotated or not, so it is not the module's
+    // either (`reference/modules.md § A type costs what it runs`).
+    "and a signature merely naming a gated type is nobody's" in {
       val plainSignature =
         "sys/a.sysl" -> "module sys\n\nkind(e: sysl.fs.IoError) -> int = 1\n\nplain() -> int = 3\n"
 
-      for sys <- List(sharedImport, plainSignature) do
-        refused(noOs)(sys, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should
-          include("which requires 'os'")
+      accepted(noOs)(plainSignature, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should
+        include("define")
+    }
+
+    // The shape that asked for the rule: an error enum wrapping the gated type for its one `@needs`
+    // function, on a machine where the import of it was refused.
+    "nor is a variant wrapping one, on a machine with no os" in {
+      val wraps = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.{IoError, write_bytes}\n\n" +
+        "enum E\n    W(e: IoError)\n\n@needs(os)\n" +
+        "save(f: string) -> Result[unit, E] = write_bytes(f, \"x\".bytes).map_err((e) -> W(e))\n\n" +
+        "plain() -> int = 3\n")
+
+      accepted(noOs)(wraps, "main.sysl" -> "import sys.plain\n\nprint(plain())\n") should include("define")
     }
   }
 
