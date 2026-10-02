@@ -7,6 +7,86 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## 0.0.158 — 2026-10-02
+
+**a @needs declaration's import and signature are charged to its callers**
+
+One capability fix, released as an exception to the bootstrap freeze. It completes 0.0.157's `@needs` scoping: the import a `@needs` declaration writes through, and the types its signature names, are now charged to the declaration's callers rather than to its module, as its body already was.
+
+### Behaviour changes
+
+**Programs that were refused now build. Nothing that built before is refused now.**
+
+- **A program lacking a capability can import a module whose `@needs` function imports a gated module, or names one of its types in the signature, as long as it never calls that function.** That covers a `@no_os` program and a project whose target has `os = false`. The call itself is still refused, at the call. In 0.0.157 the body was already covered, but the file-level `import sysl.fs` the body used, and a signature such as `-> Result[unit, sysl.fs.IoError]`, still made the whole module require `os`, so the program was refused at its `import` line.
+- **An import or a signature type that an unannotated declaration uses still charges the module, exactly as before.**
+
+```sysl
+module store
+
+import sysl.fs
+
+@needs(os)
+save(p: string) -> Result[unit, sysl.fs.IoError] = sysl.fs.write_text(p, "x")
+
+plain() -> int = 3
+```
+```sysl
+@no_os
+
+import store.plain
+
+print(plain())
+```
+
+In 0.0.157 this program was refused at the import. In 0.0.158 it builds and prints `3`. A call to `save` from it is still refused, at the call.
+
+### Fixes
+
+#### A `@needs` declaration's import and signature are charged to its callers (11dd0b42)
+
+0.0.157 (8dd5b9ab) made what a `@needs(...)` body reaches its callers' to answer. Two references the body rule did not reach still charged the module:
+
+1. **The file-level import the body writes through.** An import's edge was recorded with nothing covered, whatever used it. Imports are now recorded as such (`EdgeUse.imported`) and charged by their uses: `GatedModules.effective` lifts an import's edge to what every shipping reference along that edge covers. One use from an unannotated declaration covers nothing, so the module is still charged at the import. An import nothing references is charged as written.
+2. **A gated type named in the declaration's signature.** Signatures are resolved by hoisting, generic instantiation, the abstract and opaque-result passes, the signature-visibility check and the drop-return check, all outside the body. Each now runs under `DeclTables.inSignature(needs)`, which covers what the declaration's `@needs` names. An unannotated signature still charges the module.
+
+### Tests
+
+Nine new cases: `DeclCapabilityTests` (5), `TargetCapabilityTests` (2, an `os = false` machine) and `NeedsScopeCliTests` (2, a real `package.hocon` at `thumbv6m-freestanding`).
+
+Now accepted:
+- a module whose import is used only inside `@needs(os)` bodies is importable by a program without `os`
+- a module naming a gated type only in a `@needs(os)` signature is importable by a program without `os`
+- the same two through a target with `os = false`, and through `package.hocon` and `--lib`
+
+Still refused:
+- calling either declaration, at the call only
+- an import an unannotated declaration also uses, at the import
+- a gated type in an unannotated declaration's signature
+
+### Install
+
+```
+brew install sysl-lang/tap/sysl      # or: brew upgrade sysl
+```
+
+The tarballs for macOS arm64, Linux x86_64 and Linux arm64 are attached to this release. The `sh.sysl:sysl_3:0.0.158` jars are on GitHub Packages (`https://maven.pkg.github.com/sysl-lang/sysl-bootstrap`). sysl is not published to Maven Central.
+
+### Verification
+
+- **Native gate: inherited from the landing gate.** 11dd0b42 was gated with the full Native gate: GREEN, 417 suites, 12,331 passed and 0 failed, in 73:44. The tag is 3aadd680, which is 11dd0b42 plus the version bump and nothing else, so the suite was not re-run.
+- **Warnings census, cleaned:** JVM two, JS three, Native three, syslDocJVM one, syslDocNative two. That is the expected count, and every warning belongs to a dependency or is build infrastructure.
+- **Release tarball:** the asset downloaded back from this release, extracted to a scratch prefix and run. `sysl --version` prints `sysl 0.0.158`, and `sysl-doc` is present. The `@no_os` program above prints `3`, where 0.0.157 refused it at its import. The call to `save` is refused at the call (`this reaches 'store.save', which needs 'os', and this module declared '@no_os'`). A module naming `sysl.fs.IoError` in an unannotated signature is still refused at the import.
+- **GitHub Packages:** all four artifacts (the pom, the jar, the sources jar and the javadoc jar) were published.
+- **brew:** `brew test sysl` passes, and the installed `sysl --version` prints `sysl 0.0.158`. The Linux glibc floor, measured in the release run, is 2.34.
+- **sysl.sh on 0.0.158:** 1,418 tests pass with 0 failures. Of those, 1,398 are DocsTests, including the new sentence on `reference/modules.md`.
+- **Org sweep with the release tarball's own binary: 79 builds, 73 green under the bare command.**
+  - 57 ran under `sysl test .`, 11 under `sysl build .` and 5 under `sysl build-c <dir>`.
+  - Four repos fail the bare command by design and were run as their READMEs say. `freertos` against the FreeRTOS-Kernel POSIX port: **84 passed**. `libpq` against a scratch PostgreSQL: **51 passed**. `quickjs-ng` with its include path: **33 passed**.
+  - `pico`: `build-lib --target thumbv6m-freestanding` gets as far as the pico-sdk's generated `cyw43_arch.h`, which means the sysl type-check passed.
+  - `pico2` and `zephyr` refuse the bare command by design, through their `requires { headers }` clause.
+  - Not swept, being kernel or board repos that need a toolchain or SDK this machine does not have: `picokit`, `ogol-pico`, `ogol-pico2`, `solder-pico2`, `zephyr-demo`, `pico-scratch`. Also not swept, being infrastructure: `sysl-bootstrap`, `sysl` (the self-hosted compiler), `sysl.sh`, `homebrew-tap`, `github-profile` and `svd`.
+- **Outside the org, `slate`:** a clean clone of `slate-language/slate` at dev (c359e6b, 0.1.14). With the tarball's binary, `sysl test .` passes 2,436 tests with 0 failures, and both `sysl build .` and `sysl build . --features webview` (the desktop edition) build.
+
 ## 0.0.157 — 2026-10-02
 
 **a @needs body is charged to its callers, not its module**
