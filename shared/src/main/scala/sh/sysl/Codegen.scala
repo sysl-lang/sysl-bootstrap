@@ -178,7 +178,12 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     // land here, and a `declare` beside the `define` of one symbol is `invalid redefinition of
     // function` out of LLVM. The definition is the stronger statement and is the one to keep — a
     // caller reaching the `extern` resolves to it exactly as the linker would have.
-    val defined = program.funcs.flatMap(_.exported).toSet
+    //
+    // **Only an export this module EMITS counts**, which is `own` rather than every function: a
+    // supplier a prebuilt standard module already compiled is declared under its key and its thunk
+    // is in the artifact, so the symbol an `extern` names still has to be declared here for the
+    // linker to resolve it there.
+    val defined = own.flatMap(_.exported).toSet
 
     val declared = mutable.Set(Llvm.trap.name) ++ defined ++
       (if heap then Set(mallocSym, freeSym) else Set.empty) ++

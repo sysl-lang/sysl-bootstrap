@@ -7,6 +7,10 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+- **Fixed: a `build-c` archive left `sysl_wall_us` undefined**, so any program reaching `sysl.time.now()` — every `sysl.log` call among them — failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), its own supplier of a seam the program calls (`sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`) is now analyzed and kept; it is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol.
+
 ## 0.0.160 — 2026-10-03
 
 **__VERSION__, and defaults read at the type each call settles**
