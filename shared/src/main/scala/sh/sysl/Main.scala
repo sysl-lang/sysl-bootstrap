@@ -759,6 +759,11 @@ private def executeCommand(asked: Config): Int = {
       // this the second is handed the first one's binary.
       (sources ::: librarySources)
         .flatMap(s => s.features.toList.sorted.map(f => s"${s.name}:$f")).sorted.mkString(" "),
+      // **What each file's manifest states**, because `__NAME__` and `__VERSION__` fold it into the
+      // program — and the manifest is not one of the files the fingerprint above is over. Without
+      // this, bumping `version` in an unchanged tree replayed a binary still printing the old one.
+      (sources ::: librarySources)
+        .flatMap(s => s.manifest.map(m => s"${s.name}:${m.path}:${m.name}:${m.version}")).sorted.mkString("\u0000"),
       LibraryArtifact.fingerprint(nativeForKey),
       // The C's paths too, for the same reason: clang's `__FILE__` is the path it was handed.
       nativeForKey.map(_.name).sorted.mkString("\u0000"),

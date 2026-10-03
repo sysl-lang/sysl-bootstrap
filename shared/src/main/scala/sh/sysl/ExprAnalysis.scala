@@ -109,7 +109,8 @@ trait ExprAnalysis
   /** What a reserved identifier stands for, folded into the use as the literal it names
    * (`ReservedNames`).
    *
-   * The location three of them report — and the place whose package `__VERSION__` reads — is
+   * The location three of them report — and the place whose package `__NAME__` and `__VERSION__`
+   * read — is
    * `reportedPos`, which is the node's own place everywhere
    * except while a parameter's default is being filled in — there it is the **call**, because a
    * default stands exactly where the argument would have been written (`reference/declarations.md §
@@ -147,6 +148,9 @@ trait ExprAnalysis
       // call the default is filled at — so a library's `version: string = __VERSION__` answers the
       // version of whichever program called it, which is the one a caller writing it would mean.
       case "__VERSION__" => TStrLit(packageVersion(reportedPos))
+      // The package's `name`, by the same road: a library's `tag: string = __NAME__` default names
+      // whichever package called it, so a logging call made from an application is tagged with it.
+      case "__NAME__" => TStrLit(packageName(reportedPos))
       case _          => err(ReservedNames.unknown(name))
   }
 

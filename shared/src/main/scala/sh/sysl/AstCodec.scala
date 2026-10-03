@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 61
+  val Version: Int = 62
 
   private val Magic = "sysl-ast"
 
@@ -140,7 +140,7 @@ object AstCodec {
         str(s.name)
         str(s.text)
         s.dir.foreach(_.foreach(str))
-        s.manifest.foreach(m => { str(m.path); m.version.foreach(str) })
+        s.manifest.foreach(m => { str(m.path); m.version.foreach(str); m.name.foreach(str) })
 
       val out = new StringBuilder
 
@@ -155,11 +155,13 @@ object AstCodec {
           case Some(segs) => "1" :: segs.length.toString :: segs.map(seg => strings(seg).toString)
 
         // The package the file belongs to, which a generic body re-analyzed by an importer still
-        // needs: its `__VERSION__` is folded there, and has to be this package's rather than nobody's.
+        // needs: its `__VERSION__` and `__NAME__` are folded there, and have to be this package's
+        // rather than nobody's. Each field the manifest may leave out is `0`, or `1` and its string.
+        def field(v: Option[String]): List[String] = v.fold(List("0"))(x => List("1", strings(x).toString))
+
         val manifestTokens = s.manifest match
-          case None                             => List("0")
-          case Some(SourceManifest(p, None))    => List("1", strings(p).toString, "0")
-          case Some(SourceManifest(p, Some(v))) => List("1", strings(p).toString, "1", strings(v).toString)
+          case None    => List("0")
+          case Some(m) => "1" :: strings(m.path).toString :: field(m.version) ::: field(m.name)
 
         out.append((strings(s.name).toString :: strings(s.text).toString :: dirTokens ::: manifestTokens)
           .mkString(" ")).append('\n')
@@ -691,10 +693,17 @@ object AstCodec {
         val segs  = if parts(2) == "1" then parts(3).toInt else 0
         val dir   = if parts(2) == "1" then Some(parts.slice(4, 4 + segs).toList.map(x => strings(x.toInt))) else None
         val at    = if parts(2) == "1" then 4 + segs else 3
+        // An optional field at `i`: what it holds, and where the next one starts.
+        def field(i: Int): (Option[String], Int) =
+          if parts(i) == "1" then (Some(strings(parts(i + 1).toInt)), i + 2) else (None, i + 1)
+
         val owner =
           if parts(at) != "1" then None
-          else Some(SourceManifest(strings(parts(at + 1).toInt),
-                                   if parts(at + 2) == "1" then Some(strings(parts(at + 3).toInt)) else None))
+          else
+            val (version, next) = field(at + 2)
+            val (pkgName, _)    = field(next)
+
+            Some(SourceManifest(strings(parts(at + 1).toInt), pkgName, version))
 
         // What was stored is the text the *positions* were recorded against, which for a literate
         // file is its program with the left margin already gone (`Literate`). The margin is how far

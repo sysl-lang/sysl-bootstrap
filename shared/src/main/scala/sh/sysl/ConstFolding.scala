@@ -445,13 +445,25 @@ trait ConstFolding extends ImportResolution {
    * Read off whichever place the caller hands in: the folder's own is where the name is written,
    * and `ExprAnalysis.builtin` hands in `reportedPos`, which is the call a default is filled at.
    */
-  protected def packageVersion(where: Option[Pos]): String = {
-    val here = where.getOrElse(err(ReservedNames.versionNowhere))
+  protected def packageVersion(where: Option[Pos]): String =
+    manifestField(where, ReservedNames.Version)(_.version)
+
+  /** What `__NAME__` written at `where` stands for: the `name` in the manifest of the package that
+   * file belongs to, read off the place the caller hands in exactly as `packageVersion` reads it.
+   */
+  protected def packageName(where: Option[Pos]): String =
+    manifestField(where, ReservedNames.Name)(_.name)
+
+  /** One field of the manifest the file at `where` belongs to, or the refusal `builtin` owes for a
+   * file with no package, a manifest that leaves the field out, or a node with no place at all.
+   */
+  private def manifestField(where: Option[Pos], builtin: ReservedNames.FromManifest)(
+      field: SourceManifest => Option[String]): String = {
+    val here = where.getOrElse(err(builtin.nowhere))
 
     here.source.manifest match
-      case Some(SourceManifest(_, Some(v))) => v
-      case Some(SourceManifest(file, None)) => at(where)(err(ReservedNames.versionUnstated(file)))
-      case None                             => at(where)(err(ReservedNames.versionNoPackage))
+      case Some(m) => field(m).getOrElse(at(where)(err(builtin.unstated(m.path))))
+      case None    => at(where)(err(builtin.noPackage))
   }
 
   /** Folds a constant expression to the literal it denotes, or `None` where it is not one.
@@ -466,6 +478,7 @@ trait ConstFolding extends ImportResolution {
     // A literal the manifest supplies rather than the text, so it folds wherever a literal would
     // — which is what lets `const VERSION: string = __VERSION__` be the one place a program says it.
     case Ident("__VERSION__") => Some(StrLit(packageVersion(e.pos)))
+    case Ident("__NAME__")    => Some(StrLit(packageName(e.pos)))
     case l: IntLit   => Some(l.copy(suffix = None))
     case l: FloatLit => Some(l.copy(suffix = None))
     case l: BoolLit  => Some(l)

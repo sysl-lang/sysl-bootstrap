@@ -4,7 +4,7 @@ import org.scalatest.freespec.AnyFreeSpec
 
 /** A **reserved word** written where a name is being introduced.
  *
- * This is not the `__NAME__` shape `ReservedNameTests` covers — those are identifiers the compiler
+ * This is not the `__…__` shape `ReservedNameTests` covers — those are identifiers the compiler
  * answers for, and a declaration taking one is refused by a pass that knows what it is looking at.
  * These are the words the *grammar* spends: `val`, `match`, `struct`. Nothing knew to say so, because
  * a reserved word does not fail a rule so much as end one — a struct's body stops at the line, and

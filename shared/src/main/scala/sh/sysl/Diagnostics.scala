@@ -28,8 +28,8 @@ package sh.sysl
  * graph around it, which is every compilation that resolves nothing.
  *
  * `manifest` is the `package.hocon` of the package or program this file belongs to, which is what
- * `__VERSION__` reads. It travels on the file for the reason `features` does: one compilation holds
- * several packages' files, and a library's `__VERSION__` has to be the library's own. `None` is a
+ * `__NAME__` and `__VERSION__` read. It travels on the file for the reason `features` does: one
+ * compilation holds several packages' files, and a library's `__NAME__` has to be the library's own. `None` is a
  * file that belongs to no package — a lone `sysl run x.sysl`, or the standard library.
  *
  * `preparedFrom` is the file this text was derived from when the parser's preparation made a new
@@ -57,7 +57,7 @@ final class Source(val name: String, val text: String, val dir: Option[List[Stri
   def enabling(names: Set[String]): Source =
     if names.isEmpty then this else new Source(name, text, dir, columnOffset, names, manifest)
 
-  /** The same file, belonging to the package whose manifest this is (`__VERSION__`). */
+  /** The same file, belonging to the package whose manifest this is (`__NAME__`, `__VERSION__`). */
   def inPackage(m: Option[SourceManifest]): Source =
     if m == manifest then this else new Source(name, text, dir, columnOffset, features, m)
 
@@ -111,9 +111,10 @@ object Source {
 }
 
 /** A package's manifest as a source file of that package sees it: where the `package.hocon` is, and
- * the `version` it states, if it states one. What `__VERSION__` folds to.
+ * the `name` and `version` it states, each if it states one. What `__NAME__` and `__VERSION__` fold
+ * to.
  */
-final case class SourceManifest(path: String, version: Option[String])
+final case class SourceManifest(path: String, name: Option[String], version: Option[String])
 
 /** A span of a source file: where something starts, and where it ends.
  *

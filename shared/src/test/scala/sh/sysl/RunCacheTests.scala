@@ -62,6 +62,28 @@ class RunCacheTests extends AnyFreeSpec with Matchers {
     }
   }
 
+  // `__NAME__` and `__VERSION__` fold the manifest into the program, and the manifest is not a source
+  // file — so a key over the sources alone replayed the old binary after either was changed.
+  "a manifest whose version or name changed is a different program, though no source file moved" in
+    withCache { cache =>
+      {
+        val root = program("print(__NAME__, __VERSION__)\n")
+
+        def stating(name: String, version: String): String = {
+          writeFile(s"$root/${PackageConfig.FileName}", s"""package { name = "$name", version = "$version" }\n""")
+          ran(Config(command = "run", file = root))
+        }
+
+        stating("app", "1.0.0") shouldBe "app 1.0.0\n"
+        stating("app", "1.0.1") shouldBe "app 1.0.1\n"
+        stating("tool", "1.0.1") shouldBe "tool 1.0.1\n"
+        entries(cache) shouldBe 3
+
+        stating("app", "1.0.0") shouldBe "app 1.0.0\n"
+        entries(cache) shouldBe 3
+      }
+    }
+
   "and the arguments it is given are not part of the key, which is the point" in withCache { cache =>
     {
       val root = program("""main(args: []string)
