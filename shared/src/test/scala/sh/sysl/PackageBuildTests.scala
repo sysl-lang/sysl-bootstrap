@@ -1003,23 +1003,112 @@ class PackageBuildTests extends PackageCacheSupport {
 
     /** Where the root is NOT the package, a dependency's own import of it must still reach the copy
      * that dependency declared: its table binds `geom` to the fetched package, and a name in the
-     * project's space is not supposed to answer for it (`§ What a dependency's modules are called`).
-     * What it gets today is the root's `geom` — 42 rather than 28 — with nothing said.
+     * project's space is not supposed to answer for it (`§ Imports are transitive` — the three
+     * levels are the *importing package's*, and a root's modules are the project's first level).
+     * Before, the root's `geom` answered — 42 rather than 28 — with nothing said.
      */
-    // TODO: un-ignore when a dependency's import stops resolving to a --lib root's module of that name
-    "while a dependency's own import of it is not answered by an unrelated root" ignore {
-      val cache = emptyCache()
-      publishedGeom(cache)
-
+    def midDeclaringGeom(cache: String, body: String = "answer() -> int = geom.double(14)"): Unit = {
       val mid = published(cache, "github.com/e/mid", Version(1, 0, 0),
         manifest("mid", "1.0.0", """g { git = "github.com/e/geom", version = "1.0.0" }"""))
 
       createDirectories(s"$mid/mid")
-      writeFile(s"$mid/mid/mid.sysl", "module mid\n\nanswer() -> int = geom.double(14)\n")
+      writeFile(s"$mid/mid/mid.sysl", s"module mid\n\n$body\n")
+    }
+
+    "while a dependency's own import of it is not answered by an unrelated root" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+      midDeclaringGeom(cache)
 
       val root = app("print(mid.answer())", """m { git = "github.com/e/mid", version = "1.0.0" }""")
 
       withCache(cache)(run(root, List(checkout(name = "shapes")))) shouldBe "28\n"
+    }
+
+    // An `import` line in the dependency reads its table the same way a dotted path does.
+    "nor its import line" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+      midDeclaringGeom(cache, "import geom.double\n\nanswer() -> int = double(14)")
+
+      val root = app("print(mid.answer())", """m { git = "github.com/e/mid", version = "1.0.0" }""")
+
+      withCache(cache)(run(root, List(checkout(name = "shapes")))) shouldBe "28\n"
+    }
+
+    // The mirror: the project's own `geom` is still the root's, since the root's modules are its
+    // first level and the `geom` that arrived through `mid` is only its third.
+    "while the project's own import of it still gets the root's" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+      midDeclaringGeom(cache)
+
+      val root = app("print(mid.answer())\nprint(geom.double(7))",
+        """m { git = "github.com/e/mid", version = "1.0.0" }""")
+
+      withCache(cache)(run(root, List(checkout(name = "shapes")))) shouldBe "28\n21\n"
+    }
+
+    // No `--lib` is needed for the defect: the project's own `geom/` answered the dependency too.
+    "and neither is it answered by the project's own module of that name" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+      midDeclaringGeom(cache)
+
+      val root = app("print(mid.answer())\nprint(geom.double(7))",
+        """m { git = "github.com/e/mid", version = "1.0.0" }""")
+
+      createDirectories(s"$root/geom")
+      writeFile(s"$root/geom/geom.sysl", "module geom\n\ndouble(n: int) -> int = n * 3\n")
+
+      withCache(cache)(run(root)) shouldBe "28\n21\n"
+    }
+
+    /** A dependency that declares nothing called `geom` has no `geom` at all: its table holds its own
+     * modules and what its manifest reached, and the project's are neither. So the name is refused
+     * there rather than borrowed from whatever project happens to be building it — a package's
+     * source has to mean the same thing whoever depends on it.
+     */
+    "and a dependency that declares nothing by that name is refused it" in {
+      val cache = emptyCache()
+      val mid   = published(cache, "github.com/e/mid", Version(1, 0, 0), manifest("mid", "1.0.0"))
+
+      createDirectories(s"$mid/mid")
+      writeFile(s"$mid/mid/mid.sysl", "module mid\n\nanswer() -> int = geom.double(14)\n")
+
+      val root  = app("print(mid.answer())", """m { git = "github.com/e/mid", version = "1.0.0" }""")
+      val notes = withCache(cache)(refused(root, List(checkout(name = "shapes"))))
+
+      notes should include("undefined name 'geom'")
+      notes should include("mid/mid.sysl:3:")
+    }
+
+    "and the same holds for build-c" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+      midDeclaringGeom(cache)
+
+      val dir = createTempDirectory("sysl-unrelated-c-")
+
+      writeFile(s"$dir/${PackageConfig.FileName}",
+        """package { name = "clib", version = "0.1.0" }
+          |dependencies { m { git = "github.com/e/mid", version = "1.0.0" } }
+          |""".stripMargin)
+      writeFile(s"$dir/lib.sysl", "@export(\"mid_answer\")\nmid_answer() -> int = mid.answer()\n")
+
+      val notes  = new java.io.ByteArrayOutputStream
+      val status = withCache(cache)(Console.withOut(Discarded)(Console.withErr(notes)(
+        sh.sysl.execute(Config(command = "build-c", file = dir, output = Some(s"$dir/out.a"),
+          libs = List(checkout(name = "shapes")))))))
+
+      withClue(notes.toString)(status shouldBe 0)
+      // The archive's symbol table names which `double` was compiled: the fetched package's carries
+      // its canonical prefix, and the root's would be the bare `geom$double`.
+      val symbols = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(s"$dir/out.a")),
+        java.nio.charset.StandardCharsets.ISO_8859_1)
+
+      symbols should include("github.com.e.geom.geom$double")
+      symbols should not include ("_geom$double")
     }
 
     // A mount on the stood-in dependency is still the name this manifest gave it.
