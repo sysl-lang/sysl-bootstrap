@@ -29,6 +29,16 @@ trait Scoping extends DeclTables {
    */
   protected val moduleNames = mutable.LinkedHashSet.empty[String]
 
+  /** The modules filed under the **project's** names rather than under a package's prefix: the
+   * project's own and every `--lib` source root's, the standard library left out.
+   *
+   * They are the first level of the *project's* precedence and of no other package's
+   * (`reference/packages.md § Imports are transitive`), so a dependency's file may not reach one by
+   * writing its name — only through a binding its own manifest made, which is how a root that stands
+   * in for a coordinate reaches the packages that named it.
+   */
+  protected val projectModules = mutable.HashSet.empty[String]
+
   /** The module whose terms a name is currently being read in: the module of the declaration being
    * hoisted, of the body being analyzed, or of the file that carries the statements the program
    * runs. An unqualified name is looked for here first (`reference/modules.md § Imports`).
@@ -527,9 +537,41 @@ trait Scoping extends DeclTables {
    */
   protected def inPackage(written: String): String =
     ownPackage(written)
-      .orElse(Option.when(reachesModule(written))(written))
+      .orElse(Option.when(reachesModule(written) && !projectsOnly(written))(written))
       .orElse(mountedPackage(written))
-      .getOrElse(written)
+      .getOrElse(unreached(written))
+
+  /** Whether a path read as written, in a **dependency's** file, would reach nothing but the
+   * project's own modules — which are that dependency's to reach only through its manifest.
+   *
+   * Without this a dependency writing `geom` was answered by a `--lib` root's `geom` before its own
+   * manifest's `geom` was ever asked: the global reading goes first, and the project's modules are
+   * the only unprefixed ones there besides the library's. The program built and ran the wrong code.
+   * The project's own files are untouched, since its modules are its own first level.
+   */
+  private def projectsOnly(written: String): Boolean =
+    inDependency && !reachesAvoiding(written, projectModules)
+
+  /** `reachesModule` over every module but the `hidden` ones. */
+  private def reachesAvoiding(path: String, hidden: collection.Set[String]): Boolean = {
+    def module(m: String) = moduleNames(m) && !hidden(m)
+    val parent = path.lastIndexOf('.')
+
+    module(path) || moduleNames.exists(m => m.startsWith(s"$path.") && !hidden(m)) ||
+      (parent > 0 && module(path.take(parent)))
+  }
+
+  /** A written path nothing answered, handed back for the caller's diagnostic — and, in a
+   * dependency's file where it would otherwise name one of the project's modules, read in that
+   * package's own terms instead, where it names nothing, so the caller refuses it rather than
+   * reaching the project's module after all.
+   */
+  private def unreached(written: String): String =
+    if inDependency && reachesModule(written) then
+      Packages.qualify(currentFile.map(packages.prefixOf).getOrElse(""), written)
+    else written
+
+  private def inDependency: Boolean = currentFile.exists(f => packages.prefixOf(f).nonEmpty)
 
   /** What a written path's leading segment means in the **package the file itself belongs to**
    * (`reference/packages.md § What a dependency's modules are called`).

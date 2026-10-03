@@ -48,6 +48,8 @@ trait ProgramWalk extends OpaqueResults with DropReturnCheck {
     // naming one is reaching declarations, and the declarations that are there are the ones that
     // arrived.
     moduleNames ++= std.modules
+    projectModules ++= units.filter(u => packages.prefixOf(u.source).isEmpty).map(moduleOf)
+      .filterNot(std.modules.contains)
 
     // Every declaration is read in the terms its file set up — the module it contributes to and
     // what it imported — so each one is carried alongside those rather than flattened into one

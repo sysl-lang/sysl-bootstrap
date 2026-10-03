@@ -20,6 +20,12 @@ change what an existing program means. Where it does, the release says so.
   Go's `replace`, written as one flag. A root that merely holds a module a coordinate also offers,
   without being that package, is still refused, and the refusal now says what would have made it an
   override. `reference/packages.md § A source root stands in for the package it is`.
+- **A dependency's own import no longer reaches the project's modules.** A dependency writing `geom`
+  was answered by a `--lib` root's (or the project's own) `geom` before the `geom` its own manifest
+  declared, so a program could build and run the wrong package's code with nothing said. It now gets
+  the module its manifest bound; one whose manifest reached no `geom` at all is refused the name
+  rather than borrowing the project's. The project's own imports are unchanged.
+  `reference/packages.md § Imports are transitive`.
 
 ### Other changes
 
