@@ -156,4 +156,70 @@ class NeedsScopeCliTests extends LibraryCliSupport {
       ran(Config(command = "test", file = library())) should include("1 passed")
     }
   }
+
+  // Charging was half of it. The other half is that a consumer's build never READS a dependency's
+  // test file: it used to be name-resolved against the consumer's target and dropped afterwards, and
+  // `sysl.fs` declares no `make_temp_dir` on a machine with no operating system — so the import
+  // itself was refused, in a file no build of the board program keeps.
+  "a library whose '@tests' file imports what the board's machine does not declare" - {
+
+    def library(tests: String = "import sysl.fs.make_temp_dir\n\n@test\n" +
+        "makes_a_scratch_dir() =\n    assert(make_temp_dir(\"t\").is_ok())\n"): String = tree(
+      "notes/notes.sysl"       -> "module notes\n\nrender() -> int = 5\n",
+      "notes/notes_tests.sysl" -> s"module notes\n@tests\n\n$tests",
+    )
+
+    val boot = "import notes.render\n\n@export(\"main\")\nboot() -> int = render()\n"
+
+    "is linked by a board program through '--lib'" in {
+      val root = tree(PackageConfig.FileName -> board, "main.sysl" -> boot)
+
+      emitted(Config(command = "emit-llvm", file = root, libs = List(library()))) should include("define")
+    }
+
+    "and archived for it by 'build-c'" in {
+      assume(Target.named("thumbv6m-freestanding").flatMap(Toolchain.findBackendClang).isRight,
+        "no clang that lowers for thumbv6m")
+
+      val root = tree(PackageConfig.FileName -> board, "main.sysl" -> boot)
+
+      succeeds(Config(command = "build-c", file = root, libs = List(library()),
+        output = Some(s"$root/app.a")))
+    }
+
+    // A dependency's tests are its own author's to get right, and nothing of them ships: a mistake in
+    // one is reported where that package is tested, never to a program that only links it.
+    "nor is a type error in that file reported to the consumer" in {
+      val broken = library("@test\nwrong() =\n    assert(\"not a bool\")\n")
+      val root   = tree(PackageConfig.FileName -> board, "main.sysl" -> boot)
+
+      emitted(Config(command = "emit-llvm", file = root, libs = List(broken))) should include("define")
+
+      // ...and it is the package's own suite that says so.
+      val (status, said) = diagnostics(Config(command = "test", file = broken))
+
+      status should not be 0
+      said should include("notes_tests.sysl")
+    }
+
+    // The consumer's OWN scaffolding is unchanged: analyzed and then dropped, as before, so its
+    // mistakes are still the consumer's to hear about.
+    "while the consumer's own '@tests' file is still read by its build" in {
+      val root = tree(PackageConfig.FileName -> board, "main.sysl" -> boot,
+        "own/own.sysl"       -> "module own\n\nk() -> int = 1\n",
+        "own/own_tests.sysl" -> "module own\n@tests\n\n@test\nwrong() =\n    assert(\"not a bool\")\n")
+
+      val (status, said) = diagnostics(Config(command = "emit-llvm", file = root, libs = List(library())))
+
+      status should not be 0
+      said should include("own_tests.sysl")
+      said shouldNot include("notes_tests.sysl")
+    }
+
+    "and the library's own 'sysl test' still compiles and runs that file on the host" in {
+      assume(Toolchain.clangAvailable, "clang not available")
+
+      ran(Config(command = "test", file = library())) should include("1 passed")
+    }
+  }
 }

@@ -7,6 +7,21 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+**a dependency's tests are not read by its consumer's build**
+
+One capability fix, from the same freeze exception as 0.0.157–0.0.159. 0.0.157 stopped a `@tests` file's imports being *charged* to its module, but a consumer's build still *read* the file: a dependency's test scaffolding was name-resolved and type-checked against the consumer's target, and dropped only afterwards. On a machine with no operating system `sysl.fs` declares no `make_temp_dir`, so a library whose tests made a scratch directory could not be linked by a board program at all — refused with *"'sysl.fs' declares no 'make_temp_dir'"*, pointing into a file no build of that program keeps.
+
+#### Behaviour changes
+
+**Programs that were refused now build. Nothing that built before is refused now, with one exception below.**
+
+- **A dependency's `@tests` files, and its `@test` functions and hooks, are taken out before analysis** in every build of a consumer — `build`, `run`, `build-c`, `emit-llvm`, `emit-typed`, `prove`, and the consumer's own `sysl test` — whether the dependency arrives through `--lib` or as a fetched coordinate. What `reference/modules.md § A @tests file states its own capabilities` promised now holds: *"a library whose tests read a fixture with `sysl.fs` is still one a program on a machine with no operating system can link."*
+- **So a mistake in a dependency's tests is no longer reported to its consumers.** A type error there, or an import of the package's own `dev_dependencies` (which a consumer never resolves), is reported by `sysl test` of that package and nowhere else.
+- **The exception:** a consumer's `@test` function that called a helper declared in a *dependency's* `@tests` file used to compile; the helper is no longer there to call. A test helper meant for other packages belongs in an ordinary file of its own, or in a package of its own.
+- **Unchanged:** a package's own `sysl test` compiles and runs its `@tests` files as before, and a program's *own* scaffolding is still analyzed by its build and then dropped, so its mistakes are still reported there.
+
 ## 0.0.159 — 2026-10-03
 
 **a type costs what it runs, not what names it**

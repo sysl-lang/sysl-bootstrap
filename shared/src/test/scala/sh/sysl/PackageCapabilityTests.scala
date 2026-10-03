@@ -136,4 +136,35 @@ class PackageCapabilityTests extends PackageCacheSupport {
       Fetch.usingCache(cache)(run(app(dep, "", reaching))) shouldBe "32\n"
     }
   }
+
+  // `reference/modules.md § A @tests file states its own capabilities`: a package whose tests make a
+  // scratch directory is still one a board program links. `sysl.fs` declares no `make_temp_dir` on a
+  // machine with no operating system, so the package's test file has to go unread by the consumer's
+  // build, not merely uncharged — the same rule `NeedsScopeCliTests` holds for a `--lib` root, here
+  // through a fetched coordinate, whose modules are filed under its canonical prefix.
+  "a git dependency whose '@tests' file the board's machine could not compile" - {
+    val dep = """notes { git = "github.com/e/notes", version = "0.1.0" }"""
+
+    val board =
+      """targets {
+        |  default = "thumbv6m-freestanding"
+        |  thumbv6m-freestanding { capabilities { os = false, posix = false } }
+        |}""".stripMargin
+
+    "is linked by a board program all the same" in {
+      val cache = emptyCache()
+
+      published(cache, "github.com/e/notes", Version(0, 1, 0), manifest("notes", "0.1.0"),
+        "notes/notes.sysl"       -> "module notes\n\nrender() -> int = 5\n",
+        "notes/notes_tests.sysl" -> ("module notes\n@tests\n\nimport sysl.fs.make_temp_dir\n\n@test\n" +
+          "makes_a_scratch_dir() =\n    assert(make_temp_dir(\"t\").is_ok())\n"))
+
+      val root  = app(dep, board, "import notes.render\n\n@export(\"main\")\nboot() -> int = render()\n")
+      val notes = new java.io.ByteArrayOutputStream
+      val state = Fetch.usingCache(cache)(Console.withOut(Discarded)(
+        Console.withErr(notes)(sh.sysl.execute(Config(command = "emit-llvm", file = root)))))
+
+      withClue(notes.toString)(state shouldBe 0)
+    }
+  }
 }

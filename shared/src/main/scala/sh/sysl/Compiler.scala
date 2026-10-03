@@ -152,8 +152,31 @@ object Compiler {
                            packages: Packages, entryPoint: Boolean, paths: SearchPaths,
                            allocator: Allocator)
       : Either[List[Diagnostic], Compiled] =
-    analyzed(libraries ::: units, target, precompiled, carried(std, target), provides, packages,
-      entryPoint, paths, allocator, ownModules(units))
+    analyzed(handedSource(libraries) ::: units, target, precompiled, carried(std, target), provides,
+      packages, entryPoint, paths, allocator, ownModules(units))
+
+  /** What a compilation is handed — a `--lib` root, a fetched package, a decoded artifact — with
+   * that library's **test scaffolding taken out before anything reads it**: every `@tests` file, and
+   * every `@test` function and hook written in an ordinary one (`Tests.stripSource`).
+   *
+   * **Those belong to `sysl test` of the package that wrote them, and to no build of a consumer.**
+   * Dropping them after analysis, which is what this path did, was too late: by then a dependency's
+   * test file had been name-resolved against the *consumer's* target. `sysl.fs` declares no
+   * `make_temp_dir` on a machine without an operating system, so a library whose tests made a
+   * scratch directory could not be linked by a board program at all — refused over a file no build
+   * of that program keeps, though `reference/modules.md § A @tests file states its own capabilities`
+   * says such a library is one a program on that machine can link. A test file's type errors reached
+   * the consumer the same way, and so would an import of the package's own `dev_dependencies`, which
+   * a consumer never resolves.
+   *
+   * It is sound for the reason `Tests.strip` is: `TestScope` holds every reference into the
+   * scaffolding to coming from scaffolding, so what is left names nothing that went. An artifact
+   * already arrives stripped (`LibraryArtifact`), so for one this changes nothing.
+   *
+   * **The program's own scaffolding is untouched** — it is analyzed and then dropped exactly as
+   * before, which is what `sysl test` of the program itself runs.
+   */
+  private def handedSource(libraries: List[Program]): List[Program] = Tests.stripSource(libraries)
 
   /** Which modules this compilation is **building** rather than being handed.
    *
@@ -203,10 +226,10 @@ object Compiler {
    * canonical prefix (`github.com.sysl-lang.fft.sh.sysl.fft`), and was counted as the program's own
    * besides. Two commands answering about one program disagreed about what it was.
    *
-   * **A handed module's tests are stripped, and the program's own are not** (`Tests.stripHanded`).
-   * The build strips every test after analysis; this stops before that, and the program's own
-   * `@test` functions are part of what it declares. A dependency's never are, in any build of this
-   * program.
+   * **A handed module's tests are stripped, and the program's own are not.** A dependency's are
+   * taken out before analysis (`handedSource`), as every build does; the build strips the program's
+   * own after analysis, and this stops before that, because the program's own `@test` functions are
+   * part of what it declares. A dependency's never are, in any build of this program.
    */
   def typedWith(sources: List[Source], libraries: List[Program], target: Target = Target.default,
                 std: Option[Stdlib] = None, provides: Set[String] = Capability.core.toSet,
@@ -227,7 +250,7 @@ object Compiler {
         // have found nothing to translate. The sources given are what the reader meant by "this
         // module", and they are only known here — which is the same fact the analyzer is handed, for
         // the same reason.
-        Analyzer.analyze(libraries ::: supplied.collect { case Right(p) => p } ::: mine,
+        Analyzer.analyze(handedSource(libraries ::: supplied.collect { case Right(p) => p }) ::: mine,
                          std = carried(std, target), target = target, provides = provides,
                          packages = packages, paths = paths, own = Some(own))
           .map(typed => (Tests.stripHanded(typed, own), own))
@@ -306,9 +329,10 @@ object Compiler {
    * twice. And every dependency's `@test` functions ran in the consumer's suite, a failing one
    * failing it, though no build of the consumer ever keeps them.
    *
-   * **So a handed module's tests are stripped after analysis and the program's own are not**
-   * (`Tests.stripHanded`), which is what `typedWith` does for the same reason. A package's suite is
-   * run by `sysl test` over the package.
+   * **So a handed module's tests are stripped and the program's own are not** — before analysis
+   * (`handedSource`), and `Tests.stripHanded` after it for anything a kept test made under a
+   * dependency's name — which is what `typedWith` does for the same reason. A package's suite is run
+   * by `sysl test` over the package.
    */
   def compileTests(sources: List[Source], libraries: List[Program], target: Target = Target.default,
                    precompiled: Set[String] = Set.empty, std: Option[Stdlib] = None,
@@ -323,7 +347,10 @@ object Compiler {
       case errs if errs.nonEmpty => Left(errs.flatten)
       case _ =>
         val mine   = parsed.collect { case Right(p) => p }
-        val handed = libraries ::: supplied.collect { case Right(p) => p }
+        // A dependency's suite is not this suite, so its scaffolding is not even read
+        // (`handedSource`) — the consumer's `sysl test` runs at the consumer's target and resolves
+        // the consumer's `dev_dependencies`, neither of which that file was written against.
+        val handed = handedSource(libraries ::: supplied.collect { case Right(p) => p })
         val units  = handed ::: mine
         val whole  = carried(std, target)
         val own    = mine.map(moduleOf).toSet
