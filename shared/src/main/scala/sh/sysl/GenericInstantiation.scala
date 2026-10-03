@@ -627,11 +627,20 @@ trait GenericInstantiation extends ConstFolding {
       bounds: Map[String, List[BoundRef]] = Map.empty,
       known: Map[String, Type] = Map.empty,
       omitted: List[Boolean] = Nil,
+      deferred: List[Boolean] = Nil,
   ): List[Type] = {
     val sub   = mutable.LinkedHashMap.empty[String, Type]
     val tps   = tparams.toSet
-    val pairs = paramRefs.zip(argTys).zip(soft.padTo(paramRefs.length, false))
-    val left  = omitted.padTo(paramRefs.length, false)
+    // **A filled default that waited for the solution is no part of it** (`reference/declarations.md
+    // § Default parameters and named arguments`): `step: T = T.zero()` is read at the `T` the call
+    // settles, so it cannot also be what settles it. Its position is dropped from every tier.
+    val kept = paramRefs.zip(argTys)
+      .zip(soft.padTo(paramRefs.length, false))
+      .zip(omitted.padTo(paramRefs.length, false))
+      .zip(deferred.padTo(paramRefs.length, false))
+      .collect { case (((pair, adaptable), o), false) => (pair, adaptable, o) }
+    val pairs = kept.map((pair, adaptable, _) => (pair, adaptable))
+    val left  = kept.map(_._3)
 
     for (tp, t) <- known if tps(tp) do sub(tp) = t
 
@@ -675,7 +684,8 @@ trait GenericInstantiation extends ConstFolding {
     //
     // Suppressing is safe by construction rather than by judgement: `Type.Unknown` exists only where
     // an error was already recorded, so there is no input that reaches here poisoned and silent.
-    def unsolvable = expected.exists(Type.mentionsUnknown) || argTys.exists(Type.mentionsUnknown)
+    def unsolvable = expected.exists(Type.mentionsUnknown) ||
+      argTys.zip(deferred.padTo(argTys.length, false)).exists((t, d) => !d && Type.mentionsUnknown(t))
 
     tparams.map(tp =>
       sub.getOrElse(

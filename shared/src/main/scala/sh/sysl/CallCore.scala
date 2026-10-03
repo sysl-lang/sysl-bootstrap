@@ -41,7 +41,14 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
       args: List[Expr],
       pre: Option[List[TExpr]],
       positional: Boolean = false,
+      types: DefaultTypes = noDefaultTypes,
   ): List[TExpr] = {
+    // A filled default is read with the callee's type parameters at what this call made them, and a
+    // written argument with nothing extra: what the default may name is the callee's, never the
+    // caller's.
+    def reading(src: Option[Expr])(read: => TExpr): TExpr =
+      if src.exists(_.isInstanceOf[DefaultArg]) then withDefaultTypes(types)(read) else read
+
     // An argument analyzed against a parameter that was still being solved was analyzed without an
     // expected type, so a value headed for a `&T` parameter is boxed here instead of at its own
     // analysis, and one headed for a trait object is erased here.
@@ -60,13 +67,16 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         val srcs = List.fill(provisional.length - args.length)(None) ::: args.map(Some(_))
 
         provisional.zip(srcs.padTo(provisional.length, None)).zip(params).map {
-          case ((t, src), (pname, pty)) =>
+          case ((t, src), (pname, pty)) => reading(src):
+            // A filled default inference could not read is read here, at the solved call, and only
+            // here — it waited for the solution and contributed nothing to it.
+            if deferredDefault(t) then analyzeExpr(src.get, Some(pty))
             // An omitted literal default is read here, at the type the call settled its parameter
             // to, by the ordinary literal rule — so an integer literal is no `real` here either
             // (`reference/traits.md`: *"an integer literal is neither"*). A refusal is about the
             // default rather than about anything the caller wrote, so it says so, at the call,
             // which is where the parameter's type came from.
-            if src.exists(omittedLiteral) then
+            else if src.exists(omittedLiteral) then
               attempt(analyzeExpr(src.get, Some(pty))).filterNot(r => disagree(r.ty, pty)).getOrElse(
                 at(src.get.pos)(err(s"'$pname' of '$what' was left to its default, and the default " +
                   s"cannot be read at ${show(pty)}, the type the parameter has at this call")))
@@ -74,7 +84,7 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
               analyzeExpr(src.get, Some(pty))
             else reread(coerce(t, pty), src, pty)
         }
-      case None => args.zip(params).map { case (a, (_, pty)) => analyzeExpr(a, Some(pty)) }
+      case None => args.zip(params).map { case (a, (_, pty)) => reading(Some(a))(analyzeExpr(a, Some(pty))) }
 
     // A **written-out array standing where a slice is asked for**, which for a literal is a
     // conversion the *analysis* performs rather than one `coerce` repairs afterwards: `[1, 2, 3]`
@@ -186,11 +196,24 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
     // A **construction over literals** answers that question the same way and is why the flag is
     // computed rather than written `false`: `Some(3)` read alone is an `Option[int]`, and the only
     // thing that decided the `int` was a literal with no width on it. See `adaptable`.
+    //
+    // **A filled default that cannot be read with what the caller already knows waits for the
+    // whole solution, and plays no part in it.** It is the one argument the caller did not write,
+    // and a default may name its declaration's type parameters (`reference/declarations.md § Default
+    // parameters and named arguments`) — `step: T = T.zero()` says nothing about `T` until `T` is
+    // known, so it is read once the call is solved, in `checkArgs`, and a `T` that only it could
+    // have settled is a `T` nothing settled.
     val first: List[Option[(TExpr, Boolean)]] = at.zip(callable).map { case ((a, e), isCallable) =>
+      val filled = a.isInstanceOf[DefaultArg]
+
+      // What the caller already knows is the seed — a member's receiver — and nothing else yet.
+      def readFilled(): Option[TExpr] = withDefaultTypes((seed, bounds))(attempt(analyzeExpr(a, e)))
+
       if isCallable || e.isEmpty && (nullArg(a) || implicitArg(a)) then None
       else
         e match
-          case Some(_) => Some(analyzeExpr(a, e) -> false)
+          case Some(_) if filled => Some(readFilled().getOrElse(deferDefault(a)) -> false)
+          case Some(_)           => Some(analyzeExpr(a, e) -> false)
           case None =>
             literalDefault(written(a)) match
               case Some(ty) => Some(standIn(ty).setPos(a.pos) -> true)
@@ -209,6 +232,8 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
               // `attempt` rather than `probe` because the node is kept where the analysis
               // succeeded, which is the ordinary case here and must cost one analysis rather than
               // two.
+              case None if filled =>
+                Some(readFilled().fold(deferDefault(a) -> false)(t => t -> adaptable(a, t)))
               case None => attempt(analyzeExpr(a)).map(t => t -> adaptable(a, t))
     }
 
@@ -233,7 +258,8 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
     // above.
     //
     // `unify` writes only where the map is silent, so the order is the whole of the precedence.
-    for case (r, Some((t, false))) <- ptypes.zip(first) do inDecl(decl)(unify(r, t.ty, tps, partial))
+    for case (r, Some((t, false))) <- ptypes.zip(first) if !deferredDefault(t) do
+      inDecl(decl)(unify(r, t.ty, tps, partial))
 
     if partial.size < tparams.length then
       for r <- result; e <- expected do inDecl(decl)(unify(r, e, tps, partial))
@@ -276,7 +302,10 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
       inDecl(decl)(heldWant(callable(i), ptypes.lift(i), tps, bounds, partial.toMap))
 
     def read(i: Int): Unit = {
-      val t = analyzeExpr(at(i)._1, expectedFor(i))
+      val a = at(i)._1
+      val t =
+        if a.isInstanceOf[DefaultArg] then withDefaultTypes((partial.toMap, bounds))(analyzeExpr(a, expectedFor(i)))
+        else analyzeExpr(a, expectedFor(i))
 
       out(i) = Some(t)
 
@@ -475,6 +504,19 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
   private def standIn(ty: Type): TExpr = ty match
     case _: Type.Floating => TFloatLit(0L, ty)
     case _                => TIntLit(0, ty)
+
+  /** A stand-in for a filled default inference cannot read yet. Its type is never consulted: `solve`
+   * passes over it, and `checkArgs` replaces it with the default read at the solved call.
+   *
+   * An integer constant of type `unit` is a node no analysis produces, which is what lets it be
+   * recognised by its shape.
+   */
+  private def deferDefault(a: Expr): TExpr = TIntLit(-1, Type.Unit).setPos(a.pos)
+
+  /** Whether an argument read during inference is a filled default still waiting for the solution. */
+  protected def deferredDefault(t: TExpr): Boolean = t match
+    case TIntLit(v, Type.Unit) => v == -1
+    case _                     => false
 
   /** A call to a name, which may stand for one function or for several (`reference/declarations.md
    * § Overloading`).
@@ -726,7 +768,17 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
       decl: FuncDecl,
       targs: List[Expr],
       atCall: Boolean,
-  ): String = {
+  ): String = writtenInstantiation(written, decl, targs, atCall)._1
+
+  /** `instantiationWritten`, keeping the types the list stood for — which a call needs again for the
+   * defaults it fills.
+   */
+  private def writtenInstantiation(
+      written: String,
+      decl: FuncDecl,
+      targs: List[Expr],
+      atCall: Boolean,
+  ): (String, List[Type]) = {
     // **A bare arrow's parameter has no written form and no argument here to read it off**, which
     // leaves an address with nothing to instantiate. A call is the other case and does not come
     // through here: there the arguments answer it, which is where it came from.
@@ -741,8 +793,14 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
     // not exempt them: a bound is what the body was compiled against, and an unsatisfied one would
     // otherwise surface as a missing method inside a monomorphized body the reader never wrote.
     checkBounds(decl, types)
-    instantiateFunc(decl, types)
+    (instantiateFunc(decl, types), types)
   }
+
+  /** What a generic callee's filled defaults read its type parameters as, once a call has settled
+   * them: the substitution its instantiation was made with, `Self` included, and its bounds.
+   */
+  protected def calleeTypes(f: FuncDecl, targs: List[Type]): DefaultTypes =
+    (withSelf(f.name, f.tparams.zip(targs).toMap), f.bounds)
 
   /** The types a written list stands for, checked against the parameters it is a list *for*.
    *
@@ -870,15 +928,17 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
     // unused one — the library's `exit`, in a program that never panics — out of the module.
     if externDecls.contains(f.name) then externsUsed += f.name
 
-    val (name, pre) =
+    val (name, pre, types) =
       // **Written out, they are what settles the instantiation and nothing else is consulted**
       // (`reference/generics.md § [] means type application in a type, indexing in an expression`)
       // — not the arguments, and not the expected type. Their whole reason for existing is the call
       // inference cannot reach, so a solve running first would report a failure about a question
       // the reader has already answered.
       if targs.nonEmpty && authored(f.tparams).length == f.tparams.length then
-        (instantiationWritten(shown, f, targs, atCall = true), None)
-      else if f.tparams.isEmpty then (f.name, None)
+        val (n, ts) = writtenInstantiation(shown, f, targs, atCall = true)
+
+        (n, None, calleeTypes(f, ts))
+      else if f.tparams.isEmpty then (f.name, None, noDefaultTypes)
       else
         // What a written list says, where the declaration also carries the sugar's own parameters.
         // The written ones are answered and the rest are solved below exactly as they always were,
@@ -912,14 +972,15 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         val solved = inDecl(f.name)(
           solve(shown, f.tparams, f.params.map(_.typ), provisional.map(_.ty), f.retType, expected,
             args.zip(provisional).map((a, t) => adaptable(a, t)), f.bounds, written,
-            omitted = args.map(omittedLiteral)))
+            omitted = args.map(omittedLiteral), deferred = provisional.map(deferredDefault)))
         checkBounds(f, solved)
-        (instantiateFunc(f, solved), Some(provisional))
+        (instantiateFunc(f, solved), Some(provisional), calleeTypes(f, solved))
 
     val (params, rtype) = funcInsts(name)
     // A variadic's tail has no declared parameter to be checked against and is analyzed below, so
     // both lists are cut to the parameters — which is also what keeps them aligned.
-    val checked  = checkArgs(shown, params, args.take(params.length), pre.map(_.take(params.length)))
+    val checked  = checkArgs(shown, params, args.take(params.length), pre.map(_.take(params.length)),
+      types = types)
 
     checkCrossings(f.crossing, shown, params, checked)
 

@@ -305,6 +305,125 @@ class ArgumentTests
     }
   }
 
+  // `reference/declarations.md § Default parameters and named arguments`: a default may name its
+  // declaration's type parameters, which are part of the signature rather than local to it. It is
+  // read at each call, at what the call solved them to from the arguments it wrote and the type it
+  // is expected to have — and it plays no part in that solve.
+  "a default naming its declaration's type parameters" - {
+    "reaches an associated function, at whatever the call settles" in {
+      run("""|f[T: Zero + Add](x: T, step: T = T.zero()) -> T = x + step
+             |print(f(2.5))
+             |print(f(7))
+             |""".stripMargin) shouldBe "2.5\n7\n"
+    }
+
+    // `int(1.5)` is 1 and `real(1.5)` is 1.5, so the two lines can only agree with the expected
+    // output if the conversion was made at each call's own `T`.
+    "and a conversion written at the parameter's name" in {
+      run("""|g[T: Add](x: T, half: T = T(1.5)) -> T = x + half
+             |print(g(1.0))
+             |print(g(3))
+             |""".stripMargin) shouldBe "2.5\n4\n"
+    }
+
+    "at both float widths" in {
+      run("""|import sysl.math.Float
+             |
+             |tuned[F: Float](f: F, a4: F = F(440.0)) -> F = f + a4
+             |val h: f32 = 0.5
+             |val d: f64 = 0.25
+             |print(tuned(h))
+             |print(tuned(d))
+             |""".stripMargin) shouldBe "440.5\n440.25\n"
+    }
+
+    "and an explicit argument still stands in its place" in {
+      run("""|f[T: Zero + Add](x: T, step: T = T.zero()) -> T = x + step
+             |g[T: Add](x: T, half: T = T(1.5)) -> T = x + half
+             |print(f(7, 3))
+             |print(g(1.0, half = 0.25))
+             |""".stripMargin) shouldBe "10\n1.25\n"
+    }
+
+    "a generic struct's method may name the struct's parameter" in {
+      run("""|struct Acc[T: Zero + Add]
+             |    v: T
+             |
+             |    plus(self, by: T = T.zero()) -> T = self.v + by
+             |    mix[U: Add](self, u: U, extra: U = U(1.5), base: T = T(2.5)) -> U = u + extra
+             |end Acc
+             |
+             |print(Acc(2.5).plus())
+             |print(Acc(4).plus())
+             |print(Acc(4).plus(5))
+             |print(Acc(4).mix(1.0))
+             |print(Acc(4).mix(1))
+             |""".stripMargin) shouldBe "2.5\n4\n9\n2.5\n2\n"
+    }
+
+    "and an associated function of a generic type its own" in {
+      run("""|struct Acc[T: Zero]
+             |    v: T
+             |
+             |    start(v: T = T.zero()) -> Acc[T] = Acc(v)
+             |end Acc
+             |
+             |val a: Acc[real] = Acc.start()
+             |print(a.v)
+             |print(Acc.start(3).v)
+             |""".stripMargin) shouldBe "0\n3\n"
+    }
+
+    // The expected type is one of the two things that may settle `T`, and the default is not.
+    "a 'T' only the expected type settles is read there" in {
+      run("""|f[T: Zero](x: T = T.zero()) -> T = x
+             |val n: u8 = f()
+             |print(n)
+             |""".stripMargin) shouldBe "0\n"
+    }
+
+    "while one nothing but the default could settle is refused as uninferable" in {
+      err("""|f[T: Zero](x: T = T.zero()) -> T = x
+             |print(f())
+             |""".stripMargin) should include("cannot infer the type argument 'T' of 'f' here")
+    }
+
+    // The callee's `T`, never the caller's: `g` is generic over a `T` of its own, a `string` here,
+    // and the default it fills for `f` is read at the `int` that `f(5)` settles.
+    "the parameter is the callee's even inside a caller generic over a 'T' of its own" in {
+      run("""|f[T: Zero + Add](x: T, y: T = T.zero()) -> T = x + y
+             |g[T](t: T) -> int = f(5)
+             |print(g("s"))
+             |""".stripMargin) shouldBe "5\n"
+    }
+
+    // Read per call, and only by a call that leaves the argument out.
+    "is evaluated only by a call that takes it, once each" in {
+      run("""|loud[T](v: T) -> T
+             |    print("filled")
+             |    v
+             |
+             |f[T: Zero](x: T, y: T = loud(T.zero())) -> T = y
+             |print(f(1, 2))
+             |print(f(3))
+             |print(f(4.5))
+             |""".stripMargin) shouldBe "2\nfilled\n0\nfilled\n0\n"
+    }
+
+    "a default may still not name another parameter" in {
+      err("""|f[T](x: T, y: T = x) -> T = y
+             |print(f(1))
+             |""".stripMargin) should include("undefined name 'x'")
+    }
+
+    // Held to `T`'s bounds where it is written, as a body would be — nothing calls `f` here.
+    "a member the bounds do not promise is refused at the declaration" in {
+      err("""|f[T](x: T, step: T = T.zero()) -> T = x
+             |print(1)
+             |""".stripMargin) should include("'zero' needs 'T: ")
+    }
+  }
+
   "a trait's default" - {
     // `reference/declarations.md § Default parameters and named arguments`: the trait's declaration
     // is what a call names, so the default is filled before the dispatch and means the same thing

@@ -19,17 +19,21 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
   /** Every parameter list that may carry a default, checked once each. */
   protected def checkValueDefaults(): Unit = {
     for (key, f) <- funcDecls.toList do
-      inScope(scopeFor(key))(check(qn(key), Some(key), f.params, f.variadic, expectedAt(key, f, 0)))
+      inScope(scopeFor(key))(check(qn(key), Some(key), f.params, f.variadic, expectedAt(key, f, 0),
+        standing(key, f)))
 
     for ((tname, mname), m) <- memberDecls.toList do
+      // A member whose signature is written in terms nothing has fixed — its type's parameters,
+      // its own, or the one a bare arrow added — is kept as it was written, and *that* is the
+      // list its defaults are read against. Its lowered form carries the type's parameters as
+      // well as the member's, which is why the answer comes from there rather than from `m`.
+      val generic = genericMembers.get((tname, mname))
+
       inDecl(tname)(check(s"${qn(tname)}.$mname", Some(tname), m.params, m.variadic,
-        // A member whose signature is written in terms nothing has fixed — its type's parameters,
-        // its own, or the one a bare arrow added — is kept as it was written, and *that* is the
-        // list its defaults are read against. Its lowered form carries the type's parameters as
-        // well as the member's, which is why the answer comes from there rather than from `m`.
-        genericMembers.get((tname, mname)) match
+        generic match
           case Some(fd) => expectedAt(fd.name, fd, m.recvMode.size)
-          case None     => memberTyped(tname, mname, m.recvMode.size)))
+          case None     => memberTyped(tname, mname, m.recvMode.size),
+        generic.fold(noDefaultTypes)(fd => standing(fd.name, fd))))
 
     // An `impl` block's members are the one kind refused outright, so they are not checked for
     // anything else — the refusal is the whole of what this has to say about them.
@@ -50,6 +54,7 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
       params: List[Param],
       variadic: Boolean,
       expectedAt: Int => Option[Type],
+      types: DefaultTypes,
   ): Unit = {
     if params.exists(_.default.isDefined) then
       // C reads a variadic call's tail relative to the last named argument (`reference/ffi.md §
@@ -78,19 +83,46 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
         // Analyzed exactly as the call that takes it will analyze it: in this declaration's terms
         // and with nothing local in scope, so a default naming a parameter is undefined here and
         // says so rather than finding a caller's variable of that name.
-        val t = inDefault(owner)(analyzeExpr(d, expectedAt(i)))
+        //
+        // Its declaration's type parameters are in scope, each standing for itself.
+        def read() = withDefaultTypes(types)(inDefault(owner)(inDefaultTypes(analyzeExpr(d, expectedAt(i)))))
 
-        // **Asked only of a parameter whose type is settled here.** Where a type parameter stands
-        // for itself the two sides are not comparable: a closure default at a `$F0` yields the
-        // struct that closure became, which is what an instantiation *solves* `$F0` to, so a
-        // mismatch here would be the stand-in disagreeing with the thing it stands for. That
-        // comparison belongs to the call that fixes it, and it happens there.
-        for want <- expectedAt(i) if !Type.mentionsAbstract(want) && disagree(t.ty, want) do
-          err(s"the default for '${p.name}' is ${show(t.ty)}, and the parameter is ${show(want)}")
+        // **A default that NAMES one is read the way a generic body is at its definition**
+        // (`reference/generics.md § Bounds`): what the bounds do not license is reported here, and
+        // so is a name that names nothing, while the rest — a conversion at `T`, which is checked
+        // at each instantiation (`reference/generics.md § Converting through a parameter`) — is
+        // left to the call that settles `T`, as it is in a body.
+        val t =
+          if namesTypeParam(d, (types._1.keySet ++ types._2.keySet).filterNot(_.startsWith("$"))) then
+            val saved = abstractPass
 
-        for key <- owner do exposed(shown, key, p.name, t)
+            abstractPass = true
+            try recover(None)(Some(read()))
+            finally abstractPass = saved
+          else Some(read())
+
+        for t <- t do
+          // **Asked only of a parameter whose type is settled here.** Where a type parameter stands
+          // for itself the two sides are not comparable: a closure default at a `$F0` yields the
+          // struct that closure became, which is what an instantiation *solves* `$F0` to, so a
+          // mismatch here would be the stand-in disagreeing with the thing it stands for. That
+          // comparison belongs to the call that fixes it, and it happens there.
+          for want <- expectedAt(i) if !Type.mentionsAbstract(want) && disagree(t.ty, want) do
+            err(s"the default for '${p.name}' is ${show(t.ty)}, and the parameter is ${show(want)}")
+
+          for key <- owner do exposed(shown, key, p.name, t)
       }))
   }
+
+  /** Whether an expression names one of `tps` — as a value (`T.zero()`, `T(0.0)`) or as a type
+   * written inside it. Read off the written tree, which is every node a default can hold.
+   */
+  private def namesTypeParam(e: Any, tps: Set[String]): Boolean = tps.nonEmpty && (e match
+    case Ident(n) if tps(n)        => true
+    case NamedType(n, _) if tps(n) => true
+    case p: Product                => p.productIterator.exists(namesTypeParam(_, tps))
+    case xs: Iterable[?]           => xs.exists(namesTypeParam(_, tps))
+    case _                         => false)
 
   /** A default is the one part of a signature a call does not write, so what it names has to reach
    * as far as the declaration does (`reference/modules.md § Visibility`) — otherwise a caller who
@@ -154,6 +186,13 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
    * the one spelling made for taking a closure, was the one spelling whose default could not be
    * one.
    */
+  /** A generic declaration's type parameters each standing for itself, with their bounds — what its
+   * defaults may name at the declaration, where no call has settled them yet.
+   */
+  private def standing(lowered: String, f: FuncDecl): DefaultTypes =
+    if f.tparams.isEmpty then noDefaultTypes
+    else (withSelf(lowered, abstractSubst(f.tparams, f.bounds, f.tvalues, f.tpacks)), f.bounds)
+
   private def expectedAt(lowered: String, f: FuncDecl, skip: Int)(i: Int): Option[Type] =
     typed(lowered)(i + skip).orElse(
       f.params

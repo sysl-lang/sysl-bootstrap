@@ -170,6 +170,7 @@ trait CallAnalysis extends OperatorCalls {
       mbounds,
       known,
       passed.map(omittedLiteral),
+      provisional.map(deferredDefault),
     ))
 
     val (ownerTps, ownTps)   = fd.tparams.splitAt(fd.tparams.length - m.tparams.length)
@@ -186,7 +187,9 @@ trait CallAnalysis extends OperatorCalls {
     val (params, rtype) = funcInsts(name)
 
     funcsUsed += name
-    TCall(name, checkArgs(fd.name, params, passed, Some(provisional)) ::: tail.map(variadicArg(_)), rtype)
+    val checked = checkArgs(fd.name, params, passed, Some(provisional), types = calleeTypes(fd, targs))
+
+    TCall(name, checked ::: tail.map(variadicArg(_)), rtype)
   }
 
   /** Passes the receiver in the mode the method's `self` declared, inserting the same conversion

@@ -165,12 +165,18 @@ trait MethodCalls extends FuncAddress with VectorMethods with AbstractMethods {
             // of the slots — so the cut is one past what a free function's would be.
             val (declared, tail) = bound.splitAt(params.length - 1)
             val recvArg  = buildReceiver(m.receiver.get, tr, mname)
-            val restArgs = declared.zip(params.tail).map { case (a, (_, pty)) => analyzeExpr(a, Some(pty)) }
+            // A member of a generic type may default to something naming the type's parameters,
+            // which the receiver has already settled.
+            val types    = genericMembers.get((base, chosen)).fold(noDefaultTypes)(calleeTypes(_, targs))
+            val restArgs = declared.zip(params.tail).map { case (a, (_, pty)) =>
+              if a.isInstanceOf[DefaultArg] then withDefaultTypes(types)(analyzeExpr(a, Some(pty)))
+              else analyzeExpr(a, Some(pty))
+            }
             funcsUsed += fname
 
             val checked =
               checkArgs(if callable then shown else fname, params, declared,
-                        Some(recvArg :: restArgs), callable)
+                        Some(recvArg :: restArgs), callable, types)
 
             checkCrossings(m.crossing, shown, params, checked)
             recheckAfter(recvArg, TCall(fname, checked ::: tail.map(variadicArg(_)), rtype))
@@ -476,6 +482,7 @@ trait MethodCalls extends FuncAddress with VectorMethods with AbstractMethods {
           spellSelfBounds(fd.bounds, spell),
           written,
           passed.map(omittedLiteral),
+          provisional.map(deferredDefault),
         ))
 
     // The member's own bounds, resolved with the receiver's arguments to hand. A bare arrow is
@@ -490,7 +497,8 @@ trait MethodCalls extends FuncAddress with VectorMethods with AbstractMethods {
     val (params, rtype) = funcInsts(name)
     val recvArg         = buildReceiver(m.receiver.get, recv, m.name)
 
-    val checked = checkArgs(shown, params, passed, Some(recvArg :: provisional))
+    val checked =
+      checkArgs(shown, params, passed, Some(recvArg :: provisional), types = calleeTypes(fd, ownerArgs ::: own))
 
     checkCrossings(m.crossing, shown, params, checked)
     recheckAfter(recvArg, TCall(name, checked ::: tail.map(variadicArg(_)), rtype))

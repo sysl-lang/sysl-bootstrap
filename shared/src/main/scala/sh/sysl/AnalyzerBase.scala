@@ -164,6 +164,48 @@ trait AnalyzerBase extends Scoping {
    */
   protected var pbounds: Map[String, String] = Map.empty
 
+  /** What the callee's type parameters are **at the call whose default is being read**, and what they
+   * were bounded by (`reference/declarations.md § Default parameters and named arguments`).
+   *
+   * A default may name its declaration's type parameters — `step: T = T.zero()` — because they are
+   * part of the signature rather than local to it, and a call knows them once it is solved. So the
+   * default is read with *these* standing where a body's `tsubst` and `tbounds` stand, and with
+   * nothing of the caller's: a caller that is itself generic over a `T` has a `T` of its own, and it
+   * is not the one the default meant.
+   */
+  protected type DefaultTypes = (Map[String, Type], Map[String, List[BoundRef]])
+
+  protected val noDefaultTypes: DefaultTypes = (Map.empty, Map.empty)
+
+  private var defaultTypes: DefaultTypes = noDefaultTypes
+
+  /** Runs `body` — the analysis of one filled default — with `types` as the callee's. */
+  protected def withDefaultTypes[T](types: DefaultTypes)(body: => T): T = {
+    val saved = defaultTypes
+
+    defaultTypes = types
+    try body
+    finally defaultTypes = saved
+  }
+
+  /** Runs `body` with the callee's type parameters as the only ones in scope, and hands nothing on:
+   * a call written inside the default reads its own defaults in its own callee's terms.
+   */
+  protected def inDefaultTypes[T](body: => T): T = {
+    val (savedSubst, savedBounds, savedP, savedD) = (tsubst, tbounds, pbounds, defaultTypes)
+
+    tsubst = defaultTypes._1
+    tbounds = defaultTypes._2
+    pbounds = Map.empty
+    defaultTypes = noDefaultTypes
+    try body
+    finally
+      tsubst = savedSubst
+      tbounds = savedBounds
+      pbounds = savedP
+      defaultTypes = savedD
+  }
+
   /** The body's own names standing for a **by-name** parameter (`reference/declarations.md §
    * Default parameters and named arguments`).
    *
