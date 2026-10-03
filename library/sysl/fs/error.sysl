@@ -33,8 +33,14 @@ module sysl.fs
 // **The gate is `bsd` rather than `macos`, and it always meant that** -- `__error` is what every BSD
 // libc calls this, and Darwin being the only one here made the narrower symbol look right for as
 // long as there were two hosted systems (`Os.bsd`).
+//
+// **Android's Bionic is a Linux libc that does not spell it glibc's way**: its accessor is `__errno`,
+// and it has no `__errno_location` at all, so the `#else` would leave an Android program failing at
+// the link on a name its libc never had.
 #if bsd
 private[sysl] extern "__error" errno_location() -> *i32
+#elif android
+private[sysl] extern "__errno" errno_location() -> *i32
 #else
 private[sysl] extern "__errno_location" errno_location() -> *i32
 #endif

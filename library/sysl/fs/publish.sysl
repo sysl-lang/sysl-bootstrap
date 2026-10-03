@@ -121,7 +121,20 @@ end pending_token
  * in microseconds -- two processes starting in the same microsecond would then agree, which is the
  * one case the count cannot separate, and is why the kernel is asked first.
  */
-#if posix
+#if android
+private drawn_token() -> u64
+    var b: [8]u8
+
+    c_arc4random_buf(as_mut_ptr(b), b.len)
+
+    get_u64_le(b).unwrap_or(u64(now().us))
+
+// **Bionic has `getentropy(2)` only from API 28**, and `aarch64-android` is API 24, so the call every
+// other POSIX host makes here would leave an Android program failing at its link. `arc4random_buf(3)`
+// is in Bionic at every API level and cannot fail -- it returns nothing and fills the whole buffer --
+// so there is no short read to handle. It is not the answer everywhere: glibc has it only from 2.36.
+private extern "arc4random_buf" c_arc4random_buf(buf: *u8, n: usize) -> unit
+#elif posix
 private drawn_token() -> u64
     var b: [8]u8
 
