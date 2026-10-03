@@ -7,6 +7,14 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+- **An alias of an application of a type with a destructor now dies as that type does.** `type M =
+  Option[&Handle]`, named from a `@no_os` program, was charged nothing although its value runs
+  `Handle`'s destructor; it is now refused with *"a 'sys.M' can die here, and its destructor reaches
+  'sys'"*, exactly as `Option[&Handle]` written out is. A bare alias (`type H = Handle`) was already
+  followed. Behaviour change: a program that compiled only through this hole is now refused.
+
 ## 0.0.159 — 2026-10-03
 
 **a type costs what it runs, not what names it**

@@ -44,6 +44,14 @@ trait ConstrainedTypes extends GenericInstantiation {
    */
   override protected def followAlias(key: String): String = aliasedKey(key)
 
+  // Asked as a question that may have no answer, and leaving nothing registered: the caller wants to
+  // know what the alias holds, not to instantiate anything on its behalf.
+  override protected def aliasedType(key: String): Option[Type] = {
+    val k = aliasedKey(key)
+
+    if plainAlias(k) then probe(resolveAlias(k)) else None
+  }
+
   protected def aliasedKey(key: String): String = {
     var seen = key
     var steps = 0
