@@ -52,6 +52,27 @@ change what an existing program means. Where it does, the release says so.
 - On thumb-freestanding-softfp, musicbox's `Synth.render` frame goes from **11,128 B to 104 B**, and a
   `*self` method calling a `self` one over a 4 KB struct from 8,224 B to 0.
 
+**A large result is built where it is going, and copied there only where the copy could be seen**
+
+- **A local returned on every path is built in the caller's storage.** `var s = Synth(…); s.rewind();
+  Ok(s)` puts `s` in the payload of the caller's `Result` from its declaration, so the `Ok` writes the
+  tag and nothing else. It covers `s` returned alone or as one argument of a variant or struct
+  (`Ok(s)`, `Some(s)`, `Held(s, n)`), with any `return` before `s` exists returning anything. A copy is
+  kept where it could be told apart: another value returned after `s` exists, another argument of the
+  result mentioning `s`, `s`'s address going anywhere but straight into a call, a `defer`, or — where
+  its address does go into a call — a postcondition or a release that could run a destructor between
+  the `return` and the end of the function.
+- **A `match` or `if` producing a large value builds each branch's value in place**, with no merge
+  slot, and an arm `V(x) -> x` over a local copies the payload straight from the matched value:
+  `Result.unwrap` and `Option.unwrap` no longer stage the whole value twice.
+- **A large call result read through its address** — a receiver, as in `synth(…).unwrap()` — is
+  written into the slot the read uses and released there, instead of being loaded whole, stored again,
+  and released by value.
+- On thumb-freestanding-softfp, musicbox's `synth` frame goes from **7,544 B to 1,976 B**,
+  `Result[Synth, MusicError].unwrap` from **5,568 B to 8 B**, and a board program's `boot` calling
+  them from **22,560 B to 11,464 B** — the deepest stack along `boot → synth` from 30,104 B to
+  13,440 B.
+
 ## 0.0.160 — 2026-10-03
 
 **__VERSION__, and defaults read at the type each call settles**

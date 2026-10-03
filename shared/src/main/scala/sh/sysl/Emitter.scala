@@ -258,6 +258,17 @@ trait Emitter {
    */
   protected var tailParams: List[(String, Type)] = Nil
 
+  /** The local of the function being emitted that lives in the caller's result storage rather than
+   * in a slot of its own (`ReturnSlot`), where it has one.
+   */
+  protected var returnSlot: Option[ReturnSlot.Plan] = None
+
+  /** The entries of `tempStack` that are slots a large temporary was written into, released at
+   * their address rather than as a value (`ArcEmitter.ownTempAt`). Registers are per function, so
+   * this is too.
+   */
+  protected var tempSlots = mutable.HashSet.empty[ir.Val]
+
   /** Whether this call is the one the walk named, rather than merely equal to it. */
   protected def isTailCall(c: TCall): Boolean = tailCalls.exists(_ eq c)
 
@@ -502,6 +513,8 @@ trait Emitter {
     tailTarget = None
     tailCalls = Nil
     tailParams = Nil
+    returnSlot = None
+    tempSlots = mutable.HashSet.empty
     scratch = mutable.HashMap.empty
     promoted = Set.empty
     promotedBoxes = mutable.HashMap.empty
@@ -852,7 +865,7 @@ trait Emitter {
     // with a jump in it — so what says where that jump goes is put back too. Without this the helper's
     // reset would leave the interrupted function with no target and its remaining tail calls would be
     // emitted as ordinary ones, which is a miscompile only a body long enough to need a helper shows.
-    val savedTail = (tailTarget, tailCalls, tailParams)
+    val savedTail = (tailTarget, tailCalls, tailParams, returnSlot, tempSlots)
     // And the names the interrupted function's registers took, which its remaining uses still read.
     val savedNames = (addressed, relaid)
 
@@ -866,6 +879,7 @@ trait Emitter {
     blocks = savedBlocks._1; current = savedBlocks._2
     currentEnd = savedBlocks._3; currentLbl = savedBlocks._4; reached = savedBlocks._5
     tailTarget = savedTail._1; tailCalls = savedTail._2; tailParams = savedTail._3
+    returnSlot = savedTail._4; tempSlots = savedTail._5
     addressed = savedNames._1; relaid = savedNames._2
     built
   }

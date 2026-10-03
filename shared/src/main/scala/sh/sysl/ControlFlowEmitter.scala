@@ -19,12 +19,13 @@ import ir.{Access, Arg, BinOp, ICmp, Inst, Val}
  */
 trait ControlFlowEmitter extends PlaceEmitter {
 
-  protected def genIf(cond: List[TCondTerm], thenBlock: TBlock, elseBlock: Option[TBlock], ty: Type): Val = {
+  protected def genIf(cond: List[TCondTerm], thenBlock: TBlock, elseBlock: Option[TBlock], ty: Type,
+                      into: Option[Val] = None): Val = {
     val thenL  = freshLabel("if.then")
     val elseL  = freshLabel("if.else")
     val endL   = freshLabel("if.end")
     val target = if elseBlock.isDefined then elseL else endL
-    val slot   = if Type.noValue(ty) then Val.Nothing else emitAlloca(freshReg(), ty.lty)
+    val slot   = merge(ty, into, None)
 
     // The last term's success edge is the branch's entry, so a condition with nothing to bind emits
     // exactly the one test and the one `br` it always did.
@@ -45,11 +46,30 @@ trait ControlFlowEmitter extends PlaceEmitter {
 
     emitLabel(endL)
     endsNowhere(ty)
-    if Type.noValue(ty) then Val.Nothing
-    // Each branch handed its value over with a count taken, so what the merge loads is the
-    // one temporary the enclosing region has to let go of.
-    else { val r = freshReg(); emit(Inst.Load(r, ty.lty, slot, Access.Plain)); ownTemp(r, ty) }
+    slot match
+      case Merge.Slot(at) if !Type.noValue(ty) =>
+        // Each branch handed its value over with a count taken, so what the merge loads is the
+        // one temporary the enclosing region has to let go of.
+        val r = freshReg(); emit(Inst.Load(r, ty.lty, at, Access.Plain)); ownTemp(r, ty)
+      case _ => Val.Nothing
   }
+
+  /** Where the branches of an `if` or a `match` leave their value. */
+  protected enum Merge:
+    /** A slot of the construct's own, loaded into a register where the branches meet. */
+    case Slot(at: Val)
+
+    /** The storage a large value is going to (`genOwnedInto`'s destination), which each branch
+     * builds its value in and owns; nothing is loaded where they meet. `scrutinee` is the address
+     * of the value a `match` is over, where it is a local's — what lets an arm that hands back a
+     * payload unchanged copy it from there rather than bind it first (`payloadMove`).
+     */
+    case Into(at: Val, scrutinee: Option[Val])
+
+  private def merge(ty: Type, into: Option[Val], scrutinee: Option[Val]): Merge = into match
+    case Some(dest)                => Merge.Into(dest, scrutinee)
+    case None if Type.noValue(ty)  => Merge.Slot(Val.Nothing)
+    case None                      => Merge.Slot(emitAlloca(freshReg(), ty.lty))
 
   /** What emitting a condition left open: the owned scopes its `is` terms pushed for their
    * bindings, and the small blocks that sit on the edges leaving the chain part-way through.
@@ -179,9 +199,11 @@ trait ControlFlowEmitter extends PlaceEmitter {
    * or returns — has no value to feed and terminates its own block, so it is run for its effect
    * and nothing is stored: the merge is reached only from the branches that do arrive.
    */
-  protected def storeBlockValue(b: TBlock, ty: Type, slot: Val): Unit =
+  protected def storeBlockValue(b: TBlock, ty: Type, slot: Merge): Unit =
     if b.ty == Type.Never then genBlockVoid(b)
-    else emit(Inst.Store(ty.lty, genBlockValue(b), slot, Access.Plain))
+    else slot match
+      case Merge.Slot(at)    => emit(Inst.Store(ty.lty, genBlockValue(b), at, Access.Plain))
+      case Merge.Into(at, _) => genBlockInto(b, at)
 
   /** Closes the merge point of an `if`, a `match`, or a loop whose every path diverges: no branch
    * arrives, so the label control would have landed on is unreachable.
@@ -194,10 +216,15 @@ trait ControlFlowEmitter extends PlaceEmitter {
   protected def endsNowhere(ty: Type): Unit =
     if ty == Type.Never then emitTerm(Inst.Unreachable)
 
-  protected def genMatch(scrutinee: TExpr, arms: List[TArm], ty: Type): Val = {
+  protected def genMatch(scrutinee: TExpr, arms: List[TArm], ty: Type, into: Option[Val] = None): Val = {
     val sv   = genExpr(scrutinee)
     val endL = freshLabel("match.end")
-    val slot = if Type.noValue(ty) then Val.Nothing else emitAlloca(freshReg(), ty.lty)
+    // A local's address is taken only where an arm may read a payload through it, and taking it is
+    // free: no arm writes anything before it reads.
+    val at   = scrutinee match
+      case l: TLoad if into.isDefined && layout.indirect(l.ty) => Some(address(l))
+      case _                                                   => None
+    val slot = merge(ty, into, at)
 
     tagSwitch(arms) match
       case Some(dispatch) => genTagSwitch(dispatch, sv, ty, slot, endL)
@@ -205,8 +232,10 @@ trait ControlFlowEmitter extends PlaceEmitter {
 
     emitLabel(endL)
     endsNowhere(ty)
-    if Type.noValue(ty) then Val.Nothing
-    else { val r = freshReg(); emit(Inst.Load(r, ty.lty, slot, Access.Plain)); ownTemp(r, ty) }
+    slot match
+      case Merge.Slot(at) if !Type.noValue(ty) =>
+        val r = freshReg(); emit(Inst.Load(r, ty.lty, at, Access.Plain)); ownTemp(r, ty)
+      case _ => Val.Nothing
   }
 
   /** What a `match` is when the scrutinee's discriminant alone decides the arm: the enum it is read
@@ -262,7 +291,7 @@ trait ControlFlowEmitter extends PlaceEmitter {
    * `unreachable` an exhaustive value match ended in — for a statement match too, wherever the
    * table names every variant (`everyVariant`).
    */
-  private def genTagSwitch(d: TagDispatch, sv: Val, ty: Type, slot: Val, endL: String): Unit = {
+  private def genTagSwitch(d: TagDispatch, sv: Val, ty: Type, slot: Merge, endL: String): Unit = {
     val tagVal =
       if d.en.simple then sv
       else { val t = freshReg(); emit(Inst.Extract(t, d.en.lty, sv, List(0))); t }
@@ -311,10 +340,11 @@ trait ControlFlowEmitter extends PlaceEmitter {
   /** An arm's bindings and body, in the block the branch to it has already opened. Only a single
    * (non-alternative) pattern may bind, which is what makes one block serve several tags.
    */
-  private def genArmBody(arm: TArm, sv: Val, ty: Type, slot: Val, endL: String): Unit = {
+  private def genArmBody(arm: TArm, sv: Val, ty: Type, slot: Merge, endL: String): Unit = {
     pushOwned()
-    if arm.patterns.lengthIs == 1 then patternBind(arm.patterns.head, sv)
-    if Type.noValue(ty) then genBlockVoid(arm.body) else storeBlockValue(arm.body, ty, slot)
+    if !payloadMove(arm, slot) then
+      if arm.patterns.lengthIs == 1 then patternBind(arm.patterns.head, sv)
+      if Type.noValue(ty) then genBlockVoid(arm.body) else storeBlockValue(arm.body, ty, slot)
     popOwned()
     emitTerm(Inst.Br(endL))
   }
@@ -322,7 +352,7 @@ trait ControlFlowEmitter extends PlaceEmitter {
   /** Every other `match`: each arm tested in turn, falling through to the next one when its pattern
    * or its guard says no.
    */
-  private def genArmChain(arms: List[TArm], sv: Val, ty: Type, slot: Val, endL: String): Unit = {
+  private def genArmChain(arms: List[TArm], sv: Val, ty: Type, slot: Merge, endL: String): Unit = {
     for arm <- arms do
       val bodyL = freshLabel("match.arm")
       val nextL = freshLabel("match.next")
@@ -334,12 +364,16 @@ trait ControlFlowEmitter extends PlaceEmitter {
       // Only a single (non-alternative) pattern may bind.
       def bind(): Unit = if arm.patterns.length == 1 then patternBind(arm.patterns.head, sv)
 
+      // An arm that only hands a payload back has done all of its work once it is written.
+      var moved = false
+
       arm.guard match
         case None =>
           emitTerm(Inst.CondBr(patCond, bodyL, nextL))
           emitLabel(bodyL)
           pushOwned()
-          bind()
+          moved = payloadMove(arm, slot)
+          if !moved then bind()
         case Some(g) =>
           val guardL = freshLabel("match.guard")
           emitTerm(Inst.CondBr(patCond, guardL, nextL))
@@ -358,7 +392,8 @@ trait ControlFlowEmitter extends PlaceEmitter {
           emitTerm(Inst.Br(nextL))
           emitLabel(bodyL)
 
-      if Type.noValue(ty) then genBlockVoid(arm.body)
+      if moved then ()
+      else if Type.noValue(ty) then genBlockVoid(arm.body)
       else storeBlockValue(arm.body, ty, slot)
       popOwned()
       emitTerm(Inst.Br(endL))
@@ -892,7 +927,7 @@ trait ControlFlowEmitter extends PlaceEmitter {
     elseBlock.foreach { eb =>
       emitLabel(elseL)
       if Type.noValue(ty) then genBlockVoid(eb)
-      else storeBlockValue(eb, ty, slot)
+      else storeBlockValue(eb, ty, Merge.Slot(slot))
       emitTerm(Inst.Br(endL))
     }
     emitLabel(endL)
@@ -924,5 +959,45 @@ trait ControlFlowEmitter extends PlaceEmitter {
     popTemps()
     v
   }
+
+  /** A branch's value built where it is going, and owned there — `genBlockValue` for a destination.
+   * The count is taken before the block's locals are given back, as the register form's is.
+   */
+  private def genBlockInto(b: TBlock, dest: Val): Unit = {
+    pushTemps()
+    pushOwned()
+    b.stmts.foreach(genStmt)
+    genOwnedInto(dest, b.result.get)
+    popOwned()
+    popTemps()
+  }
+
+  /** `V(x) -> x` into a destination, over a local: the payload is copied from where the local holds
+   * it straight to where the value is going, and owned there, rather than bound into a slot of its
+   * own and copied a second time. Nothing in such an arm runs between the binding and the read, so
+   * no binding is visible to miss. `Result.unwrap` and `Option.unwrap` are this arm.
+   *
+   * Answers whether it wrote the arm.
+   */
+  private def payloadMove(arm: TArm, slot: Merge): Boolean = slot match
+    case Merge.Into(dest, Some(at)) if arm.guard.isEmpty && arm.body.stmts.isEmpty =>
+      (arm.patterns, arm.body.result) match
+        case (List(TVariantPattern(en, variant, args)), Some(TLoad(x, _))) if !en.simple =>
+          val named = args.zipWithIndex.collect { case (TBindPattern(n, _), i) => (n, i) }
+          val plain = args.forall(a => a.isInstanceOf[TBindPattern] || a.isInstanceOf[TWildPattern])
+
+          named match
+            case List((`x`, i)) if plain && layout.indirect(variant.fields(i)._2) =>
+              val fty = variant.fields(i)._2
+              val p   = freshReg()
+
+              emit(Inst.Gep(p, en.payloadLty(variant), payloadPtr(en, at),
+                            List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(variant.slot(i))))))
+              emitMemcpy(dest, p, layout.size(fty), layout.align(fty))
+              retainAt(fty, dest)
+              true
+            case _ => false
+        case _ => false
+    case _ => false
 
 }
