@@ -91,6 +91,18 @@ trait PlaceEmitter extends ArcEmitter with ScalarEmitter {
     // A computed value has no address of its own, so reaching into one means giving it a slot
     // first. The analyzer has already refused to *assign* through anything but a real place, so
     // this only ever happens on the way to a read.
+    //
+    // A large result of a call or of a branch is built in the slot and owned there, and given back
+    // at the slot with the statement's temporaries — `synth(…).unwrap()` hands `unwrap` the storage
+    // `synth` wrote, where producing it as a value first would be a second copy and its release a
+    // third.
+    case other @ (_: TCall | _: TMatch | _: TIf) if layout.indirect(other.ty) =>
+      val slot = emitAlloca(freshReg(), other.ty.lty)
+
+      genOwnedInto(slot, other)
+      ownTempAt(slot, other.ty)
+      slot
+
     case other =>
       val slot = emitAlloca(freshReg(), other.ty.lty)
       // A large one is written into the slot rather than produced and then stored into it — the

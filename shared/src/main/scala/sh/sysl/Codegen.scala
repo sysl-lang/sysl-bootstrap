@@ -40,6 +40,11 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
    */
   private lazy val addressTaken: Set[String] = CallOwnership.addressed(program)
 
+  /** Whether letting go of a value of a type can run one of the program's destructors
+   * (`ReturnSlot.destructive`), asked once per type of every body a local might be built in place in.
+   */
+  private lazy val runsCode: Type => Boolean = ReturnSlot.destructive(program)
+
   /** The large by-value parameters each function reads **where its caller put them**, with no copy
    * of its own at entry.
    *
@@ -678,6 +683,7 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     startFunction()
     promoted = promotions(Some(f.name))
     callerExposed = ContractAssume.exposed(f.body)
+    returnSlot = ReturnSlot.of(f, layout.indirect, promoted, runsCode)
     pushTemps()
     pushOwned()
     ensures = f.ensures.filterNot((c, _) => ghostly(c))
@@ -811,7 +817,9 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
    * announces it is willing to pay.
    */
   private def genIndirectReturn(r: TExpr): Unit = {
-    genOwnedInto(sretParam, r)
+    returnSlot.filter(p => ReturnSlot.pathOf(r, p.name).contains(p.path)) match
+      case Some(p) => genAround(sretParam, r, p.name)
+      case None    => genOwnedInto(sretParam, r)
 
     if ensures.nonEmpty then
       val v = freshReg(); emit(Inst.Load(v, r.ty.lty, sretParam, Access.Plain))
@@ -821,6 +829,50 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     releaseAll()
     emitTerm(Inst.Ret(None, None))
   }
+
+  /** The result around a local already built inside it (`ReturnSlot`): every other part of `e` is
+   * written where it goes and owned there, and the local's own bytes are left where they are. Its
+   * counts become the result's, which is why its slot was never registered for release.
+   */
+  private def genAround(dest: Val, e: TExpr, name: String): Unit = {
+    def part(at: Val, a: TExpr): Unit =
+      if ReturnSlot.pathOf(a, name).isDefined then genAround(at, a, name) else genOwnedInto(at, a)
+
+    e match
+      case TStructNew(struct, args) =>
+        for (a, i) <- args.zipWithIndex if !Type.zeroSized(struct.fields(i)._2) do
+          val p = freshReg()
+          emit(Inst.Gep(p, struct.lty, dest, List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(struct.slot(i))))))
+          part(p, a)
+
+      case TEnumNew(en, variant, args) =>
+        emit(Inst.Store(i32, Val.Int(variant.tag), dest, Access.Plain))
+        val base = payloadPtr(en, dest)
+
+        for (a, i) <- args.zipWithIndex if !Type.zeroSized(variant.fields(i)._2) do
+          val p = freshReg()
+          emit(Inst.Gep(p, en.payloadLty(variant), base, List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(variant.slot(i))))))
+          part(p, a)
+
+      // The local itself: it is already here.
+      case _ => ()
+  }
+
+  /** Where a local `ReturnSlot` chose lives: the part of the caller's result storage the `return`
+   * will leave it in, reached by the same steps the `return` writes around it.
+   */
+  private def returnSlotAddress(path: List[ReturnSlot.Step]): Val =
+    path.foldLeft(sretParam: Val) {
+      case (base, ReturnSlot.Step.Field(struct, i)) =>
+        val p = freshReg()
+        emit(Inst.Gep(p, struct.lty, base, List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(struct.slot(i))))))
+        p
+      case (base, ReturnSlot.Step.Payload(en, variant, i)) =>
+        val payload = payloadPtr(en, base)
+        val p       = freshReg()
+        emit(Inst.Gep(p, en.payloadLty(variant), payload, List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(variant.slot(i))))))
+        p
+    }
 
   /** What a calling convention becomes on the `define` line for **this** machine (`reference/ffi.md
    * § interrupt`).
@@ -902,6 +954,16 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
       retainValue(ty, v)
       emit(Inst.Store(ty.lty, v, addr, Access.Plain))
       ownBox(name, box, elem)
+
+    // The local every `return` hands back is built in the caller's result storage (`ReturnSlot`).
+    // Its counts are the result's from here on, so the slot is not registered for release: each way
+    // out of the function from this point is a `return` of it, which hands them over.
+    case TVarDecl(name, _, init, _) if returnSlot.exists(_.name == name) =>
+      val at   = returnSlotAddress(returnSlot.get.path)
+      val addr = Val.Reg(s"$name.addr")
+
+      emit(Inst.Gep(addr, LType.I(8), at, List(Arg(i32, Val.Int(0)))))
+      genOwnedInto(addr, init)
 
     // The slot is laid down **before** the initializer runs, because a large one is written into it
     // rather than handed to it: the callee of `val k = kernel()` needs somewhere to write.
