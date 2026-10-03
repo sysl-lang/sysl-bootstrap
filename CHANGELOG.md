@@ -7,19 +7,22 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
-## Unreleased
+## 0.0.159 — 2026-10-03
+
+**a type costs what it runs, not what names it**
 
 **a type costs what it runs, not what names it**
 
 One capability fix, released as an exception to the bootstrap freeze. It finishes what 0.0.157 and 0.0.158 began: a module was still charged a gated module's requirement whenever it *named* one of that module's types — in a field, a variant's payload, a signature or a type argument — though naming a type runs none of its code.
 
-### Behaviour changes
+#### Behaviour changes
 
 **Programs that were refused now build. Nothing that built before is refused now, with one exception below.**
 
 - **Naming a type from a gated module charges nothing.** A module whose error enum wraps `sysl.fs.IoError` for its one `@needs(os)` function is importable by a `@no_os` program, or one whose target has `os = false`, for everything else it declares. So is a module naming the type in an unannotated signature, in a struct field, or as a type argument such as `Option[IoError]`; and a `@no_os` program may construct a value of such a type itself.
-- **What a type runs is still charged, where it runs.** Calling one of its methods charges its module, exactly as calling a function does. A type with a destructor (`impl Drop`) charges its module wherever a value of it can die — and so does every type that holds one, through a field, a `&T`, a slice or an array. The refusal then reads *"a 'sys.Handle' can die here, and its destructor reaches 'sys', which requires 'os'"*, at the place the type is named.
-- **The exception:** a method call is now charged by itself. It used to be charged only through the type's name, so a module that called a gated type's method on a value whose type it never wrote down (an inferred one) was not charged for it; it is now. A call made inside a generic instantiation is still not charged to the generic's module, since the type was its caller's choice.
+- **What a type runs is still charged, where it runs.** Calling one of its methods charges its module, exactly as calling a function does; so do taking a method's address and erasing a value into a trait object. A type with a destructor (`impl Drop`) charges its module wherever a value of it can die — and so does every type that holds one, through a field, a `&T`, a slice or an array. The refusal then reads *"a 'sys.Handle' can die here, and its destructor reaches 'sys', which requires 'os'"*, at the place the type is named.
+- **The exception: a method call is now charged by itself.** It used to be charged only through the type's name, so a module that called a gated type's method on a value whose type it never wrote down (an inferred one) was not charged for it; it is now.
+- **Known limit:** a method called inside a generic instantiation is not charged to the generic's module, since the type was its caller's choice, made in a module of its own.
 
 ```sysl
 module store
@@ -35,7 +38,25 @@ save(p: string) -> Result[unit, Failure] = write_bytes(p, "x".bytes).map_err((e)
 version() -> int = 3
 ```
 
-A `@no_os` program may now `import store.version`; before this release it was refused at the import, because `Failure` names `IoError`.
+A `@no_os` program may now `import store.version`; before this release it was refused at the import, because `Failure` names `IoError`. A call to `save` from it is still refused, at the call.
+
+#### Fixes
+
+##### A type is charged for the code it runs, not for being named (140be899)
+
+The rule chosen is the user's option 2: a type is charged only for the code it runs.
+
+1. **Naming.** Resolving a type, trait, variant or alias (`typeKey`, `traitKey`, `variantKey`, `aliasedKey`, and a qualified path through a type in `throughModule`) records `EdgeUse.named` with the key, and `GatedModules.effective` charges a named use nothing. An import whose every use only names a type is charged nothing likewise.
+2. **Methods.** A method call names no module, so `GatedModules.chargeCalls` reads what each non-generic body runs off the typed tree (`Reachability.calledBy`: calls, addresses taken, tables erased into) and records a running use on the callee's module. These go into `edgeUses` only, never the module graph, so they cannot make a cycle; `requirements()` now walks `edgeUses`' keys.
+3. **Destructors.** A named use whose type can die running code — it, or anything it holds through a field, `&T`, slice or array, has an `impl Drop` — is charged as an ordinary reference, and reported ahead of the import.
+
+Tests: `TypeChargingTests` (new) — the `IoError`-wrapping enum builds and prints `3`; signature, field, type-argument, construction and qualified-path naming are free; the `@needs` call is refused at the call; a method call is refused; a `Drop` type and a type holding one are refused where held, a plain type beside it is not. `DeclCapabilityTests` and `TargetCapabilityTests`: the unannotated-signature case now builds (it asserted the old rule), plus the enum case on an `os = false` machine.
+
+#### Verification
+
+- Native gate on `140be899`: `GATE: GREEN`, 12343 succeeded, 0 failed. The release inherits it (gated sha 140be899; dev = 140be899 + version bump).
+- Warnings census clean (JVM / JS / Native / syslDocJVM / syslDocNative), every warning named and outside this repository.
+- Documented on sysl.sh: `reference/modules.md § A type costs what it runs`.
 
 ## 0.0.158 — 2026-10-02
 
