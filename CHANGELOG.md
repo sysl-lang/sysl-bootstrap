@@ -7,36 +7,34 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
-## Unreleased
+## 0.0.162 — 2026-10-03
 
-- **A `match` arm that hands back a large payload no longer copies it.** `val p: &Big = make() match
-  Ok(s) -> s; Err(_) -> return 1` builds the box and copies the payload straight from the call's
-  result into it; `var p = make() match …`, where every other arm leaves, makes `p` the payload
-  inside the result's own storage, with no copy at all. The call's result is written into one slot
-  and read through its address (only its tag is loaded to pick the arm), where it used to be loaded
-  whole, stored again and bound a third time. On thumb-freestanding-softfp, with a 4,104-byte
-  `Big`, `boot`'s frame goes 8,224 → 4,128 B (boxed) and 12,304 → 4,120 B (by value), against
-  4,128 B for `unwrap()`; musicbox-pico's `boot` goes 11,384 → 5,904 B. An arm that does anything
-  else with the binding still binds it, and every count is given back once (`MatchMoveTests`).
-- **`__NAME__` is the `name` in the `package.hocon` of the package a file belongs to**, the twin of
-  `__VERSION__`: a library's is its own, a default of it is the caller's (so a logging library's
-  `tag: string = __NAME__` names the application that called it), it folds in a `const`, and a file
-  with no package — or a manifest with no `name` — is refused at the use (`NameBuiltinTests`).
-- **Fix: `sysl run` replayed a stale binary after `package.hocon`'s `version` changed.** The run
-  cache was keyed on the source files and not on the manifest `__VERSION__` folds in, so bumping a
-  version in an unchanged tree printed the old one. The key now carries each file's manifest — path,
-  name and version (`RunCacheTests`). `AstCodec.Version` 61 → 62, since the manifest a source
-  carries through an artifact now holds its name.
+**__NAME__, sysl tidy, and a match arm that hands its payload back without copying it**
 
-- **`sysl tidy [<path>]` drops the `sysl.sum` lines for versions the project no longer resolves.**
-  A build only ever adds a line, so moving skitter from 0.1.0 to 0.3.0 left 0.1.0 recorded for
-  good. `tidy` resolves the whole graph — every feature, and `dev_dependencies` too, since a build
-  that pruned would drop whichever features it was not asked for — and keeps exactly the lines that
-  resolution reads, byte for byte and in place, printing `removed <coordinate> <tag>` for each one
-  it drops and nothing when the file was already tidy. A project depending on nothing or only on
-  paths ends with no `sysl.sum`, which is what a build leaves for one. `sysl tidy --check` writes
-  nothing and exits non-zero where the file is not tidy, for CI; outside a project with no
-  `package.hocon` it is refused. Builds are unchanged (`TidyTests`).
+**`__NAME__`, `sysl tidy`, and a `match` arm that hands its payload back without copying it**
+
+One behaviour change, two features and one code-generation change. `sysl run` and `sysl test` no longer replay a stale binary after a manifest's `version` moves. `__NAME__` reads the `name` in the code's own `package.hocon`, as `__VERSION__` reads its `version`. `sysl tidy` rewrites `sysl.sum` to exactly the lines the project's graph still reads. And a `match` arm that hands back a large payload now builds it where it is going, which halves musicbox-pico's `boot` frame.
+
+#### Behaviour change
+
+- **The run cache now keys on each package's manifest: its path, name and version** (3437cfe4). `sysl run` and `sysl test` used to key a built binary on the source files alone. The manifest `__VERSION__` folds in was not part of the key, so bumping `version` in an otherwise unchanged tree replayed the old binary and printed the old version. A change to any package's `package.hocon` name or version now rebuilds. Tests: `RunCacheTests`.
+  - `AstCodec.Version` 61 → 62, because the manifest a source carries through a `.syslib` now holds its name. A `.syslib` written by an older compiler is rebuilt rather than read.
+
+#### Features
+
+- **`__NAME__` is the `name` in the `package.hocon` of the package a file belongs to** (3437cfe4). It is the twin of `__VERSION__`, read from the same manifest under the same rules. A library's `__NAME__` is the library's own name. Written as a **default argument** it is the caller's, so a logging library's `logcat(msg: string, tag: string = __NAME__)` tags every message with the name of the application that called it. It is a string literal, so it folds into a `const` or a module-level `val`. A file that belongs to no package, or a manifest with no `name` key, is refused at the use: *"'__NAME__' is the 'name' in package.hocon, and this file is not part of a package"*, or *"… and …/package.hocon declares none"*. `reference/lexical.md § __NAME__ is the package's name`. Tests: `NameBuiltinTests`.
+- **`sysl tidy [<path>] [--check]`** (8af98063). A build only ever adds a line to `sysl.sum`, so moving a dependency from 0.1.0 to 0.3.0 left the 0.1.0 line recorded for good. `tidy` resolves the whole graph (every feature, and `dev_dependencies` too, since pruning by the features one build asked for would drop the others) and keeps exactly the lines that resolution reads. Live lines are kept byte for byte and in place. It prints `removed <coordinate> <tag>` or `added <coordinate> <tag>` for each line it changes, and nothing when the file was already tidy. A project depending on nothing, or only on paths, ends with no `sysl.sum`, which is what a build leaves for one. `sysl tidy --check` writes nothing and exits non-zero where the file is not tidy, for CI. Outside a project it is refused. Builds are unchanged and stay append-only. Tests: `TidyTests`.
+
+#### Code generation
+
+- **A `match` arm that hands back a large payload no longer copies it** (e4514a42). In `val p: &Big = make() match` with `Ok(s) -> s` and `Err(_) -> return 1`, the box is built and the payload copied straight from the call's result into it. In `var p = make() match …`, where every other arm leaves, `p` *is* the payload inside the result's own storage, with no copy at all. The call's result is written into one slot and read through its address; only its tag is loaded to pick the arm. It used to be loaded whole, stored again and bound a third time. An arm that does anything else with the binding still binds it, and every count is given back exactly once. Tests: `MatchMoveTests`.
+  - On `thumb-freestanding-softfp`, with a 4,104-byte `Big`, `boot`'s frame goes from **8,224 B to 4,128 B** for the boxed form and from **12,304 B to 4,120 B** for the local one, against 4,128 B for `unwrap()`. musicbox-pico's `boot` goes from **11,384 B to 5,904 B**.
+
+#### Verification
+
+- Full Native gate on `3ff7165e` (`./run-gate.sh`): **GATE: GREEN, 12502 succeeded, 0 failed**, no retries, nothing timed out. The release is that sha plus the version bump.
+- Warnings census clean (JVM / JS / Native / syslDocJVM / syslDocNative): after `clean`, **two / three / three / one / two**. Every warning is named, and none is in this repository: `Reader.scala:26:6` comes from scala-parser-combinators, `Set.scala:62:15` from the Scala.js scaladoc, and the rest are the build-infra `-Xplugin` and `-classpath` lines.
+- The darwin tarball was extracted to a scratch prefix and checked there: `sysl --version` reports 0.0.162 and `sysl doc` dispatches to `sysl-doc`. A package naming itself `probe-app` prints `[ probe-app ] started` through a `tag: string = __NAME__` default, and bumping its `version` from 1.2.3 to 1.2.4 with nothing else changed makes the next `sysl run` print 1.2.4.
 
 ## 0.0.161 — 2026-10-03
 
