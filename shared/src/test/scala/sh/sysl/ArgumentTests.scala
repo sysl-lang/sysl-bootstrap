@@ -422,6 +422,24 @@ class ArgumentTests
              |print(1)
              |""".stripMargin) should include("'zero' needs 'T: ")
     }
+
+    // A trait member's signature may also say `Self::Item`, which a bare arrow carries into a bound
+    // of its own; reading the defaults' type parameters must not lose the `Self` that bound means.
+    "on a trait member whose arrow names 'Self::Item'" in {
+      run("""|trait Mapper
+             |    type Item
+             |    first(self) -> Self::Item
+             |    over[N: Zero + Add](self, f: Self::Item -> N, base: N = N.zero()) -> N = base + f(self.first())
+             |struct One
+             |    v: int
+             |impl Mapper for One
+             |    type Item = int
+             |    first(self) -> int = self.v
+             |print(One(20).over(n -> n + 1))
+             |print(One(20).over(n -> n + 1, 100))
+             |print(One(2).over(n -> real(n) + 0.5))
+             |""".stripMargin) shouldBe "21\n121\n2.5\n"
+    }
   }
 
   "a trait's default" - {

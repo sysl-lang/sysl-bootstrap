@@ -47,6 +47,10 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
   /** One parameter list. `expectedAt` says what type an argument at a position would be checked
    * against; a default is analyzed against nothing only where the declaration is too broken to say,
    * which still holds it to naming something that exists and to naming nothing local.
+   *
+   * `standing` is what the defaults may name of the declaration's type parameters, and it is asked
+   * only of a list that has a default: building it resolves every bound, which a declaration with no
+   * default has no reason to have done on its behalf here.
    */
   private def check(
       shown: String,
@@ -54,8 +58,10 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
       params: List[Param],
       variadic: Boolean,
       expectedAt: Int => Option[Type],
-      types: DefaultTypes,
+      standing: => DefaultTypes,
   ): Unit = {
+    lazy val types = standing
+
     if params.exists(_.default.isDefined) then
       // C reads a variadic call's tail relative to the last named argument (`reference/ffi.md §
       // Variadic functions`), so an argument that might be the last declared parameter or might be
@@ -186,21 +192,30 @@ trait DefaultParams extends StmtAnalysis with SignatureVisibility {
    * the one spelling made for taking a closure, was the one spelling whose default could not be
    * one.
    */
-  /** A generic declaration's type parameters each standing for itself, with their bounds — what its
-   * defaults may name at the declaration, where no call has settled them yet.
-   */
-  private def standing(lowered: String, f: FuncDecl): DefaultTypes =
-    if f.tparams.isEmpty then noDefaultTypes
-    else (withSelf(lowered, abstractSubst(f.tparams, f.bounds, f.tvalues, f.tpacks)), f.bounds)
-
   private def expectedAt(lowered: String, f: FuncDecl, skip: Int)(i: Int): Option[Type] =
     typed(lowered)(i + skip).orElse(
       f.params
         .lift(i + skip)
-        .flatMap(p =>
-          recoverOpt(resolveType(
-            p.typ,
-            withSelf(lowered, abstractSubst(f.tparams, f.bounds, f.tvalues, f.tpacks)),
-          ))))
+        .flatMap(p => recoverOpt(resolveType(p.typ, standIns(lowered, f)))))
+
+  /** A generic declaration's type parameters each standing for itself, with their bounds — what its
+   * defaults may name at the declaration, where no call has settled them yet.
+   */
+  private def standing(lowered: String, f: FuncDecl): DefaultTypes =
+    if f.tparams.isEmpty then noDefaultTypes else (standIns(lowered, f), selfSpelled(lowered, f))
+
+  /** `f`'s type parameters standing for themselves, `Self` included.
+   *
+   * **The bounds are read with `Self` already spelled out as the receiver's type**, as a call's are
+   * (`MethodCalls.callGenericMethod`). A bound the arrow sugar added carries a parameter list's
+   * `Self` — `f: Self::Item -> N` on a trait member is `Fn(Self::Item) -> N` on a `$F` — and
+   * `abstractSubst` deliberately does not bind `Self` to that `$F`, so left as written it is a
+   * `Self` nothing binds.
+   */
+  private def standIns(lowered: String, f: FuncDecl): Map[String, Type] =
+    withSelf(lowered, abstractSubst(f.tparams, selfSpelled(lowered, f), f.tvalues, f.tpacks))
+
+  private def selfSpelled(lowered: String, f: FuncDecl): Map[String, List[BoundRef]] =
+    genericSelf.get(lowered).fold(f.bounds)((ref, _) => spellSelfBounds(f.bounds, spellSelf(_, ref)))
 
 }
