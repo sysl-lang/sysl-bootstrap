@@ -14,8 +14,9 @@ import sysl.time.{Instant, instant_text, now, us_per_milli}
  *
  * A **`Record`** is what happened: when, how bad, what about, and a handful of named strings. A
  * **`Sink`** is where it goes -- one method, taking the record by pointer. **`text`** and **`json`**
- * are two renderings, each writing into a `Writer`, and a sink is what chooses between them. That
- * is the whole of the module; everything else people want from a logger is a sink somebody writes.
+ * are two renderings, each writing into a `Writer`, and a sink is what chooses between them;
+ * **`message_text`** is the third, for a destination that stamps its own time and level. That is
+ * the whole of the module; everything else people want from a logger is a sink somebody writes.
  *
  * ```
  * info("listening", [("port", "8080"), ("tls", "on")])
@@ -218,9 +219,40 @@ text(r: *Record, out: *Writer)
     out.write(name_of(r.level).bytes)
     out.write(" ".bytes)
     out.write(r.message.bytes)
+    write_fields(r.fields, out, true)
+    out.write("\n".bytes)
+end text
 
-    for f in r.fields
-        out.write(" ".bytes)
+/** The message and its fields alone, quoted exactly as `text` quotes them, with no time, no level
+ * and no newline.
+ *
+ * ```
+ * underrun frames=512
+ * ```
+ *
+ * **This is the rendering for a destination that stamps its own time and level** -- Android's
+ * logcat, syslog, the systemd journal -- where `text` would write both a second time inside an
+ * entry that already shows them. Such a destination frames each entry itself, which is why there is
+ * no newline either.
+ *
+ * Nothing here reaches the calendar, so a sink that calls only this links no date code. An empty
+ * message with fields starts at the first field rather than at a space.
+ */
+message_text(r: *Record, out: *Writer)
+    out.write(r.message.bytes)
+    write_fields(r.fields, out, r.message.len > 0)
+
+/** Each field as ` key=value`, the value quoted when it has to be. `lead` says whether the first one
+ * needs the space in front of it, which it does after anything else on the line.
+ */
+private write_fields(fields: []const Field, out: *Writer, lead: bool)
+    var gap = lead
+
+    for f in fields
+        if gap then out.write(" ".bytes)
+
+        gap = true
+
         out.write(f.0.bytes)
         out.write("=".bytes)
 
@@ -230,9 +262,7 @@ text(r: *Record, out: *Writer)
             out.write("\"".bytes)
         else
             out.write(f.1.bytes)
-
-    out.write("\n".bytes)
-end text
+end write_fields
 
 /** One record, one JSON object, meant for a machine.
  *

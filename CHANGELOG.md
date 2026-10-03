@@ -7,6 +7,13 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+- `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
+  quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
+  destination stamps its own (logcat, syslog, journald). `text` now shares its field rendering and
+  writes the same bytes as before.
+
 ## 0.0.160 — 2026-10-03
 
 **__VERSION__, and defaults read at the type each call settles**
