@@ -424,9 +424,51 @@ trait ProgramWalk extends OpaqueResults with DropReturnCheck {
     val analyzed  = mutable.HashSet.empty[String]
     var reached   = true
 
+    // **A library function supplying a symbol an `extern` the program calls has declared is reached
+    // too**, though nothing names it (`reference/ffi.md § A module may supply another module's
+    // extern`). `sysl.time` declares `sysl_wall_us` and `sysl.posix.time` defines it, and no program
+    // imports the second — so asked only "did something call it?", a standard module compiled from
+    // source into the program (`build-c`, `--no-std-lib`, every freestanding target) analyzed the
+    // declaration and never the definition, and the link failed naming a symbol no line of the
+    // program contains. `Reachability.walk` then keeps the supplier as a root; this is what puts it
+    // in the program for that walk to find. Under a prebuilt standard module the supplier is
+    // precompiled like any other library function, so it is declared rather than emitted twice.
+    //
+    // **The standard library's supplier is the fallback, never a rival.** Where the program or a
+    // package it was handed supplies the same symbol — a board's RTC binding, compiled from source
+    // beside the library — that definition is the one that answers (`library/sysl/time/clock.sysl §
+    // The seam is decided where the DECLARING module is compiled`), so the library's is not reached
+    // and there is one claimant rather than a refusal.
+    def symbolOf(f: FuncDecl): Option[String] = f.exported.map(_.symbol.getOrElse(Modules.bare(f.name)))
+
+    val suppliedElsewhere = (ours ::: ourMembers).flatMap(symbolOf).toSet
+
+    // **And only a supplier whose module this machine can run.** The library is analyzed whole on
+    // every target, so `sysl.posix.time` is in the tables on a board too; its `@requires(posix)` is
+    // enforced where the *program* reaches the module (`checkGatedModules`), and nothing reaches a
+    // supplier — so the clause is asked here. A machine without POSIX gets no POSIX clock, and the
+    // link names the seam it left for the board to answer.
+    //
+    // **Both halves are asked**: what the project's manifest says its machine has (`targetProvides`,
+    // which defaults every capability on), and what the target's operating system has at all
+    // (`Target.inherentCapabilities`) — a freestanding target is not POSIX whatever a manifest
+    // omitted to say.
+    def runsHere(f: FuncDecl): Boolean =
+      moduleRequires.get(Modules.moduleOf(f.name)).forall { r =>
+        (r.keySet & Capability.environment).forall(c => targetProvides(c) && target.inherentCapabilities(c))
+      }
+
+    val suppliers = available.values.toList
+      .filter(runsHere)
+      .flatMap(f => symbolOf(f).filterNot(suppliedElsewhere).map(_ -> f.name))
+      .groupMap(_._1)(_._2)
+
+    def wanted: List[String] =
+      externsUsed.toList.flatMap(e => externDecls.get(e).toList).flatMap(d => suppliers.getOrElse(d.symbol, Nil))
+
     while reached do
       reached = false
-      for name <- funcsUsed.toList if available.contains(name) && !analyzed(name) do
+      for name <- funcsUsed.toList ++ wanted if available.contains(name) && !analyzed(name) do
         analyzed += name
         reached = true
         tfuncs ++= recoverOpt(analyzeFuncBody(name, available(name), Map.empty))

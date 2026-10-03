@@ -9,6 +9,7 @@ change what an existing program means. Where it does, the release says so.
 
 ## Unreleased
 
+- **Fixed: a `build-c` archive left `sysl_wall_us` undefined**, so any program reaching `sysl.time.now()` — every `sysl.log` call among them — failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), its own supplier of a seam the program calls (`sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`) is now analyzed and kept; it is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol.
 - `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
   quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
   destination stamps its own (logcat, syslog, journald). `text` now shares its field rendering and
