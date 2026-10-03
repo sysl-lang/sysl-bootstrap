@@ -7,6 +7,24 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+**A `self` method reads its receiver where it lies, and copies it only where a copy could be seen**
+
+- **A large by-value parameter is no longer copied at entry** when the function only reads it: no
+  assignment to it or a part of it, no `&` of it, no `*self` call on it, no tail self-call, and
+  nothing outside the program can call the function. `reference/declarations.md`'s "the method gets a
+  copy" still holds — the caller hands over storage nothing can change while the call runs (a
+  temporary, a local nobody else can name, or a snapshot it stages), so a write through an alias
+  mid-call still does not show through `self`.
+- **A caller stages no snapshot at all for a callee that can write nothing.** That test
+  (`BorrowedParams`) now reaches past a leaf: a body may call functions that pass it, recursion
+  included, and may write its own `var`s.
+- **A staged snapshot is released at its address** (`arc.dispose_at.T(ptr)`) instead of being loaded
+  whole and passed to `arc.dispose.T` by value, which was a second copy of the struct on the stack.
+- On thumb-freestanding-softfp, musicbox's `Synth.render` frame goes from **11,128 B to 104 B**, and a
+  `*self` method calling a `self` one over a 4 KB struct from 8,224 B to 0.
+
 ## 0.0.160 — 2026-10-03
 
 **__VERSION__, and defaults read at the type each call settles**

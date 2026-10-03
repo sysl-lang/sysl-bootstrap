@@ -589,10 +589,12 @@ trait ArcEmitter extends Emitter {
    */
   protected def ownedHere: List[(Val, Type)] = owned.head.toList
 
+  /** Gives back what each slot holds, **at its address** (`releaseAt`): a large aggregate is never
+   * loaded as one value to be handed to a helper, which would be a second copy of it on the stack for
+   * the length of a release.
+   */
   protected def releaseSlots(slots: List[(Val, Type)]): Unit =
-    for (slot, ty) <- slots.reverse do
-      val v = freshReg(); emit(Inst.Load(v, ty.lty, slot, Access.Plain))
-      releaseValue(ty, v)
+    for (slot, ty) <- slots.reverse do releaseAt(ty, slot)
 
   protected def popOwned(): Unit = {
     runDeferrals(deferrals.head)
@@ -619,9 +621,7 @@ trait ArcEmitter extends Emitter {
     // only once the scope that owns them is itself being left.
     for (scope, ds) <- scopes do
       runDeferrals(ds)
-      for (slot, ty) <- scope.reverse do
-        val v = freshReg(); emit(Inst.Load(v, ty.lty, slot, Access.Plain))
-        releaseValue(ty, v)
+      for (slot, ty) <- scope.reverse do releaseAt(ty, slot)
   }
 
   /** Lets go of everything accrued since a loop was entered, for a `break`/`continue` that leaves
@@ -640,9 +640,7 @@ trait ArcEmitter extends Emitter {
 
     for (scope, ds) <- scopes do
       runDeferrals(ds)
-      for (slot, ty) <- scope.reverse do
-        val v = freshReg(); emit(Inst.Load(v, ty.lty, slot, Access.Plain))
-        releaseValue(ty, v)
+      for (slot, ty) <- scope.reverse do releaseAt(ty, slot)
   }
 }
 

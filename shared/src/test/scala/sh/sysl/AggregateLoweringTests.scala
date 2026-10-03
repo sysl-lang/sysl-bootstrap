@@ -118,10 +118,21 @@ class AggregateLoweringTests extends AnyFreeSpec with CodegenSupport with RunSup
   }
 
   "a large argument crosses the call in memory" - {
-    "so the parameter is declared as an address" in {
+    // The callee used to copy every large parameter into a slot of its own at entry. A body that
+    // only reads one now reads it where the caller put it (`Codegen.readsInPlace`), since that storage
+    // cannot change for the length of the call; one that writes it still copies. Both halves are
+    // asserted, and `ReceiverInPlaceTests` is where the rule and its observable cases live.
+    "so the parameter is declared as an address, and a body that only reads it reads it there" in {
       val out = ir(big + "tag(b: Big) -> int = b.tag\nprint(tag(Big([0; 64], 6)))")
 
       out should include("define i32 @tag(ptr %b.param)")
+      defineOf(out, "tag") should not include "llvm.memcpy"
+      defineOf(out, "tag") should not include "alloca %struct.Big"
+    }
+
+    "while a body that writes its parameter copies it at entry" in {
+      val out = ir(big + "tag(b: Big) -> int\n    b.tag += 1\n    b.tag\nprint(tag(Big([0; 64], 6)))")
+
       defineOf(out, "tag") should include(
         "call void @llvm.memcpy.p0.p0.i64(ptr align 8 %b.addr, ptr align 8 %b.param, i64 520, i1 false)")
     }

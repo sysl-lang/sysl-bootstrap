@@ -55,11 +55,12 @@ package sh.sysl
  *     discharges it for itself.
  *
  * A parameter passed **in memory** (`layout.indirect`) is no different in kind, and the only thing
- * that changes is what the caller does when it has to take a count. The callee's entry copy is a copy
- * of *bytes* read out of the caller's storage, so a body that then overwrites that storage frees what
- * the copy points at exactly as it would for a register-passed value. A place argument is therefore
- * staged into a slot of the caller's own with a count taken at it, and the callee copies from
- * **that** — the same snapshot a small argument's loaded value already is. A temporary or an
+ * that changes is what the caller does when it has to take a count. The callee reads the caller's
+ * storage — in place where it only reads (`Codegen.readsInPlace`), through a copy of bytes where it
+ * does not — so a body that overwrites that storage frees what it is reading exactly as it would for a
+ * register-passed value. A place argument is therefore staged into a slot of the caller's own with a
+ * count taken at it, and the callee reads **that** — the same snapshot a small argument's loaded
+ * value already is (`CallEmitter.indirectArg`). A temporary or an
  * unexposed local is handed over at its own address as before, and nothing is taken at either end:
  * `b.push(V(i, x, node, …))` costs the one retain the buffer takes when it stores the value, where it
  * used to cost a walk of the whole aggregate at entry and another at exit.
@@ -72,8 +73,11 @@ package sh.sysl
  */
 object CallOwnership {
 
-  /** The parameters of `f` that it takes a count for at entry and gives back at each return. */
-  def owning(f: TFunc, addressed: Boolean): Set[String] = {
+  /** The parameters of `f` that it takes a count for at entry and gives back at each return.
+   * `inert` is whether `f` is one of `BorrowedParams.inert`'s, which is a question about the whole
+   * program and so is asked once by the caller of this rather than here.
+   */
+  def owning(f: TFunc, addressed: Boolean, inert: Boolean): Set[String] = {
     val every = f.params.map(_._1).toSet
     // A self-jump is checked before anything else, because the count it takes to carry an argument
     // across the release of the whole frame has to be one the slot gives back afterwards — and that
@@ -83,7 +87,7 @@ object CallOwnership {
     if jumps then every
     // A body that can release nothing keeps the borrow whoever entered it, which is what makes this
     // stronger than every condition below rather than another one beside them.
-    else if BorrowedParams.borrows(f) then Set.empty
+    else if inert then Set.empty
     else if addressed || f.exported.isDefined || f.section.isDefined || f.conv.isDefined then every
     else
       val bound = ContractAssume.rebound((f.body, f.requires, f.ensures, f.olds, f.variant))

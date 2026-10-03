@@ -446,7 +446,11 @@ trait ExprEmitter extends ArithEmitter {
       // call and worked, so a type could render all through development and die the first time it
       // was put in a string.
       val big   = layout.indirect(value.ty)
-      val v     = if big then address(value) else genExpr(value)
+      // And it crosses under the same rule: its own storage where nothing can change that for the
+      // length of the call, a snapshot where something could (`CallEmitter.indirectArg`).
+      val v     =
+        if big then indirectArg(value, inert(method) || CallOwnership.held(value, callerExposed ++ promoted))
+        else genExpr(value)
       val s     = genExpr(spec)
       val slot  = emitAlloca(freshReg(), bufferLty)
 

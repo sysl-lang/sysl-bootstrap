@@ -44,6 +44,13 @@ trait VtableEmitter extends ArcEmitter {
     case (RecvMode.ByRef(_), true) => slot.target
     case _                         => adapter(vt, slot)
 
+  /** The large by-value parameters each function reads where its caller put them (`Codegen`). */
+  protected def readsInPlace: Map[String, Set[String]]
+
+  /** The name a method's receiver goes by, which is its first parameter's. */
+  private def receiverOf(fn: String): Option[String] =
+    program.funcs.find(_.name == fn).flatMap(_.params.headOption).map(_._1)
+
   private def adapter(vt: TVtable, slot: TVSlot): String = {
     val name    = s"vt.adapt.${if vt.boxed then "ref." else ""}${slot.target}"
     // The signature carries the extension a narrow result owes whoever called through the table;
@@ -76,10 +83,23 @@ trait VtableEmitter extends ArcEmitter {
         // The receiver is *borrowed* here, not owned: the implementation retains its parameters on
         // entry and releases them on return, so handing it a value loaded out of the object leaves
         // the object's own count exactly where it was.
+        // A large receiver the implementation reads in place (`readsInPlace`) is the object
+        // itself unless a copy is made here, and the object is storage the call may change — so
+        // the adapter stages the snapshot a caller would have, holding what it refers to for the
+        // length of the call.
+        val staged =
+          if slot.recv == RecvMode.ByValue && layout.indirect(vt.forType) &&
+             readsInPlace.get(slot.target).exists(ps => receiverOf(slot.target).exists(ps))
+          then
+            val copy = emitAlloca(freshReg(), vt.forType.lty)
+            emitMemcpy(copy, payload, layout.size(vt.forType), layout.align(vt.forType))
+            retainAt(vt.forType, copy)
+            Some(copy)
+          else None
+
         val self = slot.recv match
-          // A large receiver is passed at its address like any other large argument, so the
-          // implementation makes the copy it was always going to make and the adapter makes none.
-          case RecvMode.ByValue if layout.indirect(vt.forType) => Arg(LType.Ptr, payload)
+          // A large receiver is passed at its address like any other large argument.
+          case RecvMode.ByValue if layout.indirect(vt.forType) => Arg(LType.Ptr, staged.getOrElse(payload))
           case RecvMode.ByValue =>
             val v = freshReg(); emit(Inst.Load(v, vt.forType.lty, payload, ir.Access.Plain))
             Arg(vt.forType.lty, v)
@@ -96,10 +116,12 @@ trait VtableEmitter extends ArcEmitter {
 
         if ret.ret == LType.Void then
           emit(Inst.Call(None, LType.Void, Val.Global(slot.target), call))
+          staged.foreach(releaseAt(vt.forType, _))
           emitTerm(Inst.Ret(None, None))
         else
           val r = freshReg()
           emit(ret.call(Some(r), Val.Global(slot.target), call))
+          staged.foreach(releaseAt(vt.forType, _))
           emitTerm(Inst.Ret(Some(syslResultLty(slot.retTy)), Some(r)))
     }
   }

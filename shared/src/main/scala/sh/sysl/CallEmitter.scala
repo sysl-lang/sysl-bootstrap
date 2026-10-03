@@ -44,8 +44,7 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
    * This is the one place the callee-side rule is still asked about at a call site, and what it buys
    * is that a leaf accessor reading `f(s.v)` stays as free as it has always been.
    */
-  private lazy val inertCallees: Set[String] =
-    program.funcs.filter(BorrowedParams.borrows).map(_.name).toSet
+  protected lazy val inertCallees: Set[String] = BorrowedParams.inert(program.funcs)
 
   /** Whether a call to this name asks nothing of its caller — the callee cannot reach a release, so
    * whatever holds the argument's count goes on holding it.
@@ -56,9 +55,9 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
    * and there is nothing to hand over.
    *
    * A large one is handed over as the address of storage the caller holds — its own where the
-   * argument is a place, a slot made here where it is not — which is the `Left`. The callee copies at
-   * entry either way, so the copy the by-value convention promises still happens; it just happens
-   * once, in memory, instead of as a multi-kilobyte value crossing the call.
+   * argument is a place nothing can change, a snapshot staged here where it is not — which is the
+   * `Left` (`indirectArg`). The copy the by-value convention promises is made only where it could be
+   * seen, and never as a multi-kilobyte value crossing the call.
    *
    * **This is where the caller discharges its side of the convention** (`CallOwnership`): the callee
    * reads the value through a count somebody is holding for the length of the call, and where that
@@ -69,8 +68,8 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
    * hand the callee a **snapshot**, because the storage the argument came out of is storage the call
    * is free to overwrite. A small one's loaded value already is one, so the count goes on it and
    * comes back with the statement's other temporaries. A large one never becomes a register at all,
-   * so the snapshot is a slot of this frame's, written with counts taken and released where the
-   * scope holding it ends — and the callee's entry copy then reads from there rather than from the
+   * so the snapshot is a slot of this frame's, written with counts taken and released at its address
+   * where the scope holding it ends — and the callee then reads from there rather than from the
    * caller's own field.
    *
    * The value is kept beside its type rather than formatted straight away because a self-call needs
@@ -80,17 +79,10 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
    */
   protected def argValue(a: TExpr, calleeInert: Boolean = false)
       : Option[(Type, Either[ir.Val, ir.Val])] = {
-    val guarantee = containsRef(a.ty) && !calleeInert &&
-      !CallOwnership.held(a, callerExposed ++ promoted)
+    val held      = calleeInert || CallOwnership.held(a, callerExposed ++ promoted)
+    val guarantee = containsRef(a.ty) && !held
 
-    if layout.indirect(a.ty) then
-      if guarantee then
-        val slot = emitAlloca(freshReg(), a.ty.lty)
-
-        genOwnedInto(slot, a)
-        ownAt(slot, a.ty)
-        Some((a.ty, Left(slot)))
-      else Some((a.ty, Left(address(a))))
+    if layout.indirect(a.ty) then Some((a.ty, Left(indirectArg(a, held))))
     else
       val v = genExpr(a)
 
@@ -100,6 +92,26 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
 
       Option.unless(Type.zeroSized(a.ty))((a.ty, Right(v)))
   }
+
+  /** The address a large argument crosses at: storage nothing can change for the length of the
+   * call.
+   *
+   * **This is the whole of the by-value promise for a value that crosses in memory**, because the
+   * callee reads its parameter where it lies rather than copying it in (`Codegen.borrowedSlot`).
+   * Where `held` — a temporary, a local nobody else can name, or a callee that can write nothing
+   * at all — the argument's own storage already is that, and it goes over as it stands, at no cost.
+   * Anything else is a place a call is free to change while the callee is still reading it, so it
+   * is staged into a slot of this frame's first: the snapshot `self` promises, with a count taken
+   * for what it refers to and given back with the scope.
+   */
+  protected def indirectArg(a: TExpr, held: Boolean): ir.Val =
+    if held then address(a)
+    else
+      val slot = emitAlloca(freshReg(), a.ty.lty)
+
+      genOwnedInto(slot, a)
+      ownAt(slot, a.ty)
+      slot
 
   protected def formatArgs(vals: List[Option[(Type, Either[ir.Val, ir.Val])]]): List[Arg] =
     vals.flatten.map {

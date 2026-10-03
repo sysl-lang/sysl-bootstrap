@@ -145,9 +145,9 @@ trait ArithEmitter extends CallEmitter {
   /** One operand of a dispatched operator, in the form the callee receives it: itself where it is a
    * first-class value, and the address of a slot holding it where it is not.
    *
-   * The slot is staging and nothing more — the callee copies out of it at entry and takes its own
-   * count there, exactly as it does for an argument whose address the caller already had, so
-   * nothing here owns anything and nothing releases it.
+   * The slot is staging and nothing more — a fresh slot nothing else can name, so it is storage the
+   * call cannot change, which is all a callee reading its parameter in place needs
+   * (`CallEmitter.indirectArg`). It holds a count of nothing, so nothing here releases it.
    */
   private def operandArg(ty: Type, v: Val): Arg =
     if !layout.indirect(ty) then Arg(ty.lty, v)
