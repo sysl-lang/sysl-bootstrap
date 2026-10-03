@@ -29,6 +29,7 @@ package sh.sysl
  *     `Ok(s)`, `Some(s)`, `(s, n)`, nested to any depth — where no other argument mentions `s`;
  *   - every `return` after the declaration returns `s` at **the same position**. A `return` before
  *     it, or inside its initializer, returns anything at all, since `s` is not yet anything;
+ *   - no `?` comes after the declaration, in a statement or in the result itself;
  *   - `s`'s address is never taken except as a **direct argument of a call** — `s.rewind()` on a
  *     `*self` method, `fill(&s)` — and no `ref` is bound into it and no view is sliced out of it
  *     except as a call's argument;
@@ -45,6 +46,10 @@ package sh.sysl
  *     `s`'s counts are still owed, and its own arguments could read `s` part-way through being
  *     overwritten: `return Err(fault(s.n))` writes `Err`'s payload into the same bytes. So any
  *     such `return` keeps the copy.
+ *   - **A `?` is a `return` of the failure**, written into the same storage (`genTry`), and the
+ *     local is not registered for release — so a `?` failing after `s` exists would write the error
+ *     over `s` with its counts still owed, and a destructor `s` reaches would never run. Any `?`
+ *     after the declaration keeps the copy.
  *   - **Another argument mentioning `s`** could change it between the copy the source promises and
  *     the end of the construction: `(s, s.step())` returns the `s` from *before* the step.
  *   - **An address kept anywhere** could be written through after the value was written into the
@@ -87,6 +92,7 @@ object ReturnSlot {
             val after = stmts.drop(i + 1)
 
             returns(after).forall(r => r.value.flatMap(pathOf(_, name)).contains(path)) &&
+            !tries(after) && !tries(f.body.result.get) &&
             !escapes(after, name) && !escapes(f.body.result.get, name) &&
             (!lent(after, name) || quiet(f, runsCode))
           }.map(Plan(name, _))
@@ -199,6 +205,14 @@ object ReturnSlot {
     case xs: Iterable[?] => xs.iterator.flatMap(returns).toList
     case p: Product      => p.productIterator.flatMap(returns).toList
     case _               => Nil
+
+  /** Whether `x` holds a `?` at any depth — an early return that writes the result storage. */
+  private def tries(x: Any): Boolean = x match
+    case _: Type         => false
+    case _: TTry         => true
+    case xs: Iterable[?] => xs.exists(tries)
+    case p: Product      => p.productIterator.exists(tries)
+    case _               => false
 
   /** A body this lowering is not attempted for at all. */
   private def forbidden(x: Any): Boolean = x match
