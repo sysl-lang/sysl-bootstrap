@@ -63,8 +63,9 @@ change what an existing program means. Where it does, the release says so.
   Ok(s)` puts `s` in the payload of the caller's `Result` from its declaration, so the `Ok` writes the
   tag and nothing else. It covers `s` returned alone or as one argument of a variant or struct
   (`Ok(s)`, `Some(s)`, `Held(s, n)`), with any `return` before `s` exists returning anything. A copy is
-  kept where it could be told apart: another value returned after `s` exists, another argument of the
-  result mentioning `s`, `s`'s address going anywhere but straight into a call, a `defer`, or — where
+  kept where it could be told apart: another value returned after `s` exists, a `?` after `s` exists
+  (its failure leaves through the same storage, and would write over `s` with its counts owed and its
+  destructors never run), another argument of the result mentioning `s`, `s`'s address going anywhere but straight into a call, a `defer`, or — where
   its address does go into a call — a postcondition or a release that could run a destructor between
   the `return` and the end of the function.
 - **A `match` or `if` producing a large value builds each branch's value in place**, with no merge

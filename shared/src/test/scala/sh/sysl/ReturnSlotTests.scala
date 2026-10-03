@@ -280,5 +280,89 @@ class ReturnSlotTests extends AnyFreeSpec with CodegenSupport with RunSupport {
 
       run(src) shouldBe "1 2\n"
     }
+
+    // A `?` leaves through the result storage like a `return`, and what it writes there is the
+    // error — so a local built in that storage would have its bytes written over with its counts
+    // still owed, and its destructor would never run.
+    "a try after it, which leaves through the result storage" in {
+      run(tried) shouldBe "dropped 1\nerr\nlive 2\ndropped 2\ndone\n"
+      body(ir(tried), "mk") should include("alloca %struct.Big2")
+    }
+
+    "a try inside the construction that returns it" in {
+      val src = tried.replace(
+        """    val n = check(k - 1)?
+          |    s.table[0] = u32(n)
+          |    Ok(s)""".stripMargin,
+        """    Ok(Held(s, check(k - 1)?))""".stripMargin)
+        .replace("mk(k: int) -> Result[Big2, Fault]", "mk(k: int) -> Result[Held, Fault]")
+        .replace("val b = mk(2).unwrap()\n    print(\"live\", b.r.id)",
+                 "val b = mk(2).unwrap()\n    print(\"live\", b.big.r.id, b.n)")
+        .replace("enum Fault", "struct Held\n    big: Big2\n    n: int\n\nenum Fault")
+
+      run(src) shouldBe "dropped 1\nerr\nlive 2 1\ndropped 2\ndone\n"
+      body(ir(src), "mk") should include("alloca %struct.Big2")
+    }
   }
+
+  "a try that comes before the local exists, or inside its initializer, leaves nothing behind" - {
+    "before it: the local is still built in the caller's storage" in {
+      val src = tried.replace(
+        """    var s = Big2(Res(k), [0; 512])
+          |    val n = check(k - 1)?
+          |""".stripMargin,
+        """    val n = check(k - 1)?
+          |    var s = Big2(Res(k), [0; 512])
+          |""".stripMargin)
+
+      body(ir(src), "mk") should not include "alloca %struct.Big2"
+      run(src) shouldBe "err\nlive 2\ndropped 2\ndone\n"
+    }
+
+    "inside its initializer: what was built of it is let go of once" in {
+      val src = tried.replace(
+        """    var s = Big2(Res(k), [0; 512])
+          |    val n = check(k - 1)?
+          |    s.table[0] = u32(n)
+          |""".stripMargin,
+        """    var s = Big2(Res(k), [u32(check(k - 1)?); 512])
+          |""".stripMargin)
+
+      run(src) shouldBe "dropped 1\nerr\nlive 2\ndropped 2\ndone\n"
+    }
+  }
+
+  private val tried =
+    """struct Res
+      |    id: int
+      |
+      |impl Drop for Res
+      |    drop(self) = print("dropped", self.id)
+      |
+      |struct Big2
+      |    r: &Res
+      |    table: [512]u32
+      |
+      |enum Fault
+      |    Bad
+      |
+      |check(k: int) -> Result[int, Fault] = if k == 0 then Err(Bad) else Ok(k)
+      |
+      |mk(k: int) -> Result[Big2, Fault]
+      |    var s = Big2(Res(k), [0; 512])
+      |    val n = check(k - 1)?
+      |    s.table[0] = u32(n)
+      |    Ok(s)
+      |
+      |f()
+      |    mk(1) match
+      |        Ok(_) -> print("ok")
+      |        Err(_) -> print("err")
+      |
+      |    val b = mk(2).unwrap()
+      |    print("live", b.r.id)
+      |
+      |f()
+      |print("done")
+      |""".stripMargin
 }
