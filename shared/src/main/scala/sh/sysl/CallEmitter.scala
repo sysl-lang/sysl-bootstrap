@@ -388,6 +388,12 @@ trait CallEmitter extends ControlFlowEmitter with VtableEmitter with WriterEmitt
           // exactly as it is on the register path.
           assumeEnsures(name, args, None)
 
+        // A branching value is built by whichever branch runs, in place, so the merge slot and the
+        // copy out of it are both gone — and `Result.unwrap`'s arm hands its payload over without a
+        // binding in between (`ControlFlowEmitter.payloadMove`).
+        case TMatch(scrutinee, arms, ty) => genMatch(scrutinee, arms, ty, Some(dest))
+        case TIf(cond, t, el @ Some(_), ty) => genIf(cond, t, el, ty, Some(dest))
+
         case _ =>
           genBorrowedInto(dest, e)
           retainAt(e.ty, dest)

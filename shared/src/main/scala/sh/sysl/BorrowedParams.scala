@@ -79,11 +79,16 @@ object BorrowedParams {
     declared.toSet -- refs -- f.params.map(_._1)
   }
 
-  /** The place a write lands in, where that is one of `locals` reached without a dereference. */
+  /** The place a write lands in, where that is one of `locals` reached without a dereference.
+   *
+   * **An index is the local's own storage only into an ARRAY**, whose elements are the local's
+   * bytes. Into a slice it is not: the local holds the view, and the elements belong to whoever the
+   * view was taken of — possibly the very storage a caller lent as an argument.
+   */
   private def ownPlace(place: TExpr, locals: Set[String]): Boolean = place match
     case TLoad(name, _)  => locals(name)
     case TField(r, _, _) => ownPlace(r, locals)
-    case TIndex(r, _, _) => ownPlace(r, locals)
+    case TIndex(r, _, _) => r.ty.isInstanceOf[Type.Array] && ownPlace(r, locals)
     case _               => false
 
   private final class Scan(inertSet: Set[String], locals: Set[String]) {

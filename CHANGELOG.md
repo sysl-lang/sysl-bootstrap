@@ -29,6 +29,7 @@ change what an existing program means. Where it does, the release says so.
 
 ### Other changes
 
+- **Fixed: a by-value parameter read in place could be written through a view, and the write reached the caller.** A writable view of an array inside a large parameter (`var v = self.table[..]; v[0] = 9`) now counts as a write to that parameter, so it keeps its own copy; a writable view of a local handed to a call now counts as letting that local out, so it is snapshotted; and a write through a slice local (`var o = out; o[0] = 7`) is no longer counted as the function's own storage, so the function is not treated as unable to write. Each case printed the caller's value changed (`9 9`, `7 7`) and now prints `9 0`, `0 7`.
 - **Fixed: a `build-c` archive left `sysl_wall_us` undefined**, so any program reaching `sysl.time.now()` — every `sysl.log` call among them — failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), its own supplier of a seam the program calls (`sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`) is now analyzed and kept; it is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol.
 - `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
   quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
@@ -50,6 +51,27 @@ change what an existing program means. Where it does, the release says so.
   whole and passed to `arc.dispose.T` by value, which was a second copy of the struct on the stack.
 - On thumb-freestanding-softfp, musicbox's `Synth.render` frame goes from **11,128 B to 104 B**, and a
   `*self` method calling a `self` one over a 4 KB struct from 8,224 B to 0.
+
+**A large result is built where it is going, and copied there only where the copy could be seen**
+
+- **A local returned on every path is built in the caller's storage.** `var s = Synth(…); s.rewind();
+  Ok(s)` puts `s` in the payload of the caller's `Result` from its declaration, so the `Ok` writes the
+  tag and nothing else. It covers `s` returned alone or as one argument of a variant or struct
+  (`Ok(s)`, `Some(s)`, `Held(s, n)`), with any `return` before `s` exists returning anything. A copy is
+  kept where it could be told apart: another value returned after `s` exists, another argument of the
+  result mentioning `s`, `s`'s address going anywhere but straight into a call, a `defer`, or — where
+  its address does go into a call — a postcondition or a release that could run a destructor between
+  the `return` and the end of the function.
+- **A `match` or `if` producing a large value builds each branch's value in place**, with no merge
+  slot, and an arm `V(x) -> x` over a local copies the payload straight from the matched value:
+  `Result.unwrap` and `Option.unwrap` no longer stage the whole value twice.
+- **A large call result read through its address** — a receiver, as in `synth(…).unwrap()` — is
+  written into the slot the read uses and released there, instead of being loaded whole, stored again,
+  and released by value.
+- On thumb-freestanding-softfp, musicbox's `synth` frame goes from **7,544 B to 1,976 B**,
+  `Result[Synth, MusicError].unwrap` from **5,568 B to 8 B**, and a board program's `boot` calling
+  them from **22,560 B to 11,464 B** — the deepest stack along `boot → synth` from 30,104 B to
+  13,440 B.
 
 ## 0.0.160 — 2026-10-03
 

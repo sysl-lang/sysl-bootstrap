@@ -497,6 +497,19 @@ trait ArcEmitter extends Emitter {
     v
   }
 
+  /** The same, for a large temporary that was written into a slot rather than produced as a value
+   * (`PlaceEmitter.address`): it is given back **at its address** with the statement's other
+   * temporaries, so the release never loads it whole.
+   */
+  protected def ownTempAt(slot: Val, ty: Type): Unit =
+    if containsRef(ty) then
+      tempSlots += slot
+      tempStack.head += ((slot, ty))
+
+  /** Gives back one temporary, by value or at its address according to how it was registered. */
+  private def releaseTemp(ty: Type, v: Val): Unit =
+    if tempSlots(v) then releaseAt(ty, v) else releaseValue(ty, v)
+
   /** Releases the innermost region's temporaries and pops it. */
   protected def popTemps(): Unit = {
     releaseTemps()
@@ -518,7 +531,7 @@ trait ArcEmitter extends Emitter {
   protected def tempsHere: List[(Val, Type)] = tempStack.head.toList
 
   protected def releaseValues(vs: List[(Val, Type)]): Unit =
-    for (v, ty) <- vs.reverse do releaseValue(ty, v)
+    for (v, ty) <- vs.reverse do releaseTemp(ty, v)
   protected def dropTemps(): Unit    = tempStack = tempStack.tail
 
   /** Hands a statement to the scope being emitted. Nothing is emitted here — the `defer` itself
@@ -608,7 +621,7 @@ trait ArcEmitter extends Emitter {
    * follow this one lexically emit their own releases into unreachable code and are dropped.
    */
   protected def releaseAll(): Unit = {
-    for frame <- tempStack; (v, ty) <- frame.reverse do releaseValue(ty, v)
+    for frame <- tempStack; (v, ty) <- frame.reverse do releaseTemp(ty, v)
 
     // **Snapshot first, and it is load-bearing.** A deferred statement is emitted by `genStmt`, and
     // one containing an `if` or a `match` pushes and pops the very stacks this is walking — so the
@@ -631,7 +644,7 @@ trait ArcEmitter extends Emitter {
    * unreachable code and are dropped.
    */
   protected def releaseToDepth(ownedDepth: Int, tempDepth: Int): Unit = {
-    for frame <- tempStack.take(tempStack.length - tempDepth); (v, ty) <- frame.reverse do releaseValue(ty, v)
+    for frame <- tempStack.take(tempStack.length - tempDepth); (v, ty) <- frame.reverse do releaseTemp(ty, v)
 
     // Snapshotted before anything runs, for `releaseAll`'s reason. `zip` needs no matching `take`:
     // the two stacks are the same length, so pairing the bounded one against the whole of the other

@@ -157,6 +157,7 @@ object ContractAssume {
     case _: Type         => Set.empty
     case a: TAddrOf      => root(a.place) ++ a.productIterator.flatMap(exposed)
     case r: TRefDecl     => Set(r.name) ++ root(r.place) ++ r.productIterator.flatMap(exposed)
+    case v: TSlice       => viewed(v) ++ v.productIterator.flatMap(exposed)
     case _: TAsm         => Set(opaque)
     case xs: Iterable[?] => xs.flatMap(exposed).toSet
     case p: Product      => p.productIterator.flatMap(exposed).toSet
@@ -176,12 +177,25 @@ object ContractAssume {
     case a: TAddrOf       => root(a.place) ++ a.productIterator.flatMap(rebound)
     case w: TWrite        => root(w.place) ++ w.productIterator.flatMap(rebound)
     case r: TRefDecl      => root(r.place) ++ r.productIterator.flatMap(rebound)
+    // A writable view of an array is the array's address under another spelling: a write through
+    // it is a write to the storage it was taken of, though no place in that write names it.
+    case v: TSlice        => viewed(v) ++ v.productIterator.flatMap(rebound)
     // A block of assembly names its operands' storage directly and says what it does to them in a
     // constraint string, which is not something to parse for this.
     case _: TAsm          => Set(opaque)
     case xs: Iterable[?]  => xs.flatMap(rebound).toSet
     case p: Product       => p.productIterator.flatMap(rebound).toSet
     case _                => Set.empty
+
+  /** The local whose own storage a writable view is of: only an array's elements are its holder's
+   * bytes, where a view taken of another view, or of a heap array behind a `&`, names elements that
+   * belong to somebody else. A `[]const T` writes nothing, so it lets nothing out.
+   */
+  private def viewed(v: TSlice): Set[String] = v.sliceTy match
+    case Type.Slice(_, false) => v.base.ty match
+      case _: Type.Array => root(v.base)
+      case _             => Set.empty
+    case _ => Set.empty
 
   /** The local whose storage a place reaches, where it reaches one.
    *

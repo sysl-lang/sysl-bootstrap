@@ -30,8 +30,16 @@ package sh.sysl
  */
 case class Packages(of: Map[Source, String] = Map.empty, imports: Map[String, Map[String, String]] = Map.empty) {
 
-  /** The canonical prefix of the package a file belongs to, or the empty one for the project. */
-  def prefixOf(file: Source): String = of.getOrElse(file, "")
+  /** The canonical prefix of the package a file belongs to, or the empty one for the project.
+   *
+   * The table is keyed by the files as they were collected, and a file the parser had to prepare —
+   * tangled, or with a branch gated out — comes back as a new `Source`, so the lookup walks back
+   * through what it was prepared from. Without that, one `#if` anywhere in a dependency's file made
+   * the file the program's own, and the module it declared a second, empty one that shadowed the
+   * package's.
+   */
+  def prefixOf(file: Source): String =
+    file.lineage.iterator.flatMap(of.get).nextOption().getOrElse("")
 
   /** What a written module path means, in a file of the package `prefix`.
    *

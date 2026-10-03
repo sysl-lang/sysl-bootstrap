@@ -31,10 +31,20 @@ package sh.sysl
  * `__VERSION__` reads. It travels on the file for the reason `features` does: one compilation holds
  * several packages' files, and a library's `__VERSION__` has to be the library's own. `None` is a
  * file that belongs to no package — a lone `sysl run x.sysl`, or the standard library.
+ *
+ * `preparedFrom` is the file this text was derived from when the parser's preparation made a new
+ * one — a literate file tangled (`Literate`), or a branch blanked out by `#if` (`Conditional`). A
+ * `Source` compares by identity, and everything keyed by the file *as it was handed over* — which
+ * package it belongs to, above all (`Packages.prefixOf`) — has to find the prepared file too, or a
+ * dependency's file with one `#if` in it is read as the program's own.
  */
 final class Source(val name: String, val text: String, val dir: Option[List[String]] = None,
                    val columnOffset: Int = 0, val features: Set[String] = Set.empty,
-                   val manifest: Option[SourceManifest] = None) {
+                   val manifest: Option[SourceManifest] = None,
+                   val preparedFrom: Option[Source] = None) {
+
+  /** This file and every file it was prepared from, nearest first. */
+  def lineage: List[Source] = this :: preparedFrom.fold(Nil)(_.lineage)
 
   /** The same file, belonging to a package with these features enabled.
    *
