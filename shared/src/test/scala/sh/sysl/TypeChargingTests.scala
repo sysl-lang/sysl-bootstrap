@@ -98,7 +98,7 @@ class TypeChargingTests extends AnyFreeSpec with RunSupport with CodegenSupport 
     }
   }
 
-  // An alias is the type it names (`reference/declarations.md § An alias`), so naming one costs what
+  // An alias is the type it names (`reference/declarations.md § Type declarations`), so naming one costs what
   // naming the type would: nothing where the type has no destructor, and the destructor's module
   // where it has one — whichever module wrote the alias, and however many aliases stand between.
   "an alias of a type with a destructor dies as that type does" - {
