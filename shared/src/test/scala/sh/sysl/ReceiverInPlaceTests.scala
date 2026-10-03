@@ -237,6 +237,89 @@ class ReceiverInPlaceTests extends AnyFreeSpec with CodegenSupport with RunSuppo
 
       run(src) shouldBe "1\n9\ndropped 1\ndropped 9\n"
     }
+
+    // A writable view of an array inside the receiver writes the receiver, though no place in the
+    // write is rooted at `self`: the write is `v[0]`. Read in place, it would land in the caller's
+    // `b`, which nothing else names, so the caller hands `b` over unstaged.
+    "a write through a view of an array inside it" in {
+      val src =
+        """struct Big
+          |    n: int
+          |    table: [256]u32
+          |
+          |    scribble(self) -> u32
+          |        var v = self.table[..]
+          |        v[0] = 9
+          |        self.table[0]
+          |
+          |var b = Big(1, [0; 256])
+          |print(b.scribble(), b.table[0])
+          |""".stripMargin
+
+      val f = body(ir(src), "Big.scribble")
+
+      f should include("alloca %struct.Big")
+      f should include("llvm.memcpy")
+      run(src) shouldBe "9 0\n"
+    }
+
+    // The neighbours of that one: a `ref` to an element, a view of an array one struct further in,
+    // and a view taken through the address of the field.
+    "a write through a ref to an element, a nested view, or a view through the field's address" in {
+      val src =
+        """struct Inner
+          |    k: int
+          |    arr: [256]u32
+          |
+          |struct Big
+          |    n: int
+          |    inner: Inner
+          |    table: [256]u32
+          |
+          |    by_ref(self) -> u32
+          |        ref r = self.table[1]
+          |        r = 5
+          |        self.table[1]
+          |
+          |    nested(self) -> u32
+          |        var v = self.inner.arr[..]
+          |        v[2] = 6
+          |        self.inner.arr[2]
+          |
+          |    through_addr(self) -> u32
+          |        var p = &self.table
+          |        var v = p[..]
+          |        v[3] = 8
+          |        self.table[3]
+          |
+          |var b = Big(1, Inner(2, [0; 256]), [0; 256])
+          |print(b.by_ref(), b.table[1])
+          |print(b.nested(), b.inner.arr[2])
+          |print(b.through_addr(), b.table[3])
+          |""".stripMargin
+
+      run(src) shouldBe "5 0\n6 0\n8 0\n"
+    }
+
+    // The caller's half: a writable view of `b` handed to the same call lets the callee write `b`
+    // while it reads its by-value copy, so `b` is not a slot nobody else can name.
+    "a view of the argument handed to the same call" in {
+      val src =
+        """struct Big
+          |    n: int
+          |    table: [256]u32
+          |
+          |poke(b: Big, out: []u32) -> u32
+          |    print("not inert")
+          |    out[0] = 7
+          |    b.table[0]
+          |
+          |var b = Big(1, [0; 256])
+          |print(poke(b, b.table[..]), b.table[0])
+          |""".stripMargin
+
+      run(src) shouldBe "not inert\n0 7\n"
+    }
   }
 
   "a body that calls only functions that can write nothing can write nothing either" - {
@@ -284,6 +367,30 @@ class ReceiverInPlaceTests extends AnyFreeSpec with CodegenSupport with RunSuppo
 
       body(ir(src), "outer") should include("@arc.copy.Holder(%struct.Holder %h.param)")
       run(src) shouldBe "2\n"
+    }
+
+    // A slice the body declared is its own local and its elements are not: a write through one is a
+    // write to whoever owns them — here the very storage the caller lent as `b` — so the body is not
+    // inert and the caller stages a snapshot.
+    "but not one that writes through a slice it was handed" in {
+      val src =
+        """struct Big
+          |    n: int
+          |    table: [256]u32
+          |
+          |poke(b: Big, out: []u32) -> u32
+          |    var o = out
+          |    o[0] = 7
+          |    b.table[0]
+          |
+          |caller(p: *Big) -> u32 = poke(*p, p.table[..])
+          |
+          |var b = Big(1, [0; 256])
+          |print(caller(&b), b.table[0])
+          |""".stripMargin
+
+      body(ir(src), "caller") should include("@llvm.memcpy")
+      run(src) shouldBe "0 7\n"
     }
   }
 }

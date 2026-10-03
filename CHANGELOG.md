@@ -29,6 +29,7 @@ change what an existing program means. Where it does, the release says so.
 
 ### Other changes
 
+- **Fixed: a by-value parameter read in place could be written through a view, and the write reached the caller.** A writable view of an array inside a large parameter (`var v = self.table[..]; v[0] = 9`) now counts as a write to that parameter, so it keeps its own copy; a writable view of a local handed to a call now counts as letting that local out, so it is snapshotted; and a write through a slice local (`var o = out; o[0] = 7`) is no longer counted as the function's own storage, so the function is not treated as unable to write. Each case printed the caller's value changed (`9 9`, `7 7`) and now prints `9 0`, `0 7`.
 - **Fixed: a `build-c` archive left `sysl_wall_us` undefined**, so any program reaching `sysl.time.now()` — every `sysl.log` call among them — failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), its own supplier of a seam the program calls (`sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`) is now analyzed and kept; it is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol.
 - `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
   quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
