@@ -7,77 +7,52 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
-## Unreleased
+## 0.0.161 — 2026-10-03
 
-### Behaviour changes
+**a --lib root stands in for its package, and large values stay where they are**
 
-- **A `--lib` source root that is a dependency's package now overrides that dependency** instead of
-  being refused as a collision. A root stands in for a coordinate when its `package.name` is the
-  coordinate's repository name (the last path segment, a `/vN` suffix set aside). The coordinate is
-  dropped before selection wherever in the graph it is named — the project's manifest or any
-  dependency's — so nothing is fetched for it, and an unfetchable coordinate (unpublished, a bad tag,
-  no network) no longer stops a build that has a `--lib` copy of it. This is Cargo's `[patch]` and
-  Go's `replace`, written as one flag. A root that merely holds a module a coordinate also offers,
-  without being that package, is still refused, and the refusal now says what would have made it an
-  override. `reference/packages.md § A source root stands in for the package it is`.
-- **A dependency's own import no longer reaches the project's modules.** A dependency writing `geom`
-  was answered by a `--lib` root's (or the project's own) `geom` before the `geom` its own manifest
-  declared, so a program could build and run the wrong package's code with nothing said. It now gets
-  the module its manifest bound; one whose manifest reached no `geom` at all is refused the name
-  rather than borrowing the project's. The project's own imports are unchanged.
-  `reference/packages.md § Imports are transitive`.
+**A `--lib` root stands in for its package, and large values stay where they are**
 
-### Other changes
+Two packaging changes, two code-generation changes, and three fixes. A `--lib` root that *is* a dependency's package now overrides it, so a coordinate that cannot be fetched no longer stops the build. A dependency's own imports are now answered by its own manifest and never by the project's modules. Separately, a large `self` or by-value parameter is now read where it lies, and a large result is built in the caller's storage. A board program's deepest stack along `boot → synth` falls from 30,104 B to 13,440 B.
 
-- **Fixed: a by-value parameter read in place could be written through a view, and the write reached the caller.** A writable view of an array inside a large parameter (`var v = self.table[..]; v[0] = 9`) now counts as a write to that parameter, so it keeps its own copy; a writable view of a local handed to a call now counts as letting that local out, so it is snapshotted; and a write through a slice local (`var o = out; o[0] = 7`) is no longer counted as the function's own storage, so the function is not treated as unable to write. Each case printed the caller's value changed (`9 9`, `7 7`) and now prints `9 0`, `0 7`.
-- **Fixed: a `build-c` archive left `sysl_wall_us` undefined**, so any program reaching `sysl.time.now()` — every `sysl.log` call among them — failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), its own supplier of a seam the program calls (`sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`) is now analyzed and kept; it is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol.
-- `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
-  quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
-  destination stamps its own (logcat, syslog, journald). `text` now shares its field rendering and
-  writes the same bytes as before.
-- **Fixed: `sysl.fs` named libc symbols Android's Bionic does not have**, so an `aarch64-android`
-  program reaching `write_text_atomic` (or any `sysl.fs` call that reads `errno`) failed at its link.
-  On Android `errno` is now read through Bionic's `__errno` rather than glibc's `__errno_location`,
-  and the pending name's token is drawn from `arc4random_buf` rather than `getentropy`, which Bionic
-  has only from API 28. macOS (`__error`) and Linux (`__errno_location`, `getentropy`) are unchanged.
+#### Behaviour changes
 
-**A `self` method reads its receiver where it lies, and copies it only where a copy could be seen**
+**Four of the changes alter what an existing build does. Two of them can turn a build that worked into a refused or different one, so they come first.**
 
-- **A large by-value parameter is no longer copied at entry** when the function only reads it: no
-  assignment to it or a part of it, no `&` of it, no `*self` call on it, no tail self-call, and
-  nothing outside the program can call the function. `reference/declarations.md`'s "the method gets a
-  copy" still holds — the caller hands over storage nothing can change while the call runs (a
-  temporary, a local nobody else can name, or a snapshot it stages), so a write through an alias
-  mid-call still does not show through `self`.
-- **A caller stages no snapshot at all for a callee that can write nothing.** That test
-  (`BorrowedParams`) now reaches past a leaf: a body may call functions that pass it, recursion
-  included, and may write its own `var`s.
-- **A staged snapshot is released at its address** (`arc.dispose_at.T(ptr)`) instead of being loaded
-  whole and passed to `arc.dispose.T` by value, which was a second copy of the struct on the stack.
-- On thumb-freestanding-softfp, musicbox's `Synth.render` frame goes from **11,128 B to 104 B**, and a
-  `*self` method calling a `self` one over a 4 KB struct from 8,224 B to 0.
+- **A `--lib` source root that is a dependency's package now overrides that dependency** (a76a3e92). Before, it was refused as a collision. A root stands in for a coordinate when its `package.name` is the coordinate's repository name: the last path segment, with any `/vN` suffix set aside. The coordinate is then dropped before selection wherever the graph names it, in the project's manifest or in any dependency's. Nothing is fetched for it and nothing is written to `sysl.sum` for it. A coordinate that cannot be fetched (unpublished, a bad tag, no network) therefore no longer stops a build that has a `--lib` copy of it. This works like Cargo's `[patch]` and Go's `replace`, written as one flag. A root that merely holds a module a coordinate also offers, without being that package, is still refused, and the refusal now says what would have made it an override. `reference/packages.md § A source root stands in for the package it is`.
+  - **Behaviour change:** a build that used to be refused for a `--lib` root colliding with a coordinate now builds against the root.
+- **A dependency's own import no longer reaches the project's modules** (8b4818c3). When a dependency wrote `import geom`, the import used to be answered by a `--lib` root's `geom`, or by the project's own `geom/`, before the `geom` its own manifest declared. A program could then build and run the wrong package's code with no warning: the regression case printed **42** where the right answer is **28**. The dependency now gets the module its manifest bound. A dependency whose manifest reaches no `geom` at all is refused the name instead of borrowing the project's. The project's own imports are unchanged. `reference/packages.md § Imports are transitive`.
+  - **Behaviour change:** a package that relied on reaching one of its consumer's modules now gets `undefined name` and has to declare what it imports.
+- **A large by-value `self` or parameter is read in place** (a0221b5d, a9dee9e1). It is no longer copied at entry when the function only reads it: no assignment to it or to a part of it, no `&` of it, no `*self` call on it, no tail self-call, and nothing outside the program can call the function. `reference/declarations.md`'s "the method gets a copy" still holds. The caller hands over storage that nothing can change while the call runs: a temporary, a local nobody else can name, or a snapshot it stages. A write through an alias in the middle of the call therefore still does not show through `self`.
+  - A caller stages no snapshot at all for a callee that can write nothing. That test (`BorrowedParams`) now reaches past a leaf: a body may call functions that pass it, recursion included, and may write its own `var`s.
+  - A staged snapshot is released at its address (`arc.dispose_at.T(ptr)`). It used to be loaded whole and passed to `arc.dispose.T` by value, which put a second copy of the struct on the stack.
+  - **A view or a slice written through counts as a write to what it views** (a9dee9e1). `var v = self.table[..]; v[0] = 9` keeps the parameter's own copy. A writable view of a local handed to a call counts as letting that local out, so the local is snapshotted. A write through a slice local (`var o = out; o[0] = 7`) is no longer counted as the function's own storage. Before this fix, each case changed the caller's value (`9 9`, `7 7`); they now print `9 0` and `0 7`.
+  - On `thumb-freestanding-softfp`, musicbox's `Synth.render` frame goes from **11,128 B to 104 B**. A `*self` method calling a `self` method over a 4 KB struct goes from 8,224 B to 0.
+- **A large result is built where it is going** (4fc425a1, e52c90ea). A local returned on every path is built in the caller's storage. In `var s = Synth(…); s.rewind(); Ok(s)`, `s` lives in the payload of the caller's `Result` from its declaration, so the `Ok` writes the tag and nothing else. This covers `s` returned alone or as one argument of a variant or struct (`Ok(s)`, `Some(s)`, `Held(s, n)`), with any `return` before `s` exists returning anything.
+  - A copy is kept wherever the difference could be seen: another value returned after `s` exists; another argument of the result mentioning `s`; `s`'s address going anywhere but straight into a call; a `defer`; or, where its address does go into a call, a postcondition or a release that could run a destructor between the `return` and the end of the function.
+  - **A `?` after `s` exists keeps the copy** (e52c90ea). Its failure leaves through the same storage, and would write over `s` with its counts still owed and its destructors never run.
+  - A `match` or `if` producing a large value builds each branch's value in place, with no merge slot. An arm `V(x) -> x` over a local copies the payload straight from the matched value, so `Result.unwrap` and `Option.unwrap` no longer stage the whole value twice.
+  - A large call result read through its address, as a receiver is in `synth(…).unwrap()`, is written into the slot the read uses and released there. It used to be loaded whole, stored again, and released by value.
+  - On `thumb-freestanding-softfp`, musicbox's `synth` frame goes from **7,544 B to 1,976 B**, `Result[Synth, MusicError].unwrap` from **5,568 B to 8 B**, and a board program's `boot` calling them from **22,560 B to 11,464 B**. The deepest stack along `boot → synth` goes from 30,104 B to 13,440 B.
 
-**A large result is built where it is going, and copied there only where the copy could be seen**
+#### Fixes
 
-- **A local returned on every path is built in the caller's storage.** `var s = Synth(…); s.rewind();
-  Ok(s)` puts `s` in the payload of the caller's `Result` from its declaration, so the `Ok` writes the
-  tag and nothing else. It covers `s` returned alone or as one argument of a variant or struct
-  (`Ok(s)`, `Some(s)`, `Held(s, n)`), with any `return` before `s` exists returning anything. A copy is
-  kept where it could be told apart: another value returned after `s` exists, a `?` after `s` exists
-  (its failure leaves through the same storage, and would write over `s` with its counts owed and its
-  destructors never run), another argument of the result mentioning `s`, `s`'s address going anywhere but straight into a call, a `defer`, or — where
-  its address does go into a call — a postcondition or a release that could run a destructor between
-  the `return` and the end of the function.
-- **A `match` or `if` producing a large value builds each branch's value in place**, with no merge
-  slot, and an arm `V(x) -> x` over a local copies the payload straight from the matched value:
-  `Result.unwrap` and `Option.unwrap` no longer stage the whole value twice.
-- **A large call result read through its address** — a receiver, as in `synth(…).unwrap()` — is
-  written into the slot the read uses and released there, instead of being loaded whole, stored again,
-  and released by value.
-- On thumb-freestanding-softfp, musicbox's `synth` frame goes from **7,544 B to 1,976 B**,
-  `Result[Synth, MusicError].unwrap` from **5,568 B to 8 B**, and a board program's `boot` calling
-  them from **22,560 B to 11,464 B** — the deepest stack along `boot → synth` from 30,104 B to
-  13,440 B.
+- **A `build-c` archive no longer leaves `sysl_wall_us` undefined** (09c61241). Before, any program reaching `sysl.time.now()`, which includes every `sysl.log` call, failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), the library's own supplier of a seam the program calls is now analyzed and kept: `sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`. It is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol. Tests: `LibrarySupplierCliTests`.
+- **An `#if` in a dependency's file no longer drops the module for importers** (d290e637, 6144e686). Which package a file belongs to was keyed by the source as collected, but `#if` gating and literate tangling hand the parser a new source whenever they change the text. A dependency's file with any `#if` in it, and any `.lsysl` file, was therefore filed as the program's own, and its module became a second, unprefixed copy that answered imports with none of the package's other files. A prepared source now records what it was prepared from. Tests: `DependencyConditionalTests`.
+- **`sysl.fs` no longer names libc symbols that Android's Bionic lacks** (4fc73525, d1b155cd). An `aarch64-android` program reaching `write_text_atomic`, or any `sysl.fs` call that reads `errno`, failed at its link. On Android, `errno` is now read through Bionic's `__errno` rather than glibc's `__errno_location`, and the pending name's token comes from `arc4random_buf` rather than `getentropy`, which Bionic has only from API 28 on. macOS (`__error`) and Linux (`__errno_location`, `getentropy`) are unchanged. Tests: `LibraryAndroidLibcCliTests`.
+
+#### Library
+
+- **`sysl.log.message_text(r, out)`** renders a record's message and fields alone, such as `underrun frames=512`. Fields are quoted exactly as `text` quotes them, with no time, no level and no newline. It is meant for a sink whose destination stamps its own time and level (logcat, syslog, journald). `text` now shares its field rendering and writes the same bytes as before (b4be2421).
+
+Tests: `ReceiverInPlaceTests`, `ReturnSlotTests`, `AggregateLoweringTests`, `PackageBuildTests`, and `library/sysl/log/tests.sysl`.
+
+#### Verification
+
+- Full Native gate on `50dbec81` (`./run-gate.sh`): **GATE: GREEN, 12461 succeeded, 0 failed**, no retries, nothing timed out. The release is that sha plus two commits: a comment-only pointer fix in `TypeChargingTests` and the version bump.
+- Warnings census clean (JVM / JS / Native / syslDocJVM / syslDocNative): after `clean`, **two / three / three / one / two**. Every warning is named, and none is in this repository: `Reader.scala:26:6` comes from scala-parser-combinators, `Set.scala:62:15` from the Scala.js scaladoc, and the rest are the build-infra `-Xplugin` and `-classpath` lines.
+- `check-pointers.py` against the site: 2240 pointers, 0 unresolvable.
+- The darwin tarball was extracted to a scratch prefix and checked there: `sysl --version` reports 0.0.161, `sysl run` works, and `sysl doc` dispatches to `sysl-doc`.
 
 ## 0.0.160 — 2026-10-03
 
