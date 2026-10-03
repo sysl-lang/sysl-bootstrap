@@ -9,6 +9,11 @@ change what an existing program means. Where it does, the release says so.
 
 ## Unreleased
 
+- `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
+  quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
+  destination stamps its own (logcat, syslog, journald). `text` now shares its field rendering and
+  writes the same bytes as before.
+
 **A `self` method reads its receiver where it lies, and copies it only where a copy could be seen**
 
 - **A large by-value parameter is no longer copied at entry** when the function only reads it: no
