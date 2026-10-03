@@ -167,6 +167,66 @@ class ArgumentTests
              |""".stripMargin) shouldBe "2\nx\n"
     }
 
+    // `reference/declarations.md § Default parameters and named arguments`: *"A default is read at
+    // the type its parameter declares"* — and where that type is a parameter being solved, it is
+    // read at what the call solved it to. The omitted literal is not one of the call's arguments,
+    // so it may not take part in the solve: before the fix it was analyzed bare as an `int` and
+    // either outvoted the written `0.5` or was refused against the `real` that `x` settled.
+    "an omitted literal default is read at the solved type, from a variable" in {
+      run("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
+             |val x: real = 0.5
+             |print(f(x))
+             |""".stripMargin) shouldBe "1.5\n"
+    }
+
+    "and from a written literal, which the default does not outvote" in {
+      run("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
+             |print(f(0.5))
+             |""".stripMargin) shouldBe "1.5\n"
+    }
+
+    "and at an integer the call settled, where it stays an integer" in {
+      run("""|f[T](lo: T, step: T = 1) -> T = lo + step
+             |val n: u8 = 41
+             |print(f(n))
+             |print(f(10))
+             |""".stripMargin) shouldBe "42\n11\n"
+    }
+
+    "while a written argument at the defaulted parameter still stands" in {
+      run("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
+             |print(f(0.5, 0.25))
+             |print(f(2, step = 3))
+             |""".stripMargin) shouldBe "0.75\n5.0\n"
+    }
+
+    "and it settles the parameter itself only where nothing the call wrote does" in {
+      run("""|g[T](step: T = 1) -> T = step
+             |print(g())
+             |val r: real = g()
+             |print(r)
+             |""".stripMargin) shouldBe "1\n1.0\n"
+    }
+
+    "a generic struct's method reads its default at the receiver's argument" in {
+      run("""|struct Box[T]
+             |    v: T
+             |
+             |    bumped(self, by: T = 1) -> T = self.v + by
+             |end Box
+             |
+             |print(Box(0.5).bumped())
+             |print(Box(41).bumped())
+             |""".stripMargin) shouldBe "1.5\n42\n"
+    }
+
+    "a default the solved type cannot hold is refused at the call that solved it" in {
+      err("""|f[T](lo: T, step: T = 1.5) -> T = lo
+             |print(f(2))
+             |""".stripMargin) should include(
+        "'step' of 'f' was left to its default, which cannot be read at int — the type this call settles it to")
+    }
+
     // `reference/declarations.md § Default parameters and named arguments`: a default stands
     // exactly where the argument would have been written, and at that position a closure literal
     // takes its parameter types from what is asking for it. The bare arrow is a **bounded type
