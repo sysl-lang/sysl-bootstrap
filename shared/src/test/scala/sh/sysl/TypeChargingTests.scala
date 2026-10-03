@@ -97,4 +97,73 @@ class TypeChargingTests extends AnyFreeSpec with RunSupport with CodegenSupport 
       e should include("main.sysl:5:")
     }
   }
+
+  // An alias is the type it names (`reference/declarations.md § An alias`), so naming one costs what
+  // naming the type would: nothing where the type has no destructor, and the destructor's module
+  // where it has one — whichever module wrote the alias, and however many aliases stand between.
+  "an alias of a type with a destructor dies as that type does" - {
+
+    val withDrop = "sys/a.sysl" -> ("module sys\n\nimport sysl.fs.write_bytes\n\n" +
+      "struct Plain\n    n: int\n\nstruct Handle\n    n: int\n\n" +
+      "impl Drop for Handle\n    drop(self)\n        val _ = write_bytes(\"/tmp/x\", \"x\".bytes)\n\n" +
+      "type H = Handle\n\ntype P = Plain\n\ntype MaybeH = Option[&Handle]\n")
+
+    val dies = "can die here, and its destructor reaches"
+
+    "so holding one through the alias its own module declares is refused" in {
+      val e = errOf(withDrop, "main.sysl" -> "@no_os\n\nimport sys.H\n\nsize(h: &H) -> int = 1\n\nprint(2)\n")
+
+      e should include(s"a 'sys.H' $dies 'sys', which requires 'os'")
+      e should include("main.sysl:5:")
+    }
+
+    "and so is holding one through a qualified path to that alias" in {
+      val e = errOf(withDrop, "main.sysl" -> "@no_os\n\nsize(h: &sys.H) -> int = 1\n\nprint(2)\n")
+
+      e should include(s"a 'sys.H' $dies 'sys', which requires 'os'")
+    }
+
+    "and so is one another module re-exports, the program naming only that module" in {
+      val e = errOf(withDrop, "box/a.sysl" -> "module box\n\nimport sys.Handle\n\ntype H2 = Handle\n",
+        "main.sysl" -> "@no_os\n\nimport box.H2\n\nsize(h: &H2) -> int = 1\n\nprint(2)\n")
+
+      e should include(s"a 'box.H2' $dies 'box', which requires 'os'")
+      e should include("main.sysl:5:")
+    }
+
+    "and so is an alias of that alias, through a module that names it qualified" in {
+      val e = errOf(withDrop, "box/a.sysl" -> "module box\n\ntype H3 = sys.H\n",
+        "main.sysl" -> "@no_os\n\nimport box.H3\n\nsize(h: &H3) -> int = 1\n\nprint(2)\n")
+
+      e should include(s"a 'box.H3' $dies 'box', which requires 'os'")
+    }
+
+    "and so is an alias of a type that holds one, an Option of it" in {
+      val e = errOf(withDrop, "main.sysl" -> "@no_os\n\nimport sys.MaybeH\n\nsize(h: MaybeH) -> int = 1\n\nprint(2)\n")
+
+      e should include(s"a 'sys.MaybeH' $dies 'sys', which requires 'os'")
+      e should include("main.sysl:5:")
+    }
+
+    "and so is such an alias written in another module" in {
+      val e = errOf(withDrop, "box/a.sysl" -> "module box\n\nimport sys.Handle\n\ntype MH = Option[&Handle]\n",
+        "main.sysl" -> "@no_os\n\nimport box.MH\n\nsize(h: MH) -> int = 1\n\nprint(2)\n")
+
+      e should include(s"a 'box.MH' $dies 'box', which requires 'os'")
+    }
+
+    // There is no generic alias to charge: the declaration is refused where its parameters begin. A
+    // change that admits one owes this section a case instantiating it over `Handle`.
+    "and a generic alias, which would need the same answer per instantiation, is not a declaration" in {
+      val e = errOf(withDrop, "box/a.sysl" -> "module box\n\ntype Box1[T] = Option[T]\n",
+        "main.sysl" -> "@no_os\n\nimport box.Box1\nimport sys.H\n\nsize(h: Box1[&H]) -> int = 1\n\nprint(2)\n")
+
+      e should include("'=' expected")
+      e should include("box/a.sysl:3:10")
+    }
+
+    "while an alias of the type beside it with none is free to hold" in {
+      runOf(withDrop, "main.sysl" -> "@no_os\n\nimport sys.P\n\nval p = P(4)\nprint(p.n)\n") shouldBe "4\n"
+    }
+  }
 }
