@@ -247,7 +247,8 @@ private def collectPackages(graph: Resolve.Graph, os: Os): Either[String, Packag
     // gated against its own manifest, so the root's `feature_server` is invisible in a dependency and
     // a dependency's is invisible in the root (`Conditional.defined`).
     val each = fetched.map(p =>
-      p -> Project.collect(p.root, Some(os)).map(_.enabling(graph.features.getOrElse(p.canonical, Set.empty))))
+      p -> Project.collect(p.root, Some(os)).map(_.enabling(graph.features.getOrElse(p.canonical, Set.empty))
+        .inPackage(sourceManifest(p.root, p.config))))
 
     each.find(_._2.isEmpty) match
       case Some((p, _)) => Left(s"'${p.canonical}' holds no sysl source files")
@@ -396,6 +397,17 @@ private def readPackageConfig(file: String): Either[String, PackageConfig] = {
       // both roads read a dependency the same way (`libDependencies` calls this too).
       yield config.resolvingLocalPaths(root)
     catch case e: Exception => Left(s"cannot read $path: ${IoFailure.describe(e)}")
+}
+
+/** The manifest the files under `file` belong to, as `__VERSION__` reads it — or `None` where there
+ * is no `package.hocon` at that root, which is the lone-file program `readPackageConfig` answers with
+ * the empty config. Looked for in exactly the place that function looks, so the two cannot disagree
+ * about whether a tree is a package.
+ */
+private[sysl] def sourceManifest(file: String, config: PackageConfig): Option[SourceManifest] = {
+  val path = s"${projectRoot(file)}/${PackageConfig.FileName}"
+
+  Option.when(isFile(path))(SourceManifest(path, config.version))
 }
 
 /** `sysl deps` — the resolved graph, and who asked for each version (`reference/packages.md § Which

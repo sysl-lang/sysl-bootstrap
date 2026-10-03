@@ -422,6 +422,25 @@ class AstCodecTests extends AnyFreeSpec with Matchers {
       back(1).source.dir shouldBe Some(List("geom", "shape"))
     }
 
+    // `__VERSION__` in a generic body is folded by the importer, which reads the tree back out of
+    // the artifact — so the package a file belongs to has to survive the trip, or the importer
+    // would refuse the library's own `__VERSION__` as a file that belongs to no package.
+    "and the manifest each file belongs to, with or without a version and with or without a directory" in {
+      def file(name: String, dir: Option[List[String]], m: Option[SourceManifest]): Program =
+        Program(parsed("f() -> int = 1").body, None, Nil, Nil,
+          new Source(name, "f() -> int = 1", dir, manifest = m))
+
+      val back = roundTrip(List(
+        file("a.sysl", Some(List("geom")), Some(SourceManifest("/p/package.hocon", Some("1.2.3")))),
+        file("b.sysl", None, Some(SourceManifest("/q/package.hocon", None))),
+        file("c.sysl", Some(Nil), None),
+      ))
+
+      back.map(_.source.manifest) shouldBe List(
+        Some(SourceManifest("/p/package.hocon", Some("1.2.3"))), Some(SourceManifest("/q/package.hocon", None)), None)
+      back.map(_.source.dir) shouldBe List(Some(List("geom")), None, Some(Nil))
+    }
+
     "share one string table, so a name written twice is stored once" in {
       val one  = AstCodec.encode(List(parsed("f(averylongparametername: int) -> int = averylongparametername")))
       val two  = AstCodec.encode(List(

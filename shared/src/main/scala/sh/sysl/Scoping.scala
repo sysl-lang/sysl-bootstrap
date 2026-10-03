@@ -664,6 +664,12 @@ trait Scoping extends DeclTables {
    */
   protected def followAlias(key: String): String = key
 
+  /** The type an alias stands for where `followAlias` cannot answer with a key — `type M =
+   * Option[&Handle]`, whose base is an application rather than a bare declared name. `None` for
+   * anything that is not such an alias, and here, below the tables, for everything.
+   */
+  protected def aliasedType(key: String): Option[Type] = None
+
   /** The key a written **trait** name resolves to. */
   protected def traitKey(written: String): Option[String] =
     resolveName(written, named = true)(traitDecls.contains)
