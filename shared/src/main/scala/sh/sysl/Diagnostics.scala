@@ -26,9 +26,15 @@ package sh.sysl
  * `features` is what the package this file belongs to has enabled, which `Conditional` turns into
  * `feature_<name>` symbols the file may be gated on. Empty for a file handed over with no package
  * graph around it, which is every compilation that resolves nothing.
+ *
+ * `manifest` is the `package.hocon` of the package or program this file belongs to, which is what
+ * `__VERSION__` reads. It travels on the file for the reason `features` does: one compilation holds
+ * several packages' files, and a library's `__VERSION__` has to be the library's own. `None` is a
+ * file that belongs to no package — a lone `sysl run x.sysl`, or the standard library.
  */
 final class Source(val name: String, val text: String, val dir: Option[List[String]] = None,
-                   val columnOffset: Int = 0, val features: Set[String] = Set.empty) {
+                   val columnOffset: Int = 0, val features: Set[String] = Set.empty,
+                   val manifest: Option[SourceManifest] = None) {
 
   /** The same file, belonging to a package with these features enabled.
    *
@@ -39,7 +45,11 @@ final class Source(val name: String, val text: String, val dir: Option[List[Stri
    * code in or out on the strength of a name its author never declared.
    */
   def enabling(names: Set[String]): Source =
-    if names.isEmpty then this else new Source(name, text, dir, columnOffset, names)
+    if names.isEmpty then this else new Source(name, text, dir, columnOffset, names, manifest)
+
+  /** The same file, belonging to the package whose manifest this is (`__VERSION__`). */
+  def inPackage(m: Option[SourceManifest]): Source =
+    if m == manifest then this else new Source(name, text, dir, columnOffset, features, m)
 
   /** The text split into lines, kept for the one line a diagnostic quotes. Splitting with a
    * negative limit keeps a trailing empty line, so line numbers stay 1:1 with the file.
@@ -89,6 +99,11 @@ object Source {
   /** A file the driver read out of a project, carrying the directory it was found in. */
   def apply(name: String, text: String, dir: List[String]): Source = new Source(name, text, Some(dir))
 }
+
+/** A package's manifest as a source file of that package sees it: where the `package.hocon` is, and
+ * the `version` it states, if it states one. What `__VERSION__` folds to.
+ */
+final case class SourceManifest(path: String, version: Option[String])
 
 /** A span of a source file: where something starts, and where it ends.
  *

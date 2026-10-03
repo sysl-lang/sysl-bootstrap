@@ -141,6 +141,11 @@ trait ExprAnalysis
       case "__FUNCTION__" => TStrLit(currentFunctionName)
       case "__DATE__" => TStrLit(ReservedNames.date(ReservedNames.stamp))
       case "__TIME__" => TStrLit(ReservedNames.time(ReservedNames.stamp))
+      // **The file it is WRITTEN in, never the call it is filled at.** Unlike the three above it does
+      // not read `reportedPos`: a version is a property of the package that holds the text, so a
+      // library's `version: string = __VERSION__` default answers the library's version wherever it
+      // is called from — the consumer's would be a different package's fact entirely.
+      case "__VERSION__" => TStrLit(packageVersion(currentPos))
       case _          => err(ReservedNames.unknown(name))
   }
 

@@ -21,6 +21,11 @@ One capability fix, from the same freeze exception as 0.0.157–0.0.159. 0.0.157
 - **So a mistake in a dependency's tests is no longer reported to its consumers.** A type error there, or an import of the package's own `dev_dependencies` (which a consumer never resolves), is reported by `sysl test` of that package and nowhere else.
 - **The exception:** a consumer's `@test` function that called a helper declared in a *dependency's* `@tests` file used to compile; the helper is no longer there to call. A test helper meant for other packages belongs in an ordinary file of its own, or in a package of its own.
 - **Unchanged:** a package's own `sysl test` compiles and runs its `@tests` files as before, and a program's *own* scaffolding is still analyzed by its build and then dropped, so its mistakes are still reported there.
+- **An alias of an application of a type with a destructor now dies as that type does.** `type M =
+  Option[&Handle]`, named from a `@no_os` program, was charged nothing although its value runs
+  `Handle`'s destructor; it is now refused with *"a 'sys.M' can die here, and its destructor reaches
+  'sys'"*, exactly as `Option[&Handle]` written out is. A bare alias (`type H = Handle`) was already
+  followed. Behaviour change: a program that compiled only through this hole is now refused.
 
 ## 0.0.159 — 2026-10-03
 

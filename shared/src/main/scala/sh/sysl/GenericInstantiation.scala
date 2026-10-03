@@ -626,10 +626,12 @@ trait GenericInstantiation extends ConstFolding {
       soft: List[Boolean] = Nil,
       bounds: Map[String, List[BoundRef]] = Map.empty,
       known: Map[String, Type] = Map.empty,
+      omitted: List[Boolean] = Nil,
   ): List[Type] = {
     val sub   = mutable.LinkedHashMap.empty[String, Type]
     val tps   = tparams.toSet
     val pairs = paramRefs.zip(argTys).zip(soft.padTo(paramRefs.length, false))
+    val left  = omitted.padTo(paramRefs.length, false)
 
     for (tp, t) <- known if tps(tp) do sub(tp) = t
 
@@ -637,7 +639,13 @@ trait GenericInstantiation extends ConstFolding {
     if sub.size < tparams.length then
       for r <- resultRef; e <- expected do unify(r, e, tps, sub)
     if sub.size < tparams.length then
-      for ((r, t), adaptable) <- pairs if adaptable do unify(r, t, tps, sub)
+      for (((r, t), adaptable), i) <- pairs.zipWithIndex if adaptable && !left(i) do unify(r, t, tps, sub)
+    // **A literal default the call left out is consulted after every literal it wrote**, being the
+    // one argument the caller did not write (`reference/declarations.md § Default parameters and
+    // named arguments`): `f[T](lo: T, step: T = 1)` called `f(0.5)` is a `real` call, and only a
+    // call that settles `T` from nothing else takes the default's own spelling.
+    if sub.size < tparams.length then
+      for (((r, t), adaptable), i) <- pairs.zipWithIndex if adaptable && left(i) do unify(r, t, tps, sub)
     // **What a callable argument yields is read back off the closure**, which is the other half of
     // `callBound` handing one an open result. The parameter itself has by now been solved to the
     // closure's own struct, and that struct implements the call trait its body determined — so the

@@ -169,6 +169,7 @@ trait CallAnalysis extends OperatorCalls {
       passed.zip(provisional).map((a, t) => adaptable(a, t)),
       mbounds,
       known,
+      passed.map(omittedLiteral),
     ))
 
     val (ownerTps, ownTps)   = fd.tparams.splitAt(fd.tparams.length - m.tparams.length)

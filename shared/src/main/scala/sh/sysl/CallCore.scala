@@ -60,8 +60,17 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         val srcs = List.fill(provisional.length - args.length)(None) ::: args.map(Some(_))
 
         provisional.zip(srcs.padTo(provisional.length, None)).zip(params).map {
-          case ((t, src), (_, pty)) =>
-            if src.exists(isLiteral) || src.isDefined && becomesSlice(t.ty, pty) then
+          case ((t, src), (pname, pty)) =>
+            // An omitted literal default is read here, at the type the call settled its parameter
+            // to, by the ordinary literal rule — so an integer literal is no `real` here either
+            // (`reference/traits.md`: *"an integer literal is neither"*). A refusal is about the
+            // default rather than about anything the caller wrote, so it says so, at the call,
+            // which is where the parameter's type came from.
+            if src.exists(omittedLiteral) then
+              attempt(analyzeExpr(src.get, Some(pty))).filterNot(r => disagree(r.ty, pty)).getOrElse(
+                at(src.get.pos)(err(s"'$pname' of '$what' was left to its default, and the default " +
+                  s"cannot be read at ${show(pty)}, the type the parameter has at this call")))
+            else if src.exists(isLiteral) || src.isDefined && becomesSlice(t.ty, pty) then
               analyzeExpr(src.get, Some(pty))
             else reread(coerce(t, pty), src, pty)
         }
@@ -162,6 +171,15 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
     // agreed about every argument that was not a bare name.
     val callable = at.map((a, _) => callableArg(a))
 
+    // **An omitted default that is a bare literal is the one argument the CALLER did not write**, so
+    // it says nothing about what the call is for: it is read at the type its parameter declares
+    // (`reference/declarations.md § Default parameters and named arguments`), and where that type
+    // is still being solved it waits for the solution like any other literal. It is consulted after
+    // everything the call wrote — a written literal included — so `f[T](lo: T, step: T = 1)` called
+    // `f(0.5)` is a `real` call whose `step` is `1.0`, and only a call that settles `T` from nothing
+    // else falls back on the default's own spelling.
+    val omitted = at.map((a, _) => omittedLiteral(a))
+
     // Each entry is the node read, if one was, and whether reading it took a **literal's default**
     // for want of anything better — which is what the ordering below turns on.
     //
@@ -174,7 +192,7 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         e match
           case Some(_) => Some(analyzeExpr(a, e) -> false)
           case None =>
-            literalDefault(a) match
+            literalDefault(written(a)) match
               case Some(ty) => Some(standIn(ty).setPos(a.pos) -> true)
               // **A fourth shape with no type of its own, and it is not one a syntax can name**:
               // anything whose bare analysis cannot get off the ground for want of the context it
@@ -221,7 +239,12 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
       for r <- result; e <- expected do inDecl(decl)(unify(r, e, tps, partial))
 
     if partial.size < tparams.length then
-      for case (r, Some((t, true))) <- ptypes.zip(first) do inDecl(decl)(unify(r, t.ty, tps, partial))
+      for case ((r, Some((t, true))), false) <- ptypes.zip(first).zip(omitted) do
+        inDecl(decl)(unify(r, t.ty, tps, partial))
+
+    if partial.size < tparams.length then
+      for case ((r, Some((t, true))), true) <- ptypes.zip(first).zip(omitted) do
+        inDecl(decl)(unify(r, t.ty, tps, partial))
 
     // **A held-back argument that turned out to be a callable joins the solution, so the held-back
     // arguments after it are read against what it settled.** The three tiers above are made of the
@@ -888,7 +911,8 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         // call was written in.
         val solved = inDecl(f.name)(
           solve(shown, f.tparams, f.params.map(_.typ), provisional.map(_.ty), f.retType, expected,
-            args.zip(provisional).map((a, t) => adaptable(a, t)), f.bounds, written))
+            args.zip(provisional).map((a, t) => adaptable(a, t)), f.bounds, written,
+            omitted = args.map(omittedLiteral)))
         checkBounds(f, solved)
         (instantiateFunc(f, solved), Some(provisional))
 

@@ -212,7 +212,7 @@ object Conditional {
       case Some(err)        => Left(err)
       case None if !touched => Right(source)
       case None             => Right(new Source(source.name, out.mkString("\n"), source.dir, source.columnOffset,
-                                       source.features))
+                                       source.features, source.manifest))
   }
 
   /** One open `#if` group.

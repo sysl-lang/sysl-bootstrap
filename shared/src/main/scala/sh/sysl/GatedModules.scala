@@ -291,13 +291,16 @@ trait GatedModules extends AnalyzerBase {
    * program could release. **What it holds is followed through `&T`, a slice and an array**, each of
    * which releases what it refers to; **a `*T` and a `weak T` stop it**, owning nothing. A trait and
    * an alias are answered by what they stand for: a trait is a set of methods, which are charged
-   * where called, and an alias is the type it names.
+   * where called, and an alias is the type it names — followed by key where it names a declared
+   * type, and resolved where it names an application of one (`type M = Option[&Handle]`), which
+   * has no key of its own to follow.
    */
   private def dies(key: String): Boolean =
     diesMemo.getOrElseUpdate(key, {
       val types = variantOwners.getOrElse(key, List(followAlias(key)))
 
-      types.exists(k => dropsDeclared(k) || instances.getOrElse(k, Nil).exists(holdsDrop(_, Set.empty)))
+      types.exists(k => dropsDeclared(k) || instances.getOrElse(k, Nil).exists(holdsDrop(_, Set.empty))) ||
+        aliasedType(key).exists(holdsDrop(_, Set.empty))
     })
 
   // Both asked only once the program's instantiations are settled, by `checkGatedModules`, which

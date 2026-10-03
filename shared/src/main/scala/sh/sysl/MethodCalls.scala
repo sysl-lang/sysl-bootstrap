@@ -475,6 +475,7 @@ trait MethodCalls extends FuncAddress with VectorMethods with AbstractMethods {
           passed.zip(provisional).map((a, t) => adaptable(a, t)),
           spellSelfBounds(fd.bounds, spell),
           written,
+          passed.map(omittedLiteral),
         ))
 
     // The member's own bounds, resolved with the receiver's arguments to hand. A bare arrow is
