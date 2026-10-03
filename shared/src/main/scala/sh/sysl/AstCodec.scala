@@ -69,7 +69,7 @@ object AstCodec {
    * conflict**, and that is the case the rule above is written for: read dev's number, take the one
    * after it, and do not assume a clean merge means the versions agree.
    */
-  val Version: Int = 60
+  val Version: Int = 61
 
   private val Magic = "sysl-ast"
 
@@ -140,6 +140,7 @@ object AstCodec {
         str(s.name)
         str(s.text)
         s.dir.foreach(_.foreach(str))
+        s.manifest.foreach(m => { str(m.path); m.version.foreach(str) })
 
       val out = new StringBuilder
 
@@ -149,10 +150,19 @@ object AstCodec {
       out.append(s"${sources.size}\n")
 
       for s <- sources.keys do
-        out.append(s"${strings(s.name)} ${strings(s.text)} ")
-        s.dir match
-          case None       => out.append("0\n")
-          case Some(segs) => out.append(s"1 ${segs.length} ${segs.map(strings).mkString(" ")}\n")
+        val dirTokens = s.dir match
+          case None       => List("0")
+          case Some(segs) => "1" :: segs.length.toString :: segs.map(seg => strings(seg).toString)
+
+        // The package the file belongs to, which a generic body re-analyzed by an importer still
+        // needs: its `__VERSION__` is folded there, and has to be this package's rather than nobody's.
+        val manifestTokens = s.manifest match
+          case None                             => List("0")
+          case Some(SourceManifest(p, None))    => List("1", strings(p).toString, "0")
+          case Some(SourceManifest(p, Some(v))) => List("1", strings(p).toString, "1", strings(v).toString)
+
+        out.append((strings(s.name).toString :: strings(s.text).toString :: dirTokens ::: manifestTokens)
+          .mkString(" ")).append('\n')
 
       out.append(s"${programs.length}\n")
       out.append(body)
@@ -678,14 +688,21 @@ object AstCodec {
         val parts = line().split(" ")
         val name  = strings(parts(0).toInt)
         val body  = strings(parts(1).toInt)
-        val dir   = if parts(2) == "1" then Some(parts.drop(4).toList.map(x => strings(x.toInt))) else None
+        val segs  = if parts(2) == "1" then parts(3).toInt else 0
+        val dir   = if parts(2) == "1" then Some(parts.slice(4, 4 + segs).toList.map(x => strings(x.toInt))) else None
+        val at    = if parts(2) == "1" then 4 + segs else 3
+        val owner =
+          if parts(at) != "1" then None
+          else Some(SourceManifest(strings(parts(at + 1).toInt),
+                                   if parts(at + 2) == "1" then Some(strings(parts(at + 3).toInt)) else None))
 
         // What was stored is the text the *positions* were recorded against, which for a literate
         // file is its program with the left margin already gone (`Literate`). The margin is how far
         // a reported column has to move to name the file again, and it is read back off the name for
         // the same reason it is read off the name anywhere else — nothing inside the text says.
         sources(k) =
-          known.getOrElse(name, new Source(name, body, dir, if Literate.named(name) then Literate.Indent else 0))
+          known.getOrElse(name, new Source(name, body, dir, if Literate.named(name) then Literate.Indent else 0,
+                                           manifest = owner))
 
       val count = line().toIntOption.getOrElse(fail("the program count is not a number"))
       val b     = List.newBuilder[Program]

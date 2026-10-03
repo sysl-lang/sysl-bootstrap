@@ -2,11 +2,11 @@ package sh.sysl
 
 /** Identifiers the language answers for itself: `__FILE__`, `__LINE__` and the rest.
  *
- * **The shape is reserved, not the six names.** An identifier that begins and ends with `__` and
+ * **The shape is reserved, not the seven names.** An identifier that begins and ends with `__` and
  * holds nothing but capitals and underscores in between belongs to the compiler, and a declaration
  * may not take one. That rule is the feature; the built-ins are what currently occupies the space it
  * keeps clear. Reserving the shape up front is what makes every later addition non-breaking — a
- * seventh built-in cannot collide with a name somebody already declared, because the shape was never
+ * new built-in cannot collide with a name somebody already declared, because the shape was never
  * theirs to declare.
  *
  * It is the same decision the `#if` vocabulary made (`getting-started/cli.md § targets`): a closed
@@ -48,11 +48,27 @@ object ReservedNames {
    * are for, and the build stamp last, since it is the one with a cost attached.
    */
   val builtins: List[String] =
-    List("__FILE__", "__LINE__", "__COLUMN__", "__FUNCTION__", "__DATE__", "__TIME__")
+    List("__FILE__", "__LINE__", "__COLUMN__", "__FUNCTION__", "__DATE__", "__TIME__", "__VERSION__")
+
+  /** What `__VERSION__` says in a file that belongs to no package — a lone `sysl run x.sysl`, or
+   * anything else compiled with no `package.hocon` at its project root.
+   */
+  def versionNoPackage(file: String): String =
+    s"'__VERSION__' reads the 'version' in package.hocon, and '$file' is not part of a package — " +
+      "there is no package.hocon at the root of its project"
+
+  /** What `__VERSION__` says where the file's package has a manifest that states no `version`. */
+  def versionUnstated(manifest: String): String =
+    s"'__VERSION__' reads the 'version' in package.hocon, and $manifest states none — " +
+      "add 'version = \"…\"' to it"
+
+  /** A node with no place in any file has no package either. */
+  val versionNowhere: String =
+    "'__VERSION__' reads the 'version' of the package a file belongs to, and this is a node with no place in any file"
 
   /** What to say to a declaration that tried to take one of these names.
    *
-   * It names the *shape* rather than the six, because the mistake is not "you picked a built-in" —
+   * It names the *shape* rather than the seven, because the mistake is not "you picked a built-in" —
    * a reader who wrote `__MY_FLAG__` picked nothing — and being told which names are taken would
    * send them looking for a collision that is not there.
    */
@@ -71,7 +87,7 @@ object ReservedNames {
     if bare.isEmpty then "a name of your own" else bare
   }
 
-  /** What to say to a use of a name that has the shape and is not one of the six. */
+  /** What to say to a use of a name that has the shape and is not one of the seven. */
   def unknown(name: String): String =
     s"there is no built-in called '$name' — the shape '__…__' is the language's, and what it " +
       s"currently holds is ${builtins.mkString(", ")}"

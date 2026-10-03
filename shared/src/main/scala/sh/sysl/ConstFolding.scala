@@ -440,6 +440,19 @@ trait ConstFolding extends ImportResolution {
     if bound.isEmpty then ""
     else s" — where ${bound.map((n, t) => s"$n = ${show(t)}").mkString(", ")}"
 
+  /** What `__VERSION__` written at `where` stands for: the `version` in the manifest of the package
+   * that file belongs to (`Source.manifest`), or a refusal saying which of the two things is missing.
+   * Read off the place the name is **written**, never the call a default is filled at.
+   */
+  protected def packageVersion(where: Option[Pos]): String = {
+    val here = where.getOrElse(err(ReservedNames.versionNowhere))
+
+    here.source.manifest match
+      case Some(SourceManifest(_, Some(v))) => v
+      case Some(SourceManifest(file, None)) => at(where)(err(ReservedNames.versionUnstated(file)))
+      case None                             => at(where)(err(ReservedNames.versionNoPackage(here.source.name)))
+  }
+
   /** Folds a constant expression to the literal it denotes, or `None` where it is not one.
    *
    * The set is deliberately small and closed: literals, other constants, conversions, and the
@@ -449,6 +462,9 @@ trait ConstFolding extends ImportResolution {
    * would be a different operation wearing the same spelling.
    */
   protected def fold(e: Expr, subst: Map[String, Type] = Map.empty): Option[Expr] = e match
+    // A literal the manifest supplies rather than the text, so it folds wherever a literal would
+    // — which is what lets `const VERSION: string = __VERSION__` be the one place a program says it.
+    case Ident("__VERSION__") => Some(StrLit(packageVersion(e.pos)))
     case l: IntLit   => Some(l.copy(suffix = None))
     case l: FloatLit => Some(l.copy(suffix = None))
     case l: BoolLit  => Some(l)

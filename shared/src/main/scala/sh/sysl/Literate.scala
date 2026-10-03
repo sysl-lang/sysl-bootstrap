@@ -186,7 +186,7 @@ object Literate {
           case Line.Prose(_)   => ""
         }
 
-        new Source(source.name, body.mkString("\n"), source.dir, Indent, source.features)
+        new Source(source.name, body.mkString("\n"), source.dir, Indent, source.features, source.manifest)
       }
 
   private def opensFence(bare: String): Boolean =

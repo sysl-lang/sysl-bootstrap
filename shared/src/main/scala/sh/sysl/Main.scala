@@ -311,7 +311,11 @@ private def executeCommand(asked: Config): Int = {
   // The project's own files, gated against the features **this** project has enabled — the answer
   // the resolver worked out, which is why it cannot be applied where the files were read. A
   // dependency's are stamped as they are collected, so each package sees its own and nobody else's.
-  val sources = ownSources.map(_.enabling(fetched.rootFeatures))
+  //
+  // Each also carries the manifest it belongs to, for `__VERSION__` — this project's here, and a
+  // dependency's or a `--lib` root's where those are collected, so a library's version is its own.
+  val ownManifest = sourceManifest(cfg.file, project)
+  val sources     = ownSources.map(_.enabling(fetched.rootFeatures).inPackage(ownManifest))
 
   // The pair of C functions this whole program allocates through (`reference/packages.md § One
   // heap, and the package that names it`). A package that brings its own heap says so, and saying
@@ -440,8 +444,14 @@ private def executeCommand(asked: Config): Int = {
     case Some(e) => return fail(e)
     case None    => ()
 
+  // A source root's files belong to that root's own manifest, which is what its `__VERSION__` reads.
+  val rootManifests =
+    roots.map(root => readPackageConfig(root).map(sourceManifest(root, _))) match
+      case answers if answers.exists(_.isLeft) => return fail(answers.collectFirst { case Left(e) => e }.get)
+      case answers                             => answers.collect { case Right(m) => m }
+
   val collected =
-    try roots.map(root => root -> Project.collect(root, Some(target.os)))
+    try roots.zip(rootManifests).map((root, m) => root -> Project.collect(root, Some(target.os)).map(_.inPackage(m)))
     catch
       case e: SelectionError => return fail(e.getMessage)
       case e: Exception      => return fail(s"cannot read a library: ${IoFailure.describe(e)}")
