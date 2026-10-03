@@ -311,7 +311,20 @@ trait Literals extends TypeResolution {
    * Knowing which type arguments really came from `literalDefault` would need the analysis to
    * report it, which is a great deal of machinery for a caret's position.
    */
-  protected def adaptable(e: Expr, t: TExpr): Boolean = isLiteral(e) || literalShaped(e) && constructed(t)
+  protected def adaptable(e: Expr, t: TExpr): Boolean = e match
+    // A filled default is asked about as what it wraps — it stands where the argument would have
+    // been written (`reference/declarations.md § Default parameters and named arguments`).
+    case DefaultArg(_, v) => adaptable(v, t)
+    case _                => isLiteral(e) || literalShaped(e) && constructed(t)
+
+  /** Whether an argument is a **default the call left out** whose value is a bare literal — the one
+   * argument the caller did not write. It is adaptable like any literal, and it is consulted after
+   * every adaptable argument the call *did* write, so it settles a type parameter only where nothing
+   * else in the call or its context does.
+   */
+  protected def omittedLiteral(e: Expr): Boolean = e match
+    case DefaultArg(_, v) => isLiteral(v) || omittedLiteral(v)
+    case _                => false
 
   /** Whether an expression is written out of adaptable literals and nothing else — one of them, or a
    * construction over them, however deeply nested.

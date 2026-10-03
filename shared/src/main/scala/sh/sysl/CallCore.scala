@@ -62,12 +62,14 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         provisional.zip(srcs.padTo(provisional.length, None)).zip(params).map {
           case ((t, src), (pname, pty)) =>
             // An omitted literal default is read here, at the type the call settled its parameter
-            // to, and a refusal is about the default rather than about anything the caller wrote —
-            // so it says so, at the call, which is the place the settled type came from.
-            if src.exists(s => s.isInstanceOf[DefaultArg] && isLiteral(written(s))) then
-              attempt(analyzeExpr(src.get, Some(pty))).getOrElse(at(src.get.pos)(err(
-                s"'$pname' of '$what' was left to its default, which cannot be read at ${show(pty)} — " +
-                  s"the type this call settles it to")))
+            // to, by the ordinary literal rule — so an integer literal is no `real` here either
+            // (`reference/traits.md`: *"an integer literal is neither"*). A refusal is about the
+            // default rather than about anything the caller wrote, so it says so, at the call,
+            // which is where the parameter's type came from.
+            if src.exists(omittedLiteral) then
+              attempt(analyzeExpr(src.get, Some(pty))).filterNot(r => disagree(r.ty, pty)).getOrElse(
+                at(src.get.pos)(err(s"'$pname' of '$what' was left to its default, and the default " +
+                  s"cannot be read at ${show(pty)}, the type the parameter has at this call")))
             else if src.exists(isLiteral) || src.isDefined && becomesSlice(t.ty, pty) then
               analyzeExpr(src.get, Some(pty))
             else reread(coerce(t, pty), src, pty)
@@ -176,7 +178,7 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
     // everything the call wrote — a written literal included — so `f[T](lo: T, step: T = 1)` called
     // `f(0.5)` is a `real` call whose `step` is `1.0`, and only a call that settles `T` from nothing
     // else falls back on the default's own spelling.
-    val omitted = at.map((a, _) => a.isInstanceOf[DefaultArg] && literalDefault(written(a)).isDefined)
+    val omitted = at.map((a, _) => omittedLiteral(a))
 
     // Each entry is the node read, if one was, and whether reading it took a **literal's default**
     // for want of anything better — which is what the ordering below turns on.
@@ -909,7 +911,8 @@ trait CallCore extends Literals with TraitObjects with ArgumentBinding {
         // call was written in.
         val solved = inDecl(f.name)(
           solve(shown, f.tparams, f.params.map(_.typ), provisional.map(_.ty), f.retType, expected,
-            args.zip(provisional).map((a, t) => adaptable(a, t)), f.bounds, written))
+            args.zip(provisional).map((a, t) => adaptable(a, t)), f.bounds, written,
+            omitted = args.map(omittedLiteral)))
         checkBounds(f, solved)
         (instantiateFunc(f, solved), Some(provisional))
 

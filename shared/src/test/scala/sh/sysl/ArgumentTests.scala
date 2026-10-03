@@ -169,24 +169,25 @@ class ArgumentTests
 
     // `reference/declarations.md § Default parameters and named arguments`: *"A default is read at
     // the type its parameter declares"* — and where that type is a parameter being solved, it is
-    // read at what the call solved it to. The omitted literal is not one of the call's arguments,
-    // so it may not take part in the solve: before the fix it was analyzed bare as an `int` and
-    // either outvoted the written `0.5` or was refused against the `real` that `x` settled.
-    "an omitted literal default is read at the solved type, from a variable" in {
-      run("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
+    // read at what the ARGUMENTS solved it to. The omitted literal is not one of the call's
+    // arguments, so it may not take part in the solve: before the fix it was analyzed bare as an
+    // `int`, so `f(x)` refused a `1.0` default against the `real` that `x` settled, and `f(0.5)`
+    // solved `T = int` from the default and refused the argument the caller actually wrote.
+    "an omitted literal default is read at the type a variable argument settles" in {
+      run("""|f[T](lo: T, step: T = 1.0) -> real = real(lo) + real(step)
              |val x: real = 0.5
              |print(f(x))
              |""".stripMargin) shouldBe "1.5\n"
     }
 
-    "and from a written literal, which the default does not outvote" in {
-      run("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
+    "and at the type a written literal settles, which the default does not outvote" in {
+      run("""|f[T](lo: T, step: T = 1.0) -> real = real(lo) + real(step)
              |print(f(0.5))
              |""".stripMargin) shouldBe "1.5\n"
     }
 
     "and at an integer the call settled, where it stays an integer" in {
-      run("""|f[T](lo: T, step: T = 1) -> T = lo + step
+      run("""|f[T: Add](lo: T, step: T = 1) -> T = lo + step
              |val n: u8 = 41
              |print(f(n))
              |print(f(10))
@@ -197,34 +198,70 @@ class ArgumentTests
       run("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
              |print(f(0.5, 0.25))
              |print(f(2, step = 3))
-             |""".stripMargin) shouldBe "0.75\n5.0\n"
+             |""".stripMargin) shouldBe "0.75\n5\n"
     }
 
-    "and it settles the parameter itself only where nothing the call wrote does" in {
+    // A `u8` binding cannot take an `int`, so this compiling is the proof that the expected type
+    // reached `T` ahead of the default's own spelling.
+    "and it settles the parameter itself only where nothing the call or its context says" in {
       run("""|g[T](step: T = 1) -> T = step
              |print(g())
-             |val r: real = g()
-             |print(r)
-             |""".stripMargin) shouldBe "1\n1.0\n"
+             |val b: u8 = g()
+             |print(b)
+             |""".stripMargin) shouldBe "1\n1\n"
     }
 
     "a generic struct's method reads its default at the receiver's argument" in {
-      run("""|struct Box[T]
+      run("""|struct Box[T: Add]
+             |    v: T
+             |
+             |    bumped(self, by: T = 1) -> T = self.v + by
+             |end Box
+             |
+             |val b: u8 = 41
+             |print(Box(b).bumped())
+             |""".stripMargin) shouldBe "42\n"
+    }
+
+    // The literal rule is the ordinary one, so an integer literal is no `real` at a default either
+    // (`reference/traits.md`: *"an integer literal is neither"*). The refusal is about the default,
+    // and it names the argument the reader wrote nowhere — before the fix `f(0.5)` blamed `lo`.
+    "an integer default is refused where the arguments settle 'T' to real" in {
+      val said = err("""|f[T](lo: T, step: T = 1) -> real = real(lo) + real(step)
+                        |print(f(0.5))
+                        |""".stripMargin)
+      said should include("'step' of 'f' was left to its default, and the default cannot be read at " +
+        "real, the type the parameter has at this call")
+      said should not include "'lo' of 'f'"
+    }
+
+    "and so is a float default where they settle it to int" in {
+      err("""|f[T](lo: T, step: T = 1.5) -> T = lo
+             |print(f(2))
+             |""".stripMargin) should include(
+        "'step' of 'f' was left to its default, and the default cannot be read at int, the type the " +
+          "parameter has at this call")
+    }
+
+    // A literal the caller WROTE outranks one it left out, even where the left-out one stands first:
+    // `b = 3` settles `T = int`, so it is the `1.5` default that is refused, never the `3`.
+    "a written literal outranks a default that stands before it" in {
+      val said = err("""|k[T](a: T = 1.5, b: T = 2) -> T = a
+                        |print(k(b = 3))
+                        |""".stripMargin)
+      said should include("'a' of 'k' was left to its default, and the default cannot be read at int")
+      said should not include "'b' of 'k'"
+    }
+
+    "and a generic struct's method's, at the receiver's argument" in {
+      err("""|struct Box[T: Add]
              |    v: T
              |
              |    bumped(self, by: T = 1) -> T = self.v + by
              |end Box
              |
              |print(Box(0.5).bumped())
-             |print(Box(41).bumped())
-             |""".stripMargin) shouldBe "1.5\n42\n"
-    }
-
-    "a default the solved type cannot hold is refused at the call that solved it" in {
-      err("""|f[T](lo: T, step: T = 1.5) -> T = lo
-             |print(f(2))
-             |""".stripMargin) should include(
-        "'step' of 'f' was left to its default, which cannot be read at int — the type this call settles it to")
+             |""".stripMargin) should include("'by' of ")
     }
 
     // `reference/declarations.md § Default parameters and named arguments`: a default stands
