@@ -857,15 +857,19 @@ class PackageBuildTests extends PackageCacheSupport {
      * refusal was checked against the *project's* directories only. What happened instead was the
      * silent winner that rule exists to refuse: the root's own module answered, the dependency's was
      * unreachable, and the build was green.
+     *
+     * The coordinate is `other-mid` rather than `mid` on purpose: a root whose `package.name` is the
+     * coordinate's repository name **is** that package and stands in for it, which is the override
+     * below rather than a collision.
      */
     "and a dependency claiming a name the root itself declares is refused" in {
       val cache = emptyCache()
-      val at    = published(cache, "github.com/e/mid", Version(1, 0, 0), manifest("mid", "1.0.0"))
+      val at    = published(cache, "github.com/e/other-mid", Version(1, 0, 0), manifest("other-mid", "1.0.0"))
 
       createDirectories(s"$at/mid")
       writeFile(s"$at/mid/mid.sysl", "module mid\n\nstamp() -> int = 7\n")
 
-      val root  = declaring("""m { git = "github.com/e/mid", version = "1.0.0" }""",
+      val root  = declaring("""m { git = "github.com/e/other-mid", version = "1.0.0" }""",
         "answer() -> int = 42")
       val notes = withCache(cache)(refused(program("print(mid.answer())"), List(root)))
 
@@ -878,13 +882,13 @@ class PackageBuildTests extends PackageCacheSupport {
     // be reachable from this road too, or the refusal above is a wall rather than a diagnostic.
     "while a mount settles that, as it does every other collision" in {
       val cache = emptyCache()
-      val at    = published(cache, "github.com/e/mid", Version(1, 0, 0), manifest("mid", "1.0.0"))
+      val at    = published(cache, "github.com/e/other-mid", Version(1, 0, 0), manifest("other-mid", "1.0.0"))
 
       createDirectories(s"$at/mid")
       writeFile(s"$at/mid/mid.sysl", "module mid\n\nstamp() -> int = 7\n")
 
       val root = declaring(
-        """m { git = "github.com/e/mid", version = "1.0.0", mount = "theirs" }""",
+        """m { git = "github.com/e/other-mid", version = "1.0.0", mount = "theirs" }""",
         "answer() -> int = theirs.mid.stamp() * 6")
 
       withCache(cache)(run(program("print(mid.answer())"), List(root))) shouldBe "42\n"
@@ -901,6 +905,162 @@ class PackageBuildTests extends PackageCacheSupport {
       val root = declaring(s"""g { path = "$geom" }""", "unused() -> int = 0")
 
       run(program("print(geom.double(21))"), List(root)) shouldBe "42\n"
+    }
+  }
+
+  /** **A `--lib` root that is a coordinate's package stands in for it** — Cargo's `[patch]`, Go's
+   * `replace`, and the loop for building a project against a working copy of something it depends on
+   * (`reference/packages.md § A source root stands in for the package it is`).
+   *
+   * The coordinate is dropped before selection, wherever in the graph it is named, so nothing is
+   * fetched for it. Before this, the same directory was a collision: the root's modules and the
+   * coordinate's were two claims on one name, and the refusal fired however unreachable the
+   * coordinate was — a working copy of an unreleased package could not be built against at all.
+   *
+   * "Is that package" is the root's `package.name` against the coordinate's repository name, the
+   * one identity both state without anything being fetched.
+   */
+  "a --lib root that is a coordinate's package" - {
+
+    /** A checkout of `geom` whose `double` answers differently from the published one, so a result
+     * says which copy was compiled.
+     */
+    def checkout(name: String = "geom", factor: Int = 3, deps: String = ""): String =
+      packageOf(name, "geom", s"double(n: int) -> int = n * $factor", deps)
+
+    def publishedGeom(cache: String): Unit = {
+      val at = published(cache, "github.com/e/geom", Version(1, 0, 0), manifest("geom", "1.0.0"))
+
+      createDirectories(s"$at/geom")
+      writeFile(s"$at/geom/geom.sysl", "module geom\n\ndouble(n: int) -> int = n * 2\n")
+    }
+
+    "stands in for it, and the build compiles the working copy" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+
+      val root = app("print(geom.double(7))", """g { git = "github.com/e/geom", version = "1.0.0" }""")
+
+      withCache(cache)(run(root, List(checkout()))) shouldBe "21\n"
+    }
+
+    // The case the override exists for: a coordinate nothing can fetch — a package not yet published,
+    // or no network — is not reached at all, so it cannot stop the build.
+    "and fetches nothing, so a coordinate that cannot be fetched does not stop the build" in {
+      val cache = emptyCache()
+      val root  = app("print(geom.double(7))", """g { git = "nowhere.invalid/e/geom", version = "1.0.0" }""")
+
+      withCache(cache)(run(root, List(checkout()))) shouldBe "21\n"
+      isDirectory(Fetch.directory(cache, "nowhere.invalid/e/geom", Version(1, 0, 0))) shouldBe false
+      isFile(s"$root/${Sums.FileName}") shouldBe false
+    }
+
+    // A major-version suffix is part of the coordinate's identity and not of the repository's name,
+    // so a checkout of `json` is a checkout of `json/v2` too.
+    "matching the repository name with a major-version suffix set aside" in {
+      val root = app("print(geom.double(7))", """g { git = "nowhere.invalid/e/geom/v2", version = "2.0.0" }""")
+
+      withCache(emptyCache())(run(root, List(checkout()))) shouldBe "21\n"
+    }
+
+    /** The refusal stays where the root is NOT that package: a directory that merely holds a module
+     * some coordinate also offers is two claims on one name, and picking the root would be the silent
+     * winner `§ 9` refuses. The message now also says what would have made it an override.
+     */
+    "while a root that merely holds the same module is still refused" in {
+      val cache = emptyCache()
+      publishedGeom(cache)
+
+      val root  = app("print(geom.double(7))", """g { git = "github.com/e/geom", version = "1.0.0" }""")
+      val other = checkout(name = "shapes")
+      val notes = withCache(cache)(refused(root, List(other)))
+
+      notes should include("is both a module of the source root")
+      notes should include(other)
+      notes should include("'mount'")
+      notes should include("names it 'geom'")
+    }
+
+    /** **Transitive, and it wins there too.** A dependency that itself depends on the coordinate is
+     * built against the root, exactly as the project is — one copy of the package in the program, the
+     * one the reader named. Leaving the dependency on the fetched copy would put two `geom`s in one
+     * build, the project's import reading one and the dependency's the other, with nothing said.
+     */
+    "and stands in for it where another dependency names it" in {
+      val cache = emptyCache()
+      val mid   = published(cache, "github.com/e/mid", Version(1, 0, 0),
+        manifest("mid", "1.0.0", """g { git = "nowhere.invalid/e/geom", version = "1.0.0" }"""))
+
+      createDirectories(s"$mid/mid")
+      writeFile(s"$mid/mid/mid.sysl", "module mid\n\nanswer() -> int = geom.double(14)\n")
+
+      val root = app("print(mid.answer())\nprint(geom.double(1))",
+        """m { git = "github.com/e/mid", version = "1.0.0" }""")
+
+      withCache(cache)(run(root, List(checkout()))) shouldBe "42\n3\n"
+      isDirectory(Fetch.directory(cache, "nowhere.invalid/e/geom", Version(1, 0, 0))) shouldBe false
+    }
+
+    /** Where the root is NOT the package, a dependency's own import of it must still reach the copy
+     * that dependency declared: its table binds `geom` to the fetched package, and a name in the
+     * project's space is not supposed to answer for it (`§ What a dependency's modules are called`).
+     * What it gets today is the root's `geom` — 42 rather than 28 — with nothing said.
+     */
+    // TODO: un-ignore when a dependency's import stops resolving to a --lib root's module of that name
+    "while a dependency's own import of it is not answered by an unrelated root" ignore {
+      val cache = emptyCache()
+      publishedGeom(cache)
+
+      val mid = published(cache, "github.com/e/mid", Version(1, 0, 0),
+        manifest("mid", "1.0.0", """g { git = "github.com/e/geom", version = "1.0.0" }"""))
+
+      createDirectories(s"$mid/mid")
+      writeFile(s"$mid/mid/mid.sysl", "module mid\n\nanswer() -> int = geom.double(14)\n")
+
+      val root = app("print(mid.answer())", """m { git = "github.com/e/mid", version = "1.0.0" }""")
+
+      withCache(cache)(run(root, List(checkout(name = "shapes")))) shouldBe "28\n"
+    }
+
+    // A mount on the stood-in dependency is still the name this manifest gave it.
+    "and a mount on it still names it" in {
+      val root = app("print(theirs.geom.double(7))",
+        """g { git = "nowhere.invalid/e/geom", version = "1.0.0", mount = "theirs" }""")
+
+      withCache(emptyCache())(run(root, List(checkout()))) shouldBe "21\n"
+    }
+
+    // And a dependency the root itself declares still reaches the program through it, as the
+    // coordinate's own dependencies would have.
+    "carrying what the root depends on" in {
+      val shape = packageOf("shape-lib", "shape", "sides() -> int = 7")
+      val geom  = checkout(deps = s"""s { path = "$shape" }""")
+
+      writeFile(s"$geom/geom/more.sysl", "module geom\n\ntimes_sides(n: int) -> int = n * shape.sides()\n")
+
+      val root = app("print(geom.times_sides(6))", """g { git = "nowhere.invalid/e/geom", version = "1.0.0" }""")
+
+      withCache(emptyCache())(run(root, List(geom))) shouldBe "42\n"
+    }
+
+    // `build-c` resolves through the same driver path as `run` and `test`; this pins that it does.
+    "for build-c as well" in {
+      val dir = createTempDirectory("sysl-standin-c-")
+
+      writeFile(s"$dir/${PackageConfig.FileName}",
+        """package { name = "clib", version = "0.1.0" }
+          |dependencies { g { git = "nowhere.invalid/e/geom", version = "1.0.0" } }
+          |""".stripMargin)
+      writeFile(s"$dir/lib.sysl", "@export(\"twice_geom\")\ntwice_geom(n: int) -> int = geom.double(n)\n")
+
+      val archive = s"$dir/out.a"
+      val notes   = new java.io.ByteArrayOutputStream
+      val status  = withCache(emptyCache())(Console.withOut(Discarded)(Console.withErr(notes)(
+        sh.sysl.execute(Config(command = "build-c", file = dir, output = Some(archive),
+          libs = List(checkout()))))))
+
+      withClue(notes.toString)(status shouldBe 0)
+      isFile(archive) shouldBe true
     }
   }
 

@@ -84,7 +84,33 @@ object Resolve {
        * package no round has reached yet: nothing turned on, so nothing optional comes with it.
        */
       enabled: Map[String, Set[String]] = Map.empty,
+      /** The `--lib` source roots that carry a manifest, each with what that manifest says — the
+       * candidates to stand in for a coordinate (`standInFor`).
+       */
+      roots: List[(String, PackageConfig)] = Nil,
   ) {
+
+    /** The `--lib` root that **is** the package `dep` names, where one is — in which case that
+     * coordinate is never selected, fetched or read, anywhere in the graph
+     * (`reference/packages.md § A source root stands in for the package it is`).
+     *
+     * **A root is that package when its `package.name` is the coordinate's repository name** — the
+     * last segment of the path, a major-version suffix set aside, so `github.com/e/json/v2` is
+     * `json`. That is the one identity both sides state without anything being fetched: the
+     * coordinate names a repository, and a checkout of it — a clone, a worktree, a fork — carries
+     * that repository's manifest. Comparing modules instead would need the coordinate's tree, which
+     * is the very fetch an override exists to avoid; and the dependency's *label* is a name the
+     * consumer chose, which two manifests may spell differently, so it would make the answer depend
+     * on which edge the walk happened to read first.
+     *
+     * A function of the coordinate alone, so every edge naming it gets the same answer.
+     */
+    def standInFor(dep: Dependency): Option[(String, PackageConfig)] =
+      dep.origin match
+        case Origin.Git(coordinate, _) =>
+          val repository = Dependency.withoutMajor(coordinate).split('/').last
+          roots.find(_._2.name.contains(repository))
+        case Origin.Local(_) => None
 
     /** A manifest as this round reads it: its optional dependencies nothing has turned on removed.
      *
@@ -109,6 +135,7 @@ object Resolve {
     def demanding(asker: String, deps: List[Dependency]): State =
       deps.foldLeft(this) { (s, dep) =>
         dep.origin match
+          case Origin.Git(_, _) if standInFor(dep).isDefined => s
           case Origin.Git(coordinate, version) =>
             val noted = s.copy(claims = s.claims.updatedWith(coordinate)(was =>
               Some(was.getOrElse(Nil) :+ Claim(asker, version))))
@@ -146,6 +173,11 @@ object Resolve {
    * thing the collision rule below can be asked about them. Left out, a root's module and a
    * dependency's module could both claim one name and the local one would quietly win, which is the
    * silent winner `§ 9` exists to refuse.
+   *
+   * **And a root that is a coordinate's package stands in for it** — Cargo's `[patch]`, Go's
+   * `replace`: the coordinate is dropped before selection, wherever in the graph it is named, so
+   * nothing is fetched for it and a coordinate that cannot be fetched at all does not stop the build.
+   * `State.standInFor` says how "is that package" is decided.
    *
    * `config`'s own `path` dependencies are resolved against `root` here, once, before anything reads
    * them — so a caller that read `config` off disk with `PackageConfig.read` alone (a test, or a
@@ -191,7 +223,7 @@ object Resolve {
   /** One round: the whole resolution, against one round's idea of what is enabled. */
   private def once(root: String, config: PackageConfig, sums: Sums, cache: String,
                    sharing: List[String], enabled: Map[String, Set[String]]): Either[String, Graph] = {
-    val start = State(sums = sums, enabled = enabled)
+    val start = State(sums = sums, enabled = enabled, roots = sharing.flatMap(r => manifestOf(r).map(r -> _)))
     val top   = start.pruned("", config)
 
     for
@@ -356,17 +388,38 @@ object Resolve {
    */
   private type Table = Map[String, (String, String)]
 
-  /** The names a manifest's own `dependencies` block binds, which is what it wrote down. */
+  /** The names a manifest's own `dependencies` block binds, which is what it wrote down.
+   *
+   * **A coordinate a `--lib` root stands in for binds that root's modules, under the names they
+   * already have** — the root's files are filed under the project's own prefix, so the module a
+   * dependency's source writes as `sh.sysl.ogol` is the project's `sh.sysl.ogol` and nothing else.
+   * A mount still renames it for the manifest that wrote one. The root is left out of the
+   * collision check against itself, since being that package is exactly what it was asked to be;
+   * every other root and every other dependency is still checked as before.
+   */
   private def declaredTable(owner: String, ownerRoots: List[String], deps: List[Dependency],
                             state: State): Either[String, Table] =
     deps.foldLeft(Right(Map.empty): Either[String, Table]) { (acc, dep) =>
+      val standIn = state.standInFor(dep).map(_._1)
+
       for
         table <- acc
-        dir   <- theirRoot(dep, state)
-        added <- bindings(dep, dir).left.map(e => s"$owner: $e")
-        _     <- collect(added.keys.toList.sorted)(local => noCollision(owner, ownerRoots, table, local, dep))
+        added <- standIn match
+                   case Some(dir) => Right(standInBindings(dep, dir))
+                   case None      => theirRoot(dep, state).flatMap(bindings(dep, _)).left.map(e => s"$owner: $e")
+        others = ownerRoots.filterNot(standIn.contains)
+        _     <- collect(added.keys.toList.sorted)(local => noCollision(owner, others, table, local, dep))
       yield table ++ added.map((k, v) => k -> (v, dep.canonical))
     }
+
+  /** What a stood-in coordinate binds: each of the root's modules as itself, or under the mount. */
+  private def standInBindings(dep: Dependency, dir: String): Map[String, String] = {
+    val modules = Project.modules(dir)
+
+    dep.mount match
+      case Some(mount) => modules.map(m => Packages.qualify(mount, m) -> m).toMap
+      case None        => modules.map(m => m -> m).toMap
+  }
 
   /** Every package reachable through the ones a manifest named, minus those it named itself
    * (`reference/packages.md § What a dependency's modules are called`).
@@ -396,6 +449,12 @@ object Resolve {
       queue match
         case Nil                                => Right(out)
         case dep :: rest if seen(dep.canonical) => walk(rest, seen, out)
+        // A coordinate a source root stands in for offers nothing of its own to inherit — the
+        // root's modules are already the project's — but what the root depends on is still reached
+        // through it, exactly as the coordinate's own dependencies would have been.
+        case dep :: rest if state.standInFor(dep).isDefined =>
+          val (_, theirs) = state.standInFor(dep).get
+          walk(rest ::: theirs.dependencies, seen + dep.canonical, out)
         case dep :: rest =>
           for
             theirs <- theirConfig(dep, state)
@@ -518,6 +577,13 @@ object Resolve {
    * the consumer's prefix and are therefore names just as taken. One of those colliding used to be the
    * silent winner this rule refuses everywhere else — the local module answered and the dependency's
    * was unreachable, with nothing said.
+   *
+   * **A root that IS the coordinate's package never reaches this**: it stands in for the coordinate
+   * (`State.standInFor`), which is then neither fetched nor bound, so its modules are the only ones
+   * by those names. That is an explicit request — the reader named the directory — and not the silent
+   * winner this refuses. What still arrives here is a root that merely *holds* a module some
+   * coordinate also offers without being that package, and that is refused exactly as before, with a
+   * clause saying what would have made it an override.
    */
   private def noCollision(owner: String, ownerRoots: List[String], table: Map[String, (String, String)],
                           local: String, dep: Dependency): Either[String, Unit] =
@@ -538,8 +604,17 @@ object Resolve {
             // reason: what is quoted back is the thing they typed and can go and look at.
             val whose = if r == ownerRoots.head then "this project" else s"the source root '$r'"
 
+            // A source root colliding with a coordinate is the case an override is for, so the
+            // refusal says what would have made it one: the reader may have meant exactly that.
+            val override_ = dep.origin match
+              case Origin.Git(coordinate, _) if r != ownerRoots.head =>
+                val repository = Dependency.withoutMajor(coordinate).split('/').last
+                s". A source root stands in for a coordinate only when it is that package — when its " +
+                  s"${PackageConfig.FileName} names it '$repository'"
+              case _ => ""
+
             Left(s"$owner: '$local' is both a module of $whose and one ${dep.canonical} offers — " +
-              "give the dependency a 'mount' to say what it is called here")
+              "give the dependency a 'mount' to say what it is called here" + override_)
 
   /** What to say about two packages claiming one module name, which is not always the same thing.
    *
@@ -582,6 +657,19 @@ object Resolve {
   /** A package's manifest, where it has one. A package with no file is a package that said nothing,
    * exactly as `§ 1` has it for a project.
    */
+  /** A `--lib` root's manifest, read quietly: the driver read it already, warnings and all, to fold
+   * its `dependencies` into the graph, and a root without one — or one this compiler cannot read —
+   * simply stands in for nothing.
+   */
+  private def manifestOf(root: String): Option[PackageConfig] = {
+    val path = s"$root/${PackageConfig.FileName}"
+
+    if !isFile(path) then None
+    else
+      try PackageConfig.read(readFile(path)).toOption.map(_.resolvingLocalPaths(root))
+      catch case _: Exception => None
+  }
+
   private def configOf(root: String): Either[String, PackageConfig] = {
     val path = s"$root/${PackageConfig.FileName}"
 

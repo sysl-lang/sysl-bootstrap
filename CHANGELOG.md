@@ -7,6 +7,20 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+### Behaviour changes
+
+- **A `--lib` source root that is a dependency's package now overrides that dependency** instead of
+  being refused as a collision. A root stands in for a coordinate when its `package.name` is the
+  coordinate's repository name (the last path segment, a `/vN` suffix set aside). The coordinate is
+  dropped before selection wherever in the graph it is named — the project's manifest or any
+  dependency's — so nothing is fetched for it, and an unfetchable coordinate (unpublished, a bad tag,
+  no network) no longer stops a build that has a `--lib` copy of it. This is Cargo's `[patch]` and
+  Go's `replace`, written as one flag. A root that merely holds a module a coordinate also offers,
+  without being that package, is still refused, and the refusal now says what would have made it an
+  override. `reference/packages.md § A source root stands in for the package it is`.
+
 ## 0.0.160 — 2026-10-03
 
 **__VERSION__, and defaults read at the type each call settles**
