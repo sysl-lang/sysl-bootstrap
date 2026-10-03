@@ -154,12 +154,13 @@ nanosleep(nanos: long) -> long = c_nanosleep(nanos)
 // is real: a `define` costs what a `declare` does not, so an unconditional body calling
 // `clock_gettime` reaching a freestanding link would fail naming a symbol that target has never had.
 //
-// What answers it is this file's own header. `@requires(posix)` is a property of the whole module, so
-// a target that does not provide `posix` does not compile this module at all -- there is no
-// declaration to gate, and a `#if` would be a second statement of a claim the header already makes.
-// Measured rather than reasoned about: with the guard removed, `sysl build-c --target
-// thumbv7em-freestanding` over a program calling `sysl.time.now()` emits a byte-identical archive,
-// with `sysl_wall_us` undefined and `clock_gettime` nowhere in it.
+// What answers it is this file's own header. `@requires(posix)` is a property of the whole module, and
+// a supplier is taken only from a module whose clause the target satisfies -- so on a machine without
+// `posix` these two are never reached, and a `#if` would be a second statement of a claim the header
+// already makes. (An earlier version of this paragraph offered a byte-identical freestanding archive
+// as the proof. That archive was missing the supplier on *every* target, POSIX ones included,
+// because nothing put a library supplier in the program at all; `LibrarySupplierCliTests` now holds
+// both halves -- defined on a POSIX target, left declared on a freestanding one.)
 //
 // So a freestanding program that asks the time and links no supplier fails at the link naming
 // `sysl_wall_us`, which is the diagnostic it should get: the board is what has a clock to offer, and

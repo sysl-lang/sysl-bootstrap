@@ -36,6 +36,15 @@ private rendered_json(l: Level, message: string, fields: []const Field) -> strin
     from_utf8_unchecked(sink.text())
 end rendered_json
 
+private rendered_message(l: Level, message: string, fields: []const Field) -> string
+    var r = Record(Instant(AT), l, message, fields)
+    var sink = byte_sink()
+    var w: *Writer = &sink
+
+    message_text(&r, w)
+    from_utf8_unchecked(sink.text())
+end rendered_message
+
 // -- the two renderings ---------------------------------------------------------------------------
 
 @test("a text line is the time, the level, the message and the fields")
@@ -59,6 +68,31 @@ text_quotes_when_it_has_to()
     // The empty value would otherwise leave `a=` with nothing after it, which reads as a truncated
     // line rather than as an empty string.
     assert(rendered_text(Level.Info, "m", [("a", "")]).contains("a=\"\""))
+
+@test("a text line is unchanged by sharing its fields with message_text")
+text_unchanged_byte_for_byte()
+    // The line `text` wrote before `message_text` took its field loop, across every shape the loop
+    // has: no fields, several, one that needs quoting, and an empty message ahead of them.
+    assert_eq(rendered_text(Level.Info, "listening", []), "2025-09-04 15:42:31 Z INFO  listening\n")
+    assert_eq(rendered_text(Level.Warn, "underrun", [("frames", "512"), ("dev", "pcm 0")]),
+              "2025-09-04 15:42:31 Z WARN  underrun frames=512 dev=\"pcm 0\"\n")
+    assert_eq(rendered_text(Level.Error, "", [("a", "1")]), "2025-09-04 15:42:31 Z ERROR  a=1\n")
+    assert_eq(rendered_text(Level.Debug, "", []), "2025-09-04 15:42:31 Z DEBUG \n")
+
+@test("message_text is the message alone, with no time, no level and no newline")
+message_text_alone()
+    assert_eq(rendered_message(Level.Warn, "underrun", []), "underrun")
+
+@test("message_text writes the fields as text does, quoting the ones that need it")
+message_text_with_fields()
+    assert_eq(rendered_message(Level.Warn, "underrun", [("frames", "512")]), "underrun frames=512")
+    assert_eq(rendered_message(Level.Info, "m", [("a", "one two"), ("b", ""), ("c", "x\"y")]),
+              "m a=\"one two\" b=\"\" c=\"x\\\"y\"")
+
+@test("message_text with an empty message starts at the first field, not at a space")
+message_text_empty_message()
+    assert_eq(rendered_message(Level.Info, "", []), "")
+    assert_eq(rendered_message(Level.Info, "", [("a", "1"), ("b", "2")]), "a=1 b=2")
 
 @test("a json line is an object with the time in milliseconds")
 json_line()

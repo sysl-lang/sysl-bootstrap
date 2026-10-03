@@ -21,6 +21,30 @@ change what an existing program means. Where it does, the release says so.
   without being that package, is still refused, and the refusal now says what would have made it an
   override. `reference/packages.md § A source root stands in for the package it is`.
 
+### Other changes
+
+- **Fixed: a `build-c` archive left `sysl_wall_us` undefined**, so any program reaching `sysl.time.now()` — every `sysl.log` call among them — failed at the consumer's link. Wherever the standard library is compiled from source (`build-c`, `--no-std-lib`), its own supplier of a seam the program calls (`sysl.posix.time`'s `sysl_wall_us` and `sysl_monotonic_us`) is now analyzed and kept; it is taken only on a target whose operating system has `posix`, and never where the program or a package supplies the same symbol.
+- `sysl.log.message_text(r, out)` renders a record's message and fields alone -- `underrun frames=512`,
+  quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
+  destination stamps its own (logcat, syslog, journald). `text` now shares its field rendering and
+  writes the same bytes as before.
+
+**A `self` method reads its receiver where it lies, and copies it only where a copy could be seen**
+
+- **A large by-value parameter is no longer copied at entry** when the function only reads it: no
+  assignment to it or a part of it, no `&` of it, no `*self` call on it, no tail self-call, and
+  nothing outside the program can call the function. `reference/declarations.md`'s "the method gets a
+  copy" still holds — the caller hands over storage nothing can change while the call runs (a
+  temporary, a local nobody else can name, or a snapshot it stages), so a write through an alias
+  mid-call still does not show through `self`.
+- **A caller stages no snapshot at all for a callee that can write nothing.** That test
+  (`BorrowedParams`) now reaches past a leaf: a body may call functions that pass it, recursion
+  included, and may write its own `var`s.
+- **A staged snapshot is released at its address** (`arc.dispose_at.T(ptr)`) instead of being loaded
+  whole and passed to `arc.dispose.T` by value, which was a second copy of the struct on the stack.
+- On thumb-freestanding-softfp, musicbox's `Synth.render` frame goes from **11,128 B to 104 B**, and a
+  `*self` method calling a `self` one over a 4 KB struct from 8,224 B to 0.
+
 ## 0.0.160 — 2026-10-03
 
 **__VERSION__, and defaults read at the type each call settles**

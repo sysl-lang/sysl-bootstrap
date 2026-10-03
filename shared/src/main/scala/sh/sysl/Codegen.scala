@@ -40,6 +40,37 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
    */
   private lazy val addressTaken: Set[String] = CallOwnership.addressed(program)
 
+  /** The large by-value parameters each function reads **where its caller put them**, with no copy
+   * of its own at entry.
+   *
+   * A parameter past `layout.indirect`'s boundary arrives as an address, and every sysl caller hands
+   * over storage nothing can change for the length of the call (`CallEmitter.indirectArg`): a
+   * temporary, a local no callee can name, or a snapshot the caller staged. So the copy a callee used
+   * to make of it at entry was a second snapshot of a snapshot, and for a multi-kilobyte receiver it
+   * was the frame. It is still made — the parameter keeps a slot of its own — wherever something
+   * other than reading could tell:
+   *
+   *   - **the body changes its own copy** — assigns to it or a part of it, takes its address, binds
+   *     a `ref` to it, or calls a `*self` method on it (`ContractAssume.rebound`, which is that
+   *     question already) — since writing the caller's storage would be writing the caller's value;
+   *   - **the function jumps back to its own entry** (`TailCalls`), which stores into the slots;
+   *   - **something outside the program may call it** — `@export`, a `@section`, a foreign
+   *     convention, an address taken for a `*fn` — since nothing on that side promises a snapshot;
+   *   - **the parameter is promoted**, whose storage is moving to the heap anyway.
+   */
+  protected lazy val readsInPlace: Map[String, Set[String]] =
+    program.funcs.map { f =>
+      val outside = addressTaken(f.name) || f.exported.isDefined || f.section.isDefined ||
+        f.conv.isDefined || TailCalls.of(f).nonEmpty
+      val bound   = ContractAssume.rebound((f.body, f.requires, f.ensures, f.olds, f.variant))
+      val moved   = promotions(Some(f.name))
+      val names   =
+        if outside || bound(ContractAssume.opaque) then Set.empty[String]
+        else f.params.collect { case (n, t) if layout.indirect(t) && !bound(n) && !moved(n) => n }.toSet
+
+      f.name -> names
+    }.filter(_._2.nonEmpty).toMap
+
   // --- module --------------------------------------------------------------------------
 
   /** **The module, as data.** `gen` below is this written down.
@@ -178,7 +209,12 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     // land here, and a `declare` beside the `define` of one symbol is `invalid redefinition of
     // function` out of LLVM. The definition is the stronger statement and is the one to keep — a
     // caller reaching the `extern` resolves to it exactly as the linker would have.
-    val defined = program.funcs.flatMap(_.exported).toSet
+    //
+    // **Only an export this module EMITS counts**, which is `own` rather than every function: a
+    // supplier a prebuilt standard module already compiled is declared under its key and its thunk
+    // is in the artifact, so the symbol an `extern` names still has to be declared here for the
+    // linker to resolve it there.
+    val defined = own.flatMap(_.exported).toSet
 
     val declared = mutable.Set(Llvm.trap.name) ++ defined ++
       (if heap then Set(mallocSym, freeSym) else Set.empty) ++
@@ -652,15 +688,22 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
     // Which parameters this function keeps a count of its own for, and which it reads through the
     // one its caller is holding for the length of the call (`CallOwnership`). The slot is written
     // either way, because the body addresses it like any other local.
-    val owns = CallOwnership.owning(f, addressTaken(f.name))
+    val owns = CallOwnership.owning(f, addressTaken(f.name), inertCallees(f.name))
+    val inPlace = readsInPlace.getOrElse(f.name, Set.empty)
 
     // A zero-sized parameter is not an argument: there is nothing to receive and nothing to keep,
     // so it takes no slot and the emitted signature below does not mention it.
     for (name, ty) <- f.params if !Type.zeroSized(ty) do
-      emitAlloca(Val.Reg(s"$name.addr"), ty.lty)
+      // A large one nothing but reading reaches is read where it arrived (`readsInPlace`): the
+      // slot *is* the caller's storage, and only a name for it is made here.
+      if inPlace(name) then
+        emit(Inst.Gep(Val.Reg(s"$name.addr"), LType.I(8), Val.Reg(s"$name.param"), List(Arg(i32, Val.Int(0)))))
+      else emitAlloca(Val.Reg(s"$name.addr"), ty.lty)
       // A large one arrived as an address, so the copy the callee makes for itself is a copy of
       // bytes and the count it takes is taken at the slot rather than off a value it never had.
-      if layout.indirect(ty) then
+      if inPlace(name) then
+        if owns(name) then retainAt(ty, Val.Reg(s"$name.addr"))
+      else if layout.indirect(ty) then
         emitMemcpy(Val.Reg(s"$name.addr"), Val.Reg(s"$name.param"), layout.size(ty), layout.align(ty))
         if owns(name) then retainAt(ty, Val.Reg(s"$name.addr"))
       else
