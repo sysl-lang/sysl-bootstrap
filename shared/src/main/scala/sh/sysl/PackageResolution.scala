@@ -399,7 +399,7 @@ private def readPackageConfig(file: String): Either[String, PackageConfig] = {
     catch case e: Exception => Left(s"cannot read $path: ${IoFailure.describe(e)}")
 }
 
-/** The manifest the files under `file` belong to, as `__VERSION__` reads it — or `None` where there
+/** The manifest the files under `file` belong to, as `__NAME__` and `__VERSION__` read it — or `None` where there
  * is no `package.hocon` at that root, which is the lone-file program `readPackageConfig` answers with
  * the empty config. Looked for in exactly the place that function looks, so the two cannot disagree
  * about whether a tree is a package.
@@ -407,7 +407,7 @@ private def readPackageConfig(file: String): Either[String, PackageConfig] = {
 private[sysl] def sourceManifest(file: String, config: PackageConfig): Option[SourceManifest] = {
   val path = s"${projectRoot(file)}/${PackageConfig.FileName}"
 
-  Option.when(isFile(path))(SourceManifest(path, config.version))
+  Option.when(isFile(path))(SourceManifest(path, config.name, config.version))
 }
 
 /** `sysl deps` — the resolved graph, and who asked for each version (`reference/packages.md § Which

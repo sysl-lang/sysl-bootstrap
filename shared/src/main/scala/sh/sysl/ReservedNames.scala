@@ -2,7 +2,7 @@ package sh.sysl
 
 /** Identifiers the language answers for itself: `__FILE__`, `__LINE__` and the rest.
  *
- * **The shape is reserved, not the seven names.** An identifier that begins and ends with `__` and
+ * **The shape is reserved, not the eight names.** An identifier that begins and ends with `__` and
  * holds nothing but capitals and underscores in between belongs to the compiler, and a declaration
  * may not take one. That rule is the feature; the built-ins are what currently occupies the space it
  * keeps clear. Reserving the shape up front is what makes every later addition non-breaking — a
@@ -48,27 +48,39 @@ object ReservedNames {
    * are for, and the build stamp last, since it is the one with a cost attached.
    */
   val builtins: List[String] =
-    List("__FILE__", "__LINE__", "__COLUMN__", "__FUNCTION__", "__DATE__", "__TIME__", "__VERSION__")
+    List("__FILE__", "__LINE__", "__COLUMN__", "__FUNCTION__", "__DATE__", "__TIME__", "__NAME__",
+         "__VERSION__")
 
-  /** What `__VERSION__` says in a file that belongs to no package — a lone `sysl run x.sysl`, or
-   * anything else compiled with no `package.hocon` at its project root. The wording is the
-   * self-hosted compiler's, word for word; the diagnostic's location already names the file.
+  /** A built-in that reads one field of the `package.hocon` of the package a file belongs to, and the
+   * three refusals it owes. The wording is the self-hosted compiler's, word for word.
    */
-  val versionNoPackage: String =
-    "'__VERSION__' is the 'version' in package.hocon, and this file is not part of a package — " +
-      "no package.hocon stands at the root of its tree"
+  final class FromManifest(builtin: String, key: String) {
 
-  /** What `__VERSION__` says where the file's package has a manifest that states no `version`. */
-  def versionUnstated(manifest: String): String =
-    s"'__VERSION__' is the 'version' in package.hocon, and $manifest declares none"
+    /** In a file that belongs to no package — a lone `sysl run x.sysl`, or anything else compiled
+     * with no `package.hocon` at its project root. The diagnostic's location already names the file.
+     */
+    val noPackage: String =
+      s"'$builtin' is the '$key' in package.hocon, and this file is not part of a package — " +
+        "no package.hocon stands at the root of its tree"
 
-  /** A node with no place in any file has no package either. */
-  val versionNowhere: String =
-    "'__VERSION__' is the 'version' in package.hocon, and this is a node with no place in any file"
+    /** Where the file's package has a manifest that leaves the field out. */
+    def unstated(manifest: String): String =
+      s"'$builtin' is the '$key' in package.hocon, and $manifest declares none"
+
+    /** A node with no place in any file has no package either. */
+    val nowhere: String =
+      s"'$builtin' is the '$key' in package.hocon, and this is a node with no place in any file"
+  }
+
+  /** `__VERSION__`: the manifest's `version`. */
+  val Version: FromManifest = FromManifest("__VERSION__", "version")
+
+  /** `__NAME__`: the manifest's `name` — what a program calls itself, for a log tag or a banner. */
+  val Name: FromManifest = FromManifest("__NAME__", "name")
 
   /** What to say to a declaration that tried to take one of these names.
    *
-   * It names the *shape* rather than the seven, because the mistake is not "you picked a built-in" —
+   * It names the *shape* rather than the eight, because the mistake is not "you picked a built-in" —
    * a reader who wrote `__MY_FLAG__` picked nothing — and being told which names are taken would
    * send them looking for a collision that is not there.
    */
@@ -87,7 +99,7 @@ object ReservedNames {
     if bare.isEmpty then "a name of your own" else bare
   }
 
-  /** What to say to a use of a name that has the shape and is not one of the seven. */
+  /** What to say to a use of a name that has the shape and is not one of the eight. */
   def unknown(name: String): String =
     s"there is no built-in called '$name' — the shape '__…__' is the language's, and what it " +
       s"currently holds is ${builtins.mkString(", ")}"

@@ -35,6 +35,8 @@ import io.github.edadma.cross_platform.*
  *   - every **artifact** named with `--lib`, by its bytes.
  *   - the **standard module** it compiles against, by whichever of the three it is: a named
  *     `--std-lib`, the library's own fingerprint, or the from-source build `--no-std-lib` asks for.
+ *   - the **manifest** each file belongs to — its path, `name` and `version` — which `__NAME__` and
+ *     `__VERSION__` fold into the program, and which is not one of the files hashed above.
  *   - the **search paths** and the **link line**, which decide what the C compiler and the linker do
  *     with input this key has otherwise covered.
  *   - the **environment that reaches the toolchain** (`Toolchain.buildEnvironment`) — the extra

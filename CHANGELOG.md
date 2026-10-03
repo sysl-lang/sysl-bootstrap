@@ -18,6 +18,15 @@ change what an existing program means. Where it does, the release says so.
   `Big`, `boot`'s frame goes 8,224 → 4,128 B (boxed) and 12,304 → 4,120 B (by value), against
   4,128 B for `unwrap()`; musicbox-pico's `boot` goes 11,384 → 5,904 B. An arm that does anything
   else with the binding still binds it, and every count is given back once (`MatchMoveTests`).
+- **`__NAME__` is the `name` in the `package.hocon` of the package a file belongs to**, the twin of
+  `__VERSION__`: a library's is its own, a default of it is the caller's (so a logging library's
+  `tag: string = __NAME__` names the application that called it), it folds in a `const`, and a file
+  with no package — or a manifest with no `name` — is refused at the use (`NameBuiltinTests`).
+- **Fix: `sysl run` replayed a stale binary after `package.hocon`'s `version` changed.** The run
+  cache was keyed on the source files and not on the manifest `__VERSION__` folds in, so bumping a
+  version in an unchanged tree printed the old one. The key now carries each file's manifest — path,
+  name and version (`RunCacheTests`). `AstCodec.Version` 61 → 62, since the manifest a source
+  carries through an artifact now holds its name.
 
 ## 0.0.161 — 2026-10-03
 
