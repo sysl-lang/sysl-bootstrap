@@ -109,7 +109,8 @@ trait ExprAnalysis
   /** What a reserved identifier stands for, folded into the use as the literal it names
    * (`ReservedNames`).
    *
-   * The location three of them report is `reportedPos`, which is the node's own place everywhere
+   * The location three of them report — and the place whose package `__VERSION__` reads — is
+   * `reportedPos`, which is the node's own place everywhere
    * except while a parameter's default is being filled in — there it is the **call**, because a
    * default stands exactly where the argument would have been written (`reference/declarations.md §
    * Default parameters and named arguments`). That one substitution is the whole mechanism behind a
@@ -141,11 +142,11 @@ trait ExprAnalysis
       case "__FUNCTION__" => TStrLit(currentFunctionName)
       case "__DATE__" => TStrLit(ReservedNames.date(ReservedNames.stamp))
       case "__TIME__" => TStrLit(ReservedNames.time(ReservedNames.stamp))
-      // **The file it is WRITTEN in, never the call it is filled at.** Unlike the three above it does
-      // not read `reportedPos`: a version is a property of the package that holds the text, so a
-      // library's `version: string = __VERSION__` default answers the library's version wherever it
-      // is called from — the consumer's would be a different package's fact entirely.
-      case "__VERSION__" => TStrLit(packageVersion(currentPos))
+      // **The package of the place it reports, as `__FILE__` is that place's file.** Written in a
+      // body it is the package that holds the text; written as a default it is the package of the
+      // call the default is filled at — so a library's `version: string = __VERSION__` answers the
+      // version of whichever program called it, which is the one a caller writing it would mean.
+      case "__VERSION__" => TStrLit(packageVersion(reportedPos))
       case _          => err(ReservedNames.unknown(name))
   }
 

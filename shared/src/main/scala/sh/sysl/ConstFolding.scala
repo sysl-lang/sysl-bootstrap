@@ -442,7 +442,8 @@ trait ConstFolding extends ImportResolution {
 
   /** What `__VERSION__` written at `where` stands for: the `version` in the manifest of the package
    * that file belongs to (`Source.manifest`), or a refusal saying which of the two things is missing.
-   * Read off the place the name is **written**, never the call a default is filled at.
+   * Read off whichever place the caller hands in: the folder's own is where the name is written,
+   * and `ExprAnalysis.builtin` hands in `reportedPos`, which is the call a default is filled at.
    */
   protected def packageVersion(where: Option[Pos]): String = {
     val here = where.getOrElse(err(ReservedNames.versionNowhere))

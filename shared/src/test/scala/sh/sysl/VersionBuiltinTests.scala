@@ -3,7 +3,8 @@ package sh.sysl
 import io.github.edadma.cross_platform.*
 
 /** `__VERSION__`: the `version` in the `package.hocon` of the package whose file it is written in
- * (`reference/lexical.md § Reserved identifiers`).
+ * (`reference/lexical.md § Reserved identifiers`) — or, as a parameter's default, of the package the
+ * call filling it is in.
  *
  * The load-bearing case is the dependency's. `__FILE__` is per file and needs no manifest at all, so
  * nothing else in the tree says which package a file belongs to — a version taken from the
@@ -67,10 +68,10 @@ class VersionBuiltinTests extends PackageCacheSupport {
     run(root) shouldBe "4.5.6\n0.1.0\n"
   }
 
-  // `__FILE__` and `__LINE__` in a default report the caller, because a default stands where the
-  // argument would have been written. A version is a property of the package holding the text, so
-  // this one does not follow them across: the library's default answers the library's version.
-  "and a library's default of __VERSION__ is still the library's, though __FILE__ there is the caller's" in {
+  // A default stands where the argument would have been written, so `__FILE__` and `__LINE__` in
+  // one report the caller — and `__VERSION__` follows them: the default answers the version of the
+  // package the call is in, which is what a caller writing the argument out would have got.
+  "a library's default of __VERSION__ is the caller's version, as __FILE__ there is the caller's file" in {
     val lib  = library("ver-lib", "4.5.6", "verlib",
                        "stamp(v: string = __VERSION__, f: string = __FILE__) -> string = v + \" \" + f")
     val root = tree(Some(manifest("app", "0.1.0", s"""v { path = "$lib" }""")),
@@ -78,8 +79,27 @@ class VersionBuiltinTests extends PackageCacheSupport {
 
     val printed = run(root)
 
-    printed should startWith("4.5.6 ")
+    printed should startWith("0.1.0 ")
     printed should include("main.sysl")
+  }
+
+  "a default called from inside its own package answers that package's version" in {
+    val lib  = library("ver-lib", "4.5.6", "verlib",
+                       "stamp(v: string = __VERSION__) -> string = v\n\nown() -> string = stamp()")
+    val root = tree(Some(manifest("app", "0.1.0", s"""v { path = "$lib" }""")),
+                    "main.sysl" -> "print(verlib.own())\nprint(verlib.stamp())\n")
+
+    run(root) shouldBe "4.5.6\n0.1.0\n"
+  }
+
+  "a default filled at a call in a second dependency answers the second dependency's version" in {
+    val lib  = library("ver-lib", "4.5.6", "verlib", "stamp(v: string = __VERSION__) -> string = v")
+    val mid  = library("ver-mid", "2.2.2", "midlib", "mid() -> string = verlib.stamp()")
+    val root = tree(Some(manifest("app", "0.1.0")), "main.sysl" -> "print(midlib.mid())\n")
+
+    // Two `--lib` roots rather than a chain of path dependencies, which a manifest refuses: each root
+    // still answers with its own manifest's version, which is all this case needs.
+    run(root, List(lib, mid)) shouldBe "2.2.2\n"
   }
 
   "a --lib source root with a manifest answers with that manifest's version" in {
