@@ -81,6 +81,42 @@ object Sums {
         }.toLeft(Sums(ok.toMap))
   }
 
+  /** What `sysl tidy` leaves of a file: `text` as it stands, cut down to the packages in `needed`.
+   *
+   * `current` is the sums after resolving, so it holds every line `text` held plus one for anything
+   * resolving had to fetch that no line covered. Answered as the new text, what was dropped and what
+   * was added, the last two sorted the way the file is.
+   *
+   * **A line that stays is the line that was there, byte for byte and in its place**, so a file
+   * nothing was added to is the old one with lines taken out — a diff of it shows removals and
+   * nothing else. Where a line has to be added, the file is rendered whole instead, which is exactly
+   * the file a build would have written on adding it; a build always writes the rendered form, so
+   * for any file a build wrote the two agree on every line that stays.
+   *
+   * A file with nothing left in it is the empty string, and the caller deletes it rather than
+   * writing it: a build that resolves no package never writes one, so no file at all is what a
+   * project depending on nothing looks like.
+   */
+  def tidied(text: String, current: Sums, needed: Set[(String, Version)])
+      : (String, List[(String, Version)], List[(String, Version)]) = {
+    val lines = text.linesIterator.filter(_.trim.nonEmpty).toList
+
+    def keyOf(line: String): Option[(String, Version)] =
+      line.trim.split("\\s+").toList match
+        case List(coordinate, tag, _) => Version.parse(tag.drop(1)).toOption.map(coordinate -> _)
+        case _                        => None
+
+    val had     = lines.flatMap(keyOf).toSet
+    val removed = (had -- needed).toList.sortBy(key => (key._1, key._2))
+    val added   = (needed -- had).filter(current.entries.contains).toList.sortBy(key => (key._1, key._2))
+
+    val out =
+      if added.isEmpty then lines.filter(l => keyOf(l).exists(needed.contains)).distinct.map(_ + "\n").mkString
+      else Sums(current.entries.filter((key, _) => needed.contains(key))).render
+
+    (out, removed, added)
+  }
+
   private def isDigest(s: String): Boolean =
     s.startsWith(Hashing.Prefix) && {
       val hex = s.drop(Hashing.Prefix.length)

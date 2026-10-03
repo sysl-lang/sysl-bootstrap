@@ -19,6 +19,16 @@ change what an existing program means. Where it does, the release says so.
   4,128 B for `unwrap()`; musicbox-pico's `boot` goes 11,384 → 5,904 B. An arm that does anything
   else with the binding still binds it, and every count is given back once (`MatchMoveTests`).
 
+- **`sysl tidy [<path>]` drops the `sysl.sum` lines for versions the project no longer resolves.**
+  A build only ever adds a line, so moving skitter from 0.1.0 to 0.3.0 left 0.1.0 recorded for
+  good. `tidy` resolves the whole graph — every feature, and `dev_dependencies` too, since a build
+  that pruned would drop whichever features it was not asked for — and keeps exactly the lines that
+  resolution reads, byte for byte and in place, printing `removed <coordinate> <tag>` for each one
+  it drops and nothing when the file was already tidy. A project depending on nothing or only on
+  paths ends with no `sysl.sum`, which is what a build leaves for one. `sysl tidy --check` writes
+  nothing and exits non-zero where the file is not tidy, for CI; outside a project with no
+  `package.hocon` it is refused. Builds are unchanged (`TidyTests`).
+
 ## 0.0.161 — 2026-10-03
 
 **a --lib root stands in for its package, and large values stay where they are**

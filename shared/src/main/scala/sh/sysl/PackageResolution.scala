@@ -492,6 +492,75 @@ private def vendorAll(cfg: Config, project: PackageConfig, roots: List[String]):
       0
 }
 
+/** `sysl tidy` — `sysl.sum` cut down to what this project resolves to now
+ * (`reference/packages.md § sysl.sum`).
+ *
+ * A build only ever adds a line, so moving a dependency from 0.1.0 to 0.3.0 leaves 0.1.0's line in
+ * the file for good. **Pruning belongs here rather than in a build** because a build resolves only
+ * the part of the graph its `--features` turn on: a build that pruned would drop the lines of every
+ * feature it was not asked for, and the next build with that feature on would write them back.
+ *
+ * So the graph resolved here is the whole of it — every feature the root declares, and its
+ * `dev_dependencies` as well as its `dependencies`, which is the graph `sysl deps` prints with every
+ * feature on. A line stays when resolving that graph reads its package at its version
+ * (`Resolve.Graph.read`), and every other line goes. Nothing is fetched that a build of the same
+ * graph would not fetch; a package with no line yet is fetched and recorded exactly as a build
+ * would record it.
+ *
+ * `--check` asks the same question and writes nothing, failing where the answer would change the
+ * file — the form a CI job wants. A project depending on nothing is tidy with **no** `sysl.sum` at
+ * all, since that is what a build leaves for one.
+ */
+private def tidySums(cfg: Config, project: PackageConfig, roots: List[String]): Int = {
+  val root = projectRoot(cfg.file)
+  val path = s"$root/${Sums.FileName}"
+
+  if !isFile(s"$root/${PackageConfig.FileName}") then
+    return fail(s"'$root' has no ${PackageConfig.FileName} — 'sysl tidy' tidies a project's " +
+      s"${Sums.FileName}, and only a project with a manifest resolves anything to record")
+
+  val text =
+    try if isFile(path) then readFile(path) else ""
+    catch case e: Exception => return fail(s"cannot read $path: ${IoFailure.describe(e)}")
+
+  val answered =
+    for
+      before    <- Sums.read(text)
+      fromRoots <- libDependencies(roots)
+      declared   = project.dependencies ::: project.devDependencies ::: fromRoots
+      graph     <- if declared.isEmpty then Right(None)
+                   else
+                     for
+                       cache <- Fetch.cacheRoot(root)
+                       g     <- Resolve.graph(root, project.copy(dependencies = declared), before, cache,
+                                  roots, FeatureRequest(allFeatures = true), testing = true)
+                     yield Some(g)
+    yield Sums.tidied(text, graph.fold(before)(_.sums), graph.fold(Set.empty)(_.read))
+
+  answered match
+    case Left(err) => fail(err)
+    case Right((out, removed, added)) =>
+      val present = isFile(path)
+      val tidy    = if out.isEmpty then !present else present && out == text
+
+      def line(verb: String, key: (String, Version)): String = s"$verb ${key._1} ${key._2.tag}\n"
+
+      if tidy then 0
+      else if cfg.tidyCheck then
+        removed.foreach(k => stdout(line("would remove", k)))
+        added.foreach(k => stdout(line("would add", k)))
+
+        fail(s"${Sums.FileName} is not tidy — 'sysl tidy' rewrites it to what this project resolves to")
+      else
+        try
+          if out.isEmpty then deleteFile(path) else writeFile(path, out)
+        catch case e: Exception => return fail(s"cannot write $path: ${IoFailure.describe(e)}")
+
+        removed.foreach(k => stdout(line("removed", k)))
+        added.foreach(k => stdout(line("added", k)))
+        0
+}
+
 private def showDeps(cfg: Config, project: PackageConfig, roots: List[String]): Int = {
   val listed =
     for

@@ -64,7 +64,14 @@ object Resolve {
    * source on — every package in `packages` has an entry, including ones with nothing enabled.
    */
   case class Graph(packages: List[ResolvedPackage], claims: Map[String, List[Claim]], sums: Sums,
-                   sumsChanged: Boolean, features: Map[String, Set[String]] = Map.empty)
+                   sumsChanged: Boolean, features: Map[String, Set[String]] = Map.empty,
+                   read: Set[(String, Version)] = Set.empty)
+
+  // `read` is every coordinate and version whose manifest this resolution fetched, keyed on the
+  // slashed coordinate as `sysl.sum` is. It is wider than what `packages` holds: a floor that rose
+  // after its lower version was read leaves that version read and unselected, and every resolution
+  // of the same manifests reads it again — so it is the set a `sysl.sum` has to cover for a build to
+  // add nothing to it, which is what `sysl tidy` keeps.
 
   /** What the selecting pass carries: the version floors, who asked for them, the manifests read so
    * far, the packages that are directories rather than coordinates, and the sums as they stand.
@@ -235,7 +242,7 @@ object Resolve {
                       .map(t => p.copy(imports = t)))
       _          <- checkFloors(tables)
     yield Graph(ResolvedPackage("", root, top, rootTable) :: tables, settled.claims, settled.sums,
-                settled.changed)
+                settled.changed, read = settled.manifests.keySet)
   }
 
   /** What the root calls itself when it is the one asking, since it has no coordinate to be named by.

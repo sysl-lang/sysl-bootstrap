@@ -217,6 +217,11 @@ private def executeCommand(asked: Config): Int = {
   if cfg.command == "vendor" then
     return vendorAll(cfg, project, cfg.libs.filterNot(LibraryArtifact.isArtifact))
 
+  // Beside `vendor` and for the same reason: which lines `sysl.sum` owes is a property of the
+  // manifests, so a project that cannot be built on this machine can still be tidied.
+  if cfg.command == "tidy" then
+    return tidySums(cfg, project, cfg.libs.filterNot(LibraryArtifact.isArtifact))
+
   val target = chooseTarget(cfg.target, project.defaultTarget) match
     case Left(err) => return fail(err)
     case Right(t)  => t

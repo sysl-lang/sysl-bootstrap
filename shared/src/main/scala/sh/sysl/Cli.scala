@@ -110,6 +110,8 @@ case class Config(
       * sentence explaining the shape, and argument parsing is not where that reads well.
       */
     spec: String = "",
+    /** `sysl tidy --check` — say whether `sysl.sum` is tidy, and write nothing. */
+    tidyCheck: Boolean = false,
     output: Option[String] = None,
     explainEscapes: Boolean = false,
     verbose: Boolean = false,
@@ -500,6 +502,19 @@ private[sysl] val parser = {
           opt[Unit]("all-features")
             .action((_, c) => c.copy(allFeatures = true))
             .text("turn on every feature the root's manifest declares"),
+        ),
+      // The working directory by default, as `add` takes it — set by the command and overwritten
+      // by the argument where one is given.
+      cmd("tidy")
+        .action((_, c) => c.copy(command = "tidy", file = "."))
+        .text("rewrite sysl.sum to the packages this project resolves to with every feature on, " +
+          "dropping lines for versions nothing selects any more")
+        .children(
+          arg[String]("<path>").optional().action((f, c) => c.copy(file = f))
+            .text("the project to tidy; the working directory by default"),
+          opt[Unit]("check")
+            .action((_, c) => c.copy(tidyCheck = true))
+            .text("write nothing, and fail if sysl.sum is not tidy — for CI"),
         ),
       cmd("targets")
         .action((_, c) => c.copy(command = "targets"))
