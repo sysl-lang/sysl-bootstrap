@@ -54,4 +54,14 @@ class LibraryAndroidLibcCliTests extends LibraryCliSupport {
     symbols(ir, "declare") should contain allOf ("getentropy", "__errno_location")
     ir should not include "arc4random_buf"
   }
+
+  // And the BSD side: Darwin's accessor is `__error`, ahead of the Android arm in the `#if`.
+  "an atomic write for aarch64-macos keeps getentropy and __error" in {
+    val ir = emitted(Config(command = "emit-llvm", file = project(publishes),
+      target = Some("aarch64-macos")))
+
+    symbols(ir, "declare") should contain allOf ("getentropy", "__error")
+    ir should not include "__errno"
+    ir should not include "arc4random_buf"
+  }
 }

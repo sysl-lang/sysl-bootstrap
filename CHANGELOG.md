@@ -35,6 +35,11 @@ change what an existing program means. Where it does, the release says so.
   quoted exactly as `text` quotes them, with no time, no level and no newline -- for a sink whose
   destination stamps its own (logcat, syslog, journald). `text` now shares its field rendering and
   writes the same bytes as before.
+- **Fixed: `sysl.fs` named libc symbols Android's Bionic does not have**, so an `aarch64-android`
+  program reaching `write_text_atomic` (or any `sysl.fs` call that reads `errno`) failed at its link.
+  On Android `errno` is now read through Bionic's `__errno` rather than glibc's `__errno_location`,
+  and the pending name's token is drawn from `arc4random_buf` rather than `getentropy`, which Bionic
+  has only from API 28. macOS (`__error`) and Linux (`__errno_location`, `getentropy`) are unchanged.
 
 **A `self` method reads its receiver where it lies, and copies it only where a copy could be seen**
 
