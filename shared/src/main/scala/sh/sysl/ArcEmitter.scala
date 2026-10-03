@@ -357,12 +357,27 @@ trait ArcEmitter extends Emitter {
    */
   protected def genBox(value: TExpr, refTy: Type.Ref): Val = {
     val inner = refTy.inner
-    val bn    = boxLty(inner)
     // A large payload is written into the box rather than produced and then stored into it, for the
     // reason every other destination has: the value would be a first-class aggregate of kilobytes
     // for the length of one instruction. The address is not known until the box exists, so this is
     // the one destination that cannot be handed over before the expression runs.
-    val v     = if layout.indirect(inner) then Val.Nothing else genExpr(value)
+    if layout.indirect(inner) then genBoxFilled(refTy)(genOwnedInto(_, value))
+    else
+      val v = genExpr(value)
+
+      genBoxFilled(refTy) { slot =>
+        retainValue(inner, v)
+        emit(Inst.Store(inner.lty, v, slot, Access.Plain))
+      }
+  }
+
+  /** A box whose payload `fill` writes, handed the payload's address once the box exists, and owns
+   * there: `genBox` for a value that is already somewhere — a `match` arm moving a large payload out
+   * of its scrutinee builds the box straight from that storage (`ControlFlowEmitter.payloadMove`).
+   */
+  protected def genBoxFilled(refTy: Type.Ref)(fill: Val => Unit): Val = {
+    val inner = refTy.inner
+    val bn    = boxLty(inner)
 
     val end  = freshReg(); emit(Inst.Gep(end, bn, Val.Null, List(Arg(i32, Val.Int(1)))))
     val size = freshReg(); emit(Inst.Cast(size, CastOp.PtrToInt, LType.Ptr, end, wordLty))
@@ -378,11 +393,7 @@ trait ArcEmitter extends Emitter {
 
     val slot = freshReg(); emit(Inst.Gep(slot, bn, p, List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(headerFields)))))
 
-    if layout.indirect(inner) then genOwnedInto(slot, value)
-    else
-      retainValue(inner, v)
-      emit(Inst.Store(inner.lty, v, slot, Access.Plain))
-
+    fill(slot)
     ownTemp(p, refTy)
   }
 

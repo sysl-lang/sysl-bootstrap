@@ -7,6 +7,18 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
+## Unreleased
+
+- **A `match` arm that hands back a large payload no longer copies it.** `val p: &Big = make() match
+  Ok(s) -> s; Err(_) -> return 1` builds the box and copies the payload straight from the call's
+  result into it; `var p = make() match …`, where every other arm leaves, makes `p` the payload
+  inside the result's own storage, with no copy at all. The call's result is written into one slot
+  and read through its address (only its tag is loaded to pick the arm), where it used to be loaded
+  whole, stored again and bound a third time. On thumb-freestanding-softfp, with a 4,104-byte
+  `Big`, `boot`'s frame goes 8,224 → 4,128 B (boxed) and 12,304 → 4,120 B (by value), against
+  4,128 B for `unwrap()`; musicbox-pico's `boot` goes 11,384 → 5,904 B. An arm that does anything
+  else with the binding still binds it, and every count is given back once (`MatchMoveTests`).
+
 ## 0.0.161 — 2026-10-03
 
 **a --lib root stands in for its package, and large values stay where they are**

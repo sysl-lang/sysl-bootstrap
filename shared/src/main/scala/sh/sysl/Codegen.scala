@@ -923,6 +923,28 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
 
   // --- statements ----------------------------------------------------------------------
 
+  /** Whether a large local initialized by a `match` can live inside its scrutinee's storage, and the
+   * payload it would be where it can.
+   *
+   * The scrutinee is a large call's or branch's result, which `PlaceEmitter.address` writes into a
+   * slot of the frame that nothing else names, and releases there when the statement ends. Exactly
+   * one arm arrives at the end of the `match`, and that arm hands back one payload unchanged
+   * (`movedPayload`); every other arm leaves by `return`, `break` or a call that does not come back.
+   * So wherever the local exists at all, it is that payload, at that address.
+   *
+   * Nothing can tell the two apart. The slot is the frame's, as the local's own would be, so an
+   * address taken of the local lives exactly as long either way, and a loop rewrites both on each
+   * pass. The arrived arm takes the local's counts of everything in the payload, and the statement's
+   * release of the result gives back the result's — the same two shares a copy would have held.
+   */
+  private def matchInPlace(ty: Type, scrutinee: TExpr, arms: List[TArm]): Option[Moved] =
+    scrutinee match
+      case _: TCall | _: TMatch | _: TIf if layout.indirect(ty) && layout.indirect(scrutinee.ty) =>
+        arms.filterNot(_.body.ty == Type.Never) match
+          case List(arm) => movedPayload(arm).filter(_.boxedAs.isEmpty)
+          case _         => None
+      case _ => None
+
   /** A statement is the region a temporary lives in: whatever it allocated or was handed is
    * released once the statement is over, leaving only what a slot has taken a count of.
    */
@@ -964,6 +986,19 @@ class Codegen private (protected val program: TProgram, promotions: Escape.Promo
 
       emit(Inst.Gep(addr, LType.I(8), at, List(Arg(i32, Val.Int(0)))))
       genOwnedInto(addr, init)
+
+    // `var p = make() match { Ok(s) -> s; Err(_) -> return 1 }`: the payload the one arm that arrives
+    // hands back is already in the storage the call's result was written to, and that storage is a
+    // slot of this frame nothing else will ever name — so it is `p`'s storage (`matchInPlace`).
+    case TVarDecl(name, ty, TMatch(scrutinee, arms, mty), None) if matchInPlace(ty, scrutinee, arms).isDefined =>
+      val m    = matchInPlace(ty, scrutinee, arms).get
+      val held = address(scrutinee)
+      val addr = Val.Reg(s"${declareLocal(name)}.addr")
+
+      emit(Inst.Gep(addr, m.en.payloadLty(m.variant), payloadPtr(m.en, held),
+                    List(Arg(i32, Val.Int(0)), Arg(i32, Val.Int(m.variant.slot(m.index))))))
+      genMatch(scrutinee, arms, mty, Some(addr), held = Some(held), inPlace = true)
+      ownSlot(name, ty)
 
     // The slot is laid down **before** the initializer runs, because a large one is written into it
     // rather than handed to it: the callee of `val k = kernel()` needs somewhere to write.
