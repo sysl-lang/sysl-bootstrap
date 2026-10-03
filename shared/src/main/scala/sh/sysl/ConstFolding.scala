@@ -450,7 +450,7 @@ trait ConstFolding extends ImportResolution {
     here.source.manifest match
       case Some(SourceManifest(_, Some(v))) => v
       case Some(SourceManifest(file, None)) => at(where)(err(ReservedNames.versionUnstated(file)))
-      case None                             => at(where)(err(ReservedNames.versionNoPackage(here.source.name)))
+      case None                             => at(where)(err(ReservedNames.versionNoPackage))
   }
 
   /** Folds a constant expression to the literal it denotes, or `None` where it is not one.

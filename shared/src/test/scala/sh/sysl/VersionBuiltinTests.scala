@@ -101,9 +101,12 @@ class VersionBuiltinTests extends PackageCacheSupport {
   "a file that is not part of any package is refused at the use" in {
     val root = tree(None, "lone.sysl" -> "print(__VERSION__)\n")
 
-    refused(s"$root/lone.sysl") should include(
-      s"'__VERSION__' reads the 'version' in package.hocon, and '$root/lone.sysl' is not part of a package — " +
-        "there is no package.hocon at the root of its project")
+    val said = refused(s"$root/lone.sysl")
+
+    said should include(
+      "'__VERSION__' is the 'version' in package.hocon, and this file is not part of a package — " +
+        "no package.hocon stands at the root of its tree")
+    said should include(s"--> $root/lone.sysl:1:7")
   }
 
   // The constant folder reaches `__VERSION__` by a road of its own, so it owes the same refusal
@@ -112,14 +115,13 @@ class VersionBuiltinTests extends PackageCacheSupport {
     val root = tree(None, "lone.sysl" -> "const V: string = __VERSION__\nprint(V)\n")
 
     refused(s"$root/lone.sysl") should include(
-      s"'__VERSION__' reads the 'version' in package.hocon, and '$root/lone.sysl' is not part of a package")
+      "'__VERSION__' is the 'version' in package.hocon, and this file is not part of a package")
   }
 
   "a manifest that states no version is refused, naming the manifest" in {
     val root = tree(Some("package { name = \"app\" }\n"), "main.sysl" -> "print(__VERSION__)\n")
 
     refused(root) should include(
-      s"'__VERSION__' reads the 'version' in package.hocon, and ${Project.absolute(root)}/package.hocon " +
-        "states none — add 'version = \"…\"' to it")
+      s"'__VERSION__' is the 'version' in package.hocon, and ${Project.absolute(root)}/package.hocon declares none")
   }
 }

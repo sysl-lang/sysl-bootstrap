@@ -51,20 +51,20 @@ object ReservedNames {
     List("__FILE__", "__LINE__", "__COLUMN__", "__FUNCTION__", "__DATE__", "__TIME__", "__VERSION__")
 
   /** What `__VERSION__` says in a file that belongs to no package — a lone `sysl run x.sysl`, or
-   * anything else compiled with no `package.hocon` at its project root.
+   * anything else compiled with no `package.hocon` at its project root. The wording is the
+   * self-hosted compiler's, word for word; the diagnostic's location already names the file.
    */
-  def versionNoPackage(file: String): String =
-    s"'__VERSION__' reads the 'version' in package.hocon, and '$file' is not part of a package — " +
-      "there is no package.hocon at the root of its project"
+  val versionNoPackage: String =
+    "'__VERSION__' is the 'version' in package.hocon, and this file is not part of a package — " +
+      "no package.hocon stands at the root of its tree"
 
   /** What `__VERSION__` says where the file's package has a manifest that states no `version`. */
   def versionUnstated(manifest: String): String =
-    s"'__VERSION__' reads the 'version' in package.hocon, and $manifest states none — " +
-      "add 'version = \"…\"' to it"
+    s"'__VERSION__' is the 'version' in package.hocon, and $manifest declares none"
 
   /** A node with no place in any file has no package either. */
   val versionNowhere: String =
-    "'__VERSION__' reads the 'version' of the package a file belongs to, and this is a node with no place in any file"
+    "'__VERSION__' is the 'version' in package.hocon, and this is a node with no place in any file"
 
   /** What to say to a declaration that tried to take one of these names.
    *
