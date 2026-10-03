@@ -7,25 +7,74 @@ copy -- correct a mistake there and regenerate, rather than editing this file. V
 `MAJOR.MINOR.PATCH`; while the leading zero stands the language is still moving, and a release may
 change what an existing program means. Where it does, the release says so.
 
-## Unreleased
+## 0.0.160 — 2026-10-03
 
-**a dependency's tests are not read by its consumer's build**
+**__VERSION__, and defaults read at the type each call settles**
 
-One capability fix, from the same freeze exception as 0.0.157–0.0.159. 0.0.157 stopped a `@tests` file's imports being *charged* to its module, but a consumer's build still *read* the file: a dependency's test scaffolding was name-resolved and type-checked against the consumer's target, and dropped only afterwards. On a machine with no operating system `sysl.fs` declares no `make_temp_dir`, so a library whose tests made a scratch directory could not be linked by a board program at all — refused with *"'sysl.fs' declares no 'make_temp_dir'"*, pointing into a file no build of that program keeps.
+**`__VERSION__`, and defaults read at the type each call settles**
+
+Five items. A program's version now lives in one place: `__VERSION__` reads the `version` in the `package.hocon` of the code that uses it. A generic parameter's default no longer steers the call's solve, and a default may now name its declaration's own type parameters. Two capability fixes, from the same freeze exception as 0.0.157–0.0.159, close the last holes in what a board program may link.
 
 #### Behaviour changes
 
-**Programs that were refused now build. Nothing that built before is refused now, with one exception below.**
+**Two of the five can refuse, or stop compiling, something that compiled before. Both are listed here first.**
 
-- **A dependency's `@tests` files, and its `@test` functions and hooks, are taken out before analysis** in every build of a consumer — `build`, `run`, `build-c`, `emit-llvm`, `emit-typed`, `prove`, and the consumer's own `sysl test` — whether the dependency arrives through `--lib` or as a fetched coordinate. What `reference/modules.md § A @tests file states its own capabilities` promised now holds: *"a library whose tests read a fixture with `sysl.fs` is still one a program on a machine with no operating system can link."*
-- **So a mistake in a dependency's tests is no longer reported to its consumers.** A type error there, or an import of the package's own `dev_dependencies` (which a consumer never resolves), is reported by `sysl test` of that package and nowhere else.
-- **The exception:** a consumer's `@test` function that called a helper declared in a *dependency's* `@tests` file used to compile; the helper is no longer there to call. A test helper meant for other packages belongs in an ordinary file of its own, or in a package of its own.
-- **Unchanged:** a package's own `sysl test` compiles and runs its `@tests` files as before, and a program's *own* scaffolding is still analyzed by its build and then dropped, so its mistakes are still reported there.
-- **An alias of an application of a type with a destructor now dies as that type does.** `type M =
-  Option[&Handle]`, named from a `@no_os` program, was charged nothing although its value runs
-  `Handle`'s destructor; it is now refused with *"a 'sys.M' can die here, and its destructor reaches
-  'sys'"*, exactly as `Option[&Handle]` written out is. A bare alias (`type H = Handle`) was already
-  followed. Behaviour change: a program that compiled only through this hole is now refused.
+- **A dependency's `@tests` file is no longer read by its consumer's build** (a87760a4, d04dbb7d). A dependency's `@tests` files, and its `@test` functions and hooks, are now taken out *before* analysis in every build of a consumer — `build`, `run`, `build-c`, `emit-llvm`, `emit-typed`, `prove`, and the consumer's own `sysl test` — whether the dependency arrives through `--lib` or as a fetched coordinate. Before, they were name-resolved and type-checked against the consumer's target and dropped only afterwards, so a library whose tests made a scratch directory could not be linked by a board program at all (*"'sysl.fs' declares no 'make_temp_dir'"*, pointing into a file no build of that program keeps). What `reference/modules.md § A @tests file states its own capabilities` promised now holds.
+  - **Behaviour change:** a consumer's `@test` that called a helper declared in a *dependency's* `@tests` file used to compile; the helper is no longer there to call. A test helper meant for other packages belongs in an ordinary file, or in a package of its own.
+  - A mistake in a dependency's tests — a type error, or an import of its own `dev_dependencies` — is now reported by that package's `sysl test` and nowhere else.
+  - Unchanged: a package's own `sysl test` compiles and runs its `@tests` files as before, and a program's *own* scaffolding is still analyzed by its build and then dropped.
+- **An alias of an applied Drop type dies as that type does** (45ed5511). `type M = Option[&Handle]`, held by a `@no_os` program, was charged nothing although its value runs `Handle`'s destructor; it is now refused with *"a 'sys.M' can die here, and its destructor reaches 'sys'"*, exactly as `Option[&Handle]` written out is. A bare alias (`type H = Handle`) was already followed.
+  - **Behaviour change:** code that compiled only through this hole is refused.
+
+#### Features
+
+##### `__VERSION__` (47bec55d, a92f403d, d29ecfe1)
+
+**`__VERSION__` reads the `version` in the package.hocon of the code that uses it, so a program's version lives in one place; it is refused in a file that is not part of a package.**
+
+```sysl
+print("mytool ", __VERSION__)      // "mytool 1.4.0" under a manifest saying version = "1.4.0"
+```
+
+- A seventh built-in beside `__FILE__` and `__LINE__`: a string literal, folded where it is written, so it may initialize a `const` or a module-level `val`.
+- It is per package as `__FILE__` is per file: a library's `__VERSION__` is the library's own.
+- **As a default argument it takes the CALLER's package version, as `__FILE__` does.** A library's `stamp(v: string = __VERSION__)` answers the version of whichever package the call sits in — which is what lets a library offer a `--version` helper that reports the program using it.
+- Refused, in the self-hosted compiler's wording, in a file with no `package.hocon` at its project root (*"'__VERSION__' is the 'version' in package.hocon, and this file is not part of a package — no package.hocon stands at the root of its tree"*) and under a manifest with no `version` (*"… and <manifest> declares none"*).
+- The manifest travels on each source through `AstCodec`, so an importer re-analyzing a generic body still knows its package. **`AstCodec.Version` 60 → 61**: every cached `.syslib` is rebuilt on first use.
+
+Tests: `VersionBuiltinTests`.
+
+##### A default may name its declaration's own type parameters (17422806, cd9342f6)
+
+```sysl
+offset[T: Zero + Add](x: T, step: T = T.zero()) -> T = x + step
+tuned[F: Float](f: F, a4: F = F(440.0)) -> F = f + a4
+
+print(offset(2.5), offset(7), tuned(0.5))      // 2.5 7 440.5
+```
+
+A type parameter is part of the signature rather than local to it, so a default may name one in value or type position, and it is read at each call at the type that call solved — never the caller's. The default takes no part in the solve: a `T` only the default could settle is refused as uninferable. At the declaration it is held to the bounds as a generic body is (`T.zero()` with no `Zero` bound is refused there); a conversion at `T` is checked at each instantiation. Other parameters and locals are still undefined in a default.
+
+The same holds on a trait member, including one whose signature names `Self` through an arrow — `over[N: Zero + Add](self, f: Self::Item -> N, base: N = N.zero())` reads `N`'s bounds with `Self` spelled as the receiver's type, exactly as a call already does. A member with no default never builds the defaults' type parameters at all, so a trait member taking `f: Self::Item -> N` and no default is untouched by this feature.
+
+Tests: `ArgumentTests`, `TraitCallableTests`.
+
+#### Fixes
+
+##### A default no longer steers a generic call's solve (f68fedbf, fcaf050c)
+
+**`f[T](lo: T, step: T = 1)` called with a real `lo` solves T = real, and the error now says the default cannot be read at the parameter's type at this call.** The omitted `1` used to be analyzed bare, as an `int`, while the call was still solving `T` — so `f(x)` with a real `x` was refused (*"'step' of 'f' is real, but int was given"*). It now waits like any other literal, is consulted only after everything the call wrote, and is read at the solved type. A default that type cannot hold is refused at the call:
+
+```
+'step' of 'f' was left to its default, which cannot be read at int — the type this call settles it to
+```
+
+#### Verification
+
+- Full Native gate on `cd9342f6` (`./run-gate.sh`): **GATE: GREEN, 12391 succeeded, 0 failed**, no retries; full JVM run 12357 / 0. The release is that sha plus the version bump.
+- `TraitCallableTests` on the release tree: **20 succeeded, 0 failed** (`syslJVM/testOnly sh.sysl.TraitCallableTests`).
+- Warnings census clean (JVM / JS / Native / syslDocJVM / syslDocNative): after `clean`, **two / three / three / one / two** — every warning named and none in this repository (`Reader.scala:26:6` from scala-parser-combinators, `Set.scala:62:15` from the Scala.js scaladoc, and the build-infra `-Xplugin` lines).
+- Documented on sysl.sh: `reference/lexical.md § __VERSION__ is the package's version` (the lone-file refusal, as a checked `error` block) and `reference/declarations.md § Default parameters and named arguments` (the type-parameter default, as a runnable block printing `2.5 7 440.5`).
 
 ## 0.0.159 — 2026-10-03
 
